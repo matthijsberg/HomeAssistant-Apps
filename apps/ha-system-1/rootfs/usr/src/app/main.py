@@ -26,7 +26,12 @@ logger = logging.getLogger("laya.main")
 config = AppConfig.load()
 engine = LayaRouterEngine(config)
 ha_resolver = HAResolver()
-domotica_engine = DomoticaEngine(ha_resolver, router_engine=engine)
+domotica_engine = DomoticaEngine(
+    ha_resolver,
+    router_engine=engine,
+    min_confidence=config.domotica_min_confidence,
+    fast_path_enabled=config.fast_path_enabled,
+)
 
 
 @asynccontextmanager
@@ -77,7 +82,11 @@ def verify_api_key(
 @app.get("/", response_class=HTMLResponse)
 def index() -> HTMLResponse:
     """Home Assistant Ingress WebUI playground."""
-    return HTMLResponse(content=render_gui_html())
+    resp = HTMLResponse(content=render_gui_html())
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 
 class TurnItem(BaseModel):
@@ -123,6 +132,11 @@ class RouteResponse(BaseModel):
     override_applied: Optional[bool] = Field(default=None, description="Whether this decision was served via an exact sticky override")
     override_author: Optional[str] = Field(default=None, description="Author of the sticky override")
     fallback_reason: Optional[str] = Field(default=None, description="Reason for fallback or confidence gating")
+    probabilities: Optional[Dict[str, float]] = Field(default=None, description="Full softmax probability distribution over all candidates")
+    detection: Optional[Dict[str, Any]] = Field(default=None, description="Language detection and routing telemetry")
+    raw_input: Optional[str] = Field(default=None, description="Raw input text received")
+    normalized_input: Optional[str] = Field(default=None, description="Cleaned, normalized input string")
+    is_followup: Optional[bool] = Field(default=None, description="Whether prompt was classified as a contextual follow-up")
 
 
 @app.get("/health")

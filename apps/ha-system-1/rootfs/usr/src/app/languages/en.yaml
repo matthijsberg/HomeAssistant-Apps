@@ -1,0 +1,169 @@
+language: en
+name: "English"
+
+generic_nouns:
+  light:
+    - lamp
+    - lamps
+    - light
+    - lights
+    - lighting
+  climate:
+    - thermostat
+    - temperature
+    - climate
+  cover:
+    - blinds
+    - curtains
+    - shades
+  switch:
+    - switch
+    - plug
+    - socket
+  fan:
+    - fan
+    - ventilation
+  media_player:
+    - music
+    - audio
+    - sound
+
+domain_keywords:
+  light:
+    - lamp
+    - lamps
+    - light
+    - lights
+    - lighting
+    - spot
+    - spots
+    - led
+    - leds
+    - ledstrip
+    - strip
+    - bulb
+    - bulbs
+    - ceiling light
+    - spotlight
+    - spotlights
+  climate:
+    - thermostat
+    - temperature
+    - degrees
+    - degree
+    - heating
+    - ac
+    - airco
+    - air conditioning
+    - boiler
+    - heat pump
+    - setpoint
+  cover:
+    - curtain
+    - curtains
+    - blind
+    - blinds
+    - shutter
+    - shutters
+    - shade
+    - shades
+  switch:
+    - switch
+    - plug
+    - relay
+    - socket
+    - outlet
+  fan:
+    - fan
+    - exhaust
+    - ventilation
+  media_player:
+    - music
+    - speaker
+    - tv
+    - television
+    - radio
+    - audio
+    - sound
+  lock:
+    - lock
+    - door
+    - gate
+    - front door
+    - back door
+  alarm_control_panel:
+    - alarm
+    - security
+
+action_keywords:
+  turn_on:
+    - "on"
+    - turn on
+    - switch on
+    - enable
+    - start
+    - activate
+  turn_off:
+    - "off"
+    - turn off
+    - switch off
+    - disable
+    - stop
+    - deactivate
+  toggle:
+    - toggle
+    - switch
+  open_cover:
+    - open
+    - raise
+    - roll up
+  close_cover:
+    - close
+    - lower
+    - shut
+    - roll down
+  set_temperature:
+    - degrees
+    - degree
+    - set temperature to
+    - set to
+    - heat to
+    - cool to
+
+question_words:
+  - is
+  - are
+  - what
+  - how
+  - which
+  - when
+  - why
+  - who
+  - can
+  - could
+
+multi_intent_patterns:
+  - "\\band\\b"
+  - "\\bthen\\b"
+  - "\\bafter that\\b"
+
+condition_patterns:
+  - "\\bnot\\b"
+  - "\\bif\\b"
+  - "\\bunless\\b"
+  - "\\bin\\s+\\d+\\s+minute"
+  - "\\bat\\s+\\d{1,2}:\\d{2}\\b"
+
+speech_templates:
+  turn_off: "Okay, {target} {verb} turned off."
+  turn_on: "Okay, {target} {verb} turned on."
+  set_temperature: "Okay, temperature set to {temperature} degrees."
+  open_cover: "Okay, {target} is opened."
+  close_cover: "Okay, {target} is closed."
+  generic: "Okay, {service} executed for {target}."
+  verb_is: "is"
+  verb_are: "are"
+
+laya_criteria:
+  smarthome: "home automation control, turning lights on or off, thermostat temperature, switches, scenes, checking Home Assistant entities or sensor states"
+  quick: "small talk, greetings, simple facts, unit conversions, general knowledge questions without tools or smart home control"

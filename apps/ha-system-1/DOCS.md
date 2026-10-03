@@ -1,171 +1,282 @@
-# Laya Router Documentation
+# HA System 1 — Technical & Protocol Documentation
 
-## Installation & Setup
-
-1. Add this repository to Home Assistant Add-on Store:
-   `https://github.com/matthijsberg/HomeAssistant-Addons`
-2. Install the **Laya Router** add-on.
-3. In the add-on configuration tab, set a secure `api_key` (Bearer token) or leave blank if testing exclusively via Ingress.
-4. Start the add-on. On the first launch, the add-on will download ~3 GB of model weights to `/data/hf`. Subsequent starts are near-instant.
-5. Watch the add-on log until you see:
-   `Laya Router checkpoints successfully preloaded and ready: ['english', 'multilingual']`
-6. Access the built-in **Ingress WebUI** via the Home Assistant sidebar to test prompts interactively.
+HA System 1 is a local, sub-50ms cognitive reflex engine, neural intent classifier, and OpenAI-compatible conversation bridge designed for Home Assistant and autonomous AI agents (such as Hermes Agent and OpenCode).
 
 ---
 
-## Task Families & Parameter Configuration
+## 1. Architectural Philosophy: System 1 First
 
-In version 0.5.0, task families, semantic matching criteria, and upstream LLM execution parameters are fully configurable directly in the Home Assistant add-on options (`families:`).
+The architecture separates human cognitive tasks into two distinct layers:
+* **System 1 (Local, Fast, Reflexive):** Sub-100ms hardware-accelerated classification running directly on host hardware (Intel Arc iGPU / XPU or edge CPU). System 1 identifies whether an input is a smart home command, general conversation, coding task, or complex financial/mathematical reasoning. It extracts semantic slots without brittle regexes, manages tool allowlists, and strips unnecessary personal memory context.
+* **System 2 (Deliberative, Deep, Upstream LLM):** Cloud or high-parameter models (Gemini Flash, Gemini Pro, Claude 3.7 Sonnet) invoked only when genuine deep reasoning, multi-step code execution, or fallback assistance is required.
 
-### Default Configuration
+### Pluggable System 1 Backends
+While the current engine uses **Laya** (ModernBERT-large and mmBERT-base cross-encoders running on Intel Arc Level-Zero DRM XPU), the architecture is model-agnostic. The internal backend interface is designed to support:
+1. **Laya Cross-Encoder Matrix:** Zero-shot criteria scoring across multilingual candidate sets (55–100ms).
+2. **Local Edge SLMs (Future):** Quantized GGUF/Vulkan small language models (Qwen2.5-0.5B, SmolLM2-360M, Llama-3.2-1B) for direct JSON generation.
+3. **Embedding Vector Classifiers:** Sub-5ms cosine similarity matching against golden intent embeddings.
+
+---
+
+## 2. Configuration & The Fast-Path Toggle
+
+All operational parameters are configurable via Home Assistant Add-on Options (`config.yaml` / Supervisor GUI):
 
 ```yaml
-families:
-  - name: "quick"
-    criteria: "small talk, greetings, simple facts, unit conversions, one-step home control commands"
-    model: "gemini-3.5-flash-lite"
-    effort: "low"
-    max_tokens: 1024
-    temperature: 0.2
-    thinking_budget: 0
+# Hardware Compute & Engine
+device: "xpu"                 # 'xpu' for Intel Arc / Meteor Lake iGPU, 'cpu' for fallback
+threads: 6                    # Intra-op PyTorch CPU inference threads
+router_default: "multilingual" # Fallback checkpoint for short ambiguous turns
+api_key: ""                   # Optional Bearer token for remote clients
 
-  - name: "general"
-    criteria: "everyday writing, explaining, summarising, translating, ordinary questions that need a few tool calls"
-    model: "gemini-flash-latest"
-    effort: "medium"
-    max_tokens: 4096
-    temperature: 0.7
+# Thresholds & Gating (Conservative Gating PRD D-3)
+min_confidence: 0.60          # Confidence floor for model routing (fallback to general)
+domotica_min_confidence: 0.70 # Minimum confidence for direct smart home execution
+smarthome_min_confidence: 0.50# Minimum confidence to allocate HA tools and smarthome profile
 
-  - name: "code"
-    criteria: "writing or debugging code or configuration files, multi-step tool or agent work"
-    model: "gemini-flash-latest"
-    effort: "high"
-    max_tokens: 8192
-    temperature: 0.1
-
-  - name: "deep"
-    criteria: "hard reasoning where a wrong answer is costly: maths, finance, planning, comparing complex options"
-    model: "gemini-2.5-pro"
-    effort: "high"
-    max_tokens: 8192
-    temperature: 0.2
+# Fast-Path Gate Toggle
+fast_path_enabled: true       # Toggle: true = <0.5ms rule gate; false = System 1 neural first
 ```
 
-### Parameter Defaults & Omission Rules
+### The `fast_path_enabled` Switch
+* **`true` (Default):** Simple unambiguous imperatives (*"doe de spots in de serre uit"*) resolve deterministically via registry string matching in `<0.5ms` without engaging GPU compute.
+* **`false` (Neural-First):** The regex gate is disabled. **All smart home and user turns flow directly through the System 1 neural model** on the Intel Arc XPU. This eliminates brittle keyword limitations and lets the neural cross-encoder extract rooms, device types, and scopes semantically.
 
-When configuring family profiles in Home Assistant:
-- **`temperature` (optional):** When omitted or unset, the upstream provider's default model temperature is used without modification.
-- **`thinking_budget` (optional):** When omitted or unset (as for `code` and `deep`), reasoning tokens are unconstrained, allowing models like Gemini Flash Thinking or Gemini 2.5 Pro to think naturally. Setting `thinking_budget: 0` (as in `quick`) strictly disables thinking tokens for instant sub-second replies.
-- **`max_tokens` (optional):** When omitted or unset, the model's standard context ceiling applies.
-- **`effort` (optional):** Defaults to `low` (quick), `medium` (general), `high` (code), or `high` (deep).
+---
 
-### Adding Custom Families (Dynamic Expansion)
+## 3. `/v1/systemone` Protocol & API Specification
 
-You can define any custom category (e.g. `smarthome`, `creative`, `finance`) by simply appending it to the `families` list in Home Assistant. Laya dynamically evaluates all configured families in a single sub-100ms forward pass:
+The `/v1/systemone` endpoint provides a raw, model-agnostic wire protocol for evaluating structured choice and score questions in a single forward pass. It is 100% compatible with Jev and OpenCode System 1 tooling.
 
-```yaml
-  - name: "smarthome"
-    criteria: "domotica status, lampen, scènes, verwarming, Home Assistant entiteiten controleren of schakelen"
-    model: "gemini-3.5-flash-lite"
-    effort: "low"
-    max_tokens: 512
-    temperature: 0.0
-    thinking_budget: 0
+### HTTP Endpoint
+* **URL:** `http://<host>:8000/v1/systemone`
+* **Method:** `POST`
+* **Headers:**
+  * `Content-Type: application/json`
+  * `Authorization: Bearer <api_key>` (if configured)
+
+### Request Schema
+
+```json
+{
+  "state": {
+    "request": "Turn off all the lights in the house",
+    "context": [
+      "user: Is it late?",
+      "assistant: Yes, it is 23:30."
+    ]
+  },
+  "questions": {
+    "task_family": {
+      "type": "choice",
+      "instructions": "What kind of task is this?",
+      "criteria": {
+        "quick": "small talk, greetings, simple facts, unit conversions",
+        "smarthome": "home automation, turning lights on or off, thermostats, switches, Home Assistant",
+        "general": "everyday writing, explaining, summarising, translating",
+        "code": "writing or debugging code or configuration files",
+        "deep": "hard reasoning, finance, mathematics, complex comparison"
+      }
+    },
+    "effort": {
+      "type": "choice",
+      "instructions": "How much thinking does this task need?",
+      "criteria": {
+        "light": "the answer is short and obvious",
+        "normal": "needs some thought or a few steps",
+        "deep": "needs careful multi-step reasoning"
+      }
+    }
+  },
+  "parameters": {
+    "temperature": 1.0,
+    "top_k": null
+  },
+  "model": "multilingual"
+}
+```
+
+#### Request Fields
+* **`state` (object, required):**
+  * `request` (string, required): The latest user turn or command to be evaluated.
+  * `context` (array of strings, optional): Preceding conversational context turns.
+* **`questions` (object, required):** A map of question identifiers to question specifications.
+  * **`type` (string):** `"choice"` (mutually exclusive softmax over `criteria`) or `"score"` (scalar confidence estimation).
+  * **`instructions` (string):** Prompt instruction for the question.
+  * **`criteria` (object):** Map of option keys to descriptive semantic criteria.
+* **`parameters` (object, optional):** Calibrated softmax temperatures or sampling parameters.
+* **`model` (string, optional):** Checkpoint override (`"multilingual"` or `"english"`).
+
+---
+
+### Response Schema
+
+```json
+{
+  "answers": {
+    "task_family": {
+      "choice": "smarthome",
+      "answer_confidence": 0.8842,
+      "probabilities": {
+        "quick": 0.0512,
+        "smarthome": 0.8842,
+        "general": 0.0411,
+        "code": 0.0125,
+        "deep": 0.0110
+      },
+      "log_odds": {
+        "smarthome": 2.0325,
+        "quick": -1.8210
+      }
+    },
+    "effort": {
+      "choice": "light",
+      "answer_confidence": 0.9215,
+      "probabilities": {
+        "light": 0.9215,
+        "normal": 0.0652,
+        "deep": 0.0133
+      }
+    }
+  },
+  "detection": {
+    "script": "latin",
+    "script_profile": { "latin": 1.0 },
+    "language": "en",
+    "is_english": true,
+    "language_undecided": false,
+    "diacritic_rate": 0.0,
+    "non_latin_fraction": 0.0
+  },
+  "latency_ms": 78.42,
+  "model": "multilingual",
+  "device": "xpu"
+}
+```
+
+#### Response Fields
+* **`answers` (object):** Evaluated predictions per question key.
+  * `choice` (string): The winning category key with the highest softmax probability.
+  * `answer_confidence` (float): Probability score of the winning choice (0.0 to 1.0).
+  * `probabilities` (object): Complete softmax probability distribution over all submitted criteria options.
+  * `log_odds` (object): Raw logits before temperature scaling.
+* **`detection` (object):** Language and script telemetry detected from the input string.
+* **`latency_ms` (float):** Hardware forward-pass time in milliseconds measured on the Intel Arc XPU.
+* **`device` (string):** Compute device utilized (`"xpu"` or `"cpu"`).
+
+---
+
+### Raw cURL Example
+
+```bash
+curl -X POST http://local-ha-system-1:8000/v1/systemone \
+  -H "Content-Type: application/json" \
+  -d '{
+    "state": {
+      "request": "Bereken de annuïtaire hypotheeklasten voor 450k"
+    },
+    "questions": {
+      "family": {
+        "type": "choice",
+        "instructions": "Categorize the task:",
+        "criteria": {
+          "quick": "chit chat, greetings, unit conversions",
+          "deep": "complex mathematics, finance, mortgages, investments"
+        }
+      }
+    }
+  }'
 ```
 
 ---
 
-## Client Integration Examples (Hermes Agent)
+## 4. High-Level Decision Endpoint (`POST /v1/route`)
 
-### Scenario A: Native Single Provider (Google Gemini) - Default
-Hermes Agent directly calls Google's API with a single `GEMINI_API_KEY`:
+For autonomous agents (Hermes, Claude Code, OpenCode) that require an end-to-end decision payload with configured model assignments, tool pruning, and token ceilings:
 
-```yaml
-plugins:
-  entries:
-    laya-router:
-      settings:
-        mode: observe
-        laya_url: http://local-laya:8000
-        api_key_env: LAYA_API_KEY
-        question_set: hermes-v1
-        timeout_s: 1.0
-        min_confidence: 0.6
-        context_turns: 2
-        default: {model: gemini-flash-latest, effort: medium}
-        families:
-          quick:   {model: gemini-3.5-flash-lite, effort: low}
-          general: {model: gemini-flash-latest, effort: medium}
-          code:    {model: gemini-flash-latest, effort: high}
-          deep:    {model: gemini-2.5-pro, effort: high}
-        downgrade_within_session: false
-        audit_enabled: true
-```
+```json
+// POST /v1/route
+{
+  "prompt": "turn off all lights in the house",
+  "recent_turns": [],
+  "question_set": "hermes-v1"
+}
 
-### Scenario B: Multi-Provider Gateway (LiteLLM or OpenRouter)
-Because LLM clients **cannot dynamically change provider credentials mid-session**, routing across multi-vendor models (e.g. Anthropic Claude + Google Gemini + OpenAI) requires Hermes to be configured with a single unified gateway provider (`provider: openrouter` or `provider: custom` pointing to LiteLLM):
-
-```yaml
-# Under Hermes config.yaml
-model: google/gemini-flash-1.5
-
-plugins:
-  entries:
-    laya-router:
-      settings:
-        mode: observe
-        laya_url: http://local-laya:8000
-        api_key_env: LAYA_API_KEY
-        question_set: hermes-v1
-        default: {model: google/gemini-flash-1.5, effort: medium}
-        families:
-          quick:     {model: google/gemini-3.5-flash-lite, effort: low}
-          smarthome: {model: google/gemini-3.5-flash-lite, effort: low}
-          general:   {model: google/gemini-flash-1.5, effort: medium}
-          code:      {model: anthropic/claude-3.5-sonnet, effort: high}
-          deep:      {model: anthropic/claude-3.7-sonnet, effort: high}
+// Response (<100ms)
+{
+  "family": "smarthome",
+  "effort": "light",
+  "confidence": {
+    "family": 0.8842,
+    "effort": 0.9215
+  },
+  "checkpoint": "english",
+  "latency_ms": 82.1,
+  "provider": "gemini",
+  "model": "gemini-3.5-flash-lite",
+  "max_tokens": 1024,
+  "temperature": 0.0,
+  "thinking_budget": 0,
+  "needs_memory": false,
+  "allowed_tools": [
+    "ha_list_entities",
+    "ha_get_state",
+    "ha_call_service",
+    "ha_list_services",
+    "homeassistant*"
+  ],
+  "override_applied": null,
+  "fallback_reason": null,
+  "probabilities": {
+    "quick": 0.0612,
+    "smarthome": 0.8842,
+    "general": 0.0315,
+    "code": 0.0121,
+    "deep": 0.0110
+  }
+}
 ```
 
 ---
 
-## Laya v2.0: Fast-Path Domotica Engine & OpenAI Conversation Bridge
+## 5. Direct Domotica Endpoint (`POST /v1/domotica/route`)
 
-### 1. Fast-Path Domotica Endpoint (`POST /v1/domotica/route`)
-Resolves natural language smart home commands into structured Home Assistant service calls in <50ms without invoking cloud LLMs:
+Resolves smart home natural language into structured OpenAI-compatible tool calls or directly executes them against Home Assistant Core:
 
 ```json
 // POST /v1/domotica/route
 {
-  "prompt": "doe de lampen in de serre uit",
-  "execute": false
+  "prompt": "doe de spots in de serre uit",
+  "execute": true
 }
 
-// Response (<50ms)
+// Response
 {
   "is_domotica": true,
   "fast_path": true,
   "domain": "light",
   "service": "turn_off",
-  "target_type": "area_id",
-  "target_id": "serre",
-  "confidence": 0.95,
+  "target_type": "entity_id",
+  "target_id": "light.serre_spots_dimmer",
+  "confidence": 0.9984,
   "openai_tool_call": {
-    "id": "call_laya_123456",
+    "id": "call_hasys1_945854",
     "type": "function",
     "function": {
       "name": "HassTurnOff",
       "arguments": {
-        "area": "serre",
-        "domain": "light"
+        "name": "light.serre_spots_dimmer"
       }
     }
-  }
+  },
+  "speech": "Oké, spots serre is uitgeschakeld.",
+  "executed": true,
+  "execution_status": "confirmed"
 }
 ```
 
-### 2. OpenAI Conversation Integration for Home Assistant Assist (`POST /v1/chat/completions`)
-Home Assistant's native Assist spraakassistent and OpenAI Conversation can point directly at Laya:
-1. In Home Assistant, go to **Settings ➔ Devices & Services ➔ Add Integration ➔ OpenAI Conversation**.
-2. Set API Server URL to: `http://local-laya:8000/v1`
-3. Set Model to: `laya-v2`
-4. Assist will receive instant `<50ms` native `HassTurnOn` / `HassTurnOff` tool calls for device actions, while general questions fall back cleanly to Gemini Flash Lite!
+---
+
+## 6. Exact Sticky Overrides (`corrections.yaml`)
+
+When a turn is misclassified or requires an absolute override, exact matches are stored in `/addon_configs/local_ha_system_1/corrections.yaml`. Overrides resolve in `<0.5ms` with 100% confidence, bypassing model inference entirely. Every override is logged to `candidates.jsonl` for evaluation gating.

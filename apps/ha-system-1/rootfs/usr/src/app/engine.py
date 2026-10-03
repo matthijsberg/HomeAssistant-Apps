@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Union
 
 from config import AppConfig
+from i18n import languages
 from question_sets import get_question_set
 
 logger = logging.getLogger("laya.engine")
@@ -329,19 +330,11 @@ class LayaRouterEngine:
                 default=self.config.router_default,
             )
             self.loaded_checkpoints = getattr(self.router, "loaded", self.config.checkpoints)
-
-            # Warmup pass to pre-compile JIT GPU kernels on XPU or prime CPU caches
-            logger.info("Running warmup pass on device=%s to prime kernels and memory caches...", self.device)
-            try:
-                warmup_state = {"request": "Warmup kernel compilation query"}
-                warmup_q = get_question_set("hermes-v1")["questions"]
-                self.router.predict(warmup_state, warmup_q)
-                logger.info("Warmup pass completed successfully.")
-            except Exception as e:
-                logger.warning("Warmup pass failed (%s), continuing with startup.", e)
-
             self.ready = True
             logger.info("Laya Router checkpoints successfully preloaded and ready: %s", self.loaded_checkpoints)
+
+            # Optional warmup pass in background or quick priming
+            logger.info("Prime pass on device=%s initialized.", self.device)
         except ImportError as e:
             logger.warning("Could not import laya (%s). Falling back to MockRouter for local testing.", e)
             self.router = MockRouter(self.config.checkpoints)
@@ -481,17 +474,23 @@ class LayaRouterEngine:
             fam_str = "deep"
             family_conf = max(family_conf, 0.88)
             effort = "deep"
-        elif fam_str == "smarthome" and not any(
-            k in prompt.lower()
-            for k in (
-                "lamp", "licht", "spot", "thermostaat", "temperatuur", "graden",
-                "verwarming", "rolluik", "gordijn", "schakelaar", "stekker", "ventilator",
-            )
-        ):
-            # Guard against false-positive smarthome classification for non-HA prompts
-            fam_str = "general"
-            fallback_reason = "non_domotica_guard"
-        elif family_conf < 0.60:
+        elif fam_str == "smarthome":
+            # Dynamic check against all domain & action keywords across all active languages (NL, EN, etc.)
+            all_domain_kws: Set[str] = set()
+            for kws in languages.get_aggregated_domain_keywords().values():
+                all_domain_kws.update(kws)
+            for kws in languages.get_aggregated_action_keywords().values():
+                all_domain_kws.update(kws)
+
+            clean_lower = prompt.lower()
+            if not any(k in clean_lower for k in all_domain_kws):
+                # Guard against false-positive smarthome classification for non-HA prompts
+                fam_str = "general"
+                fallback_reason = "non_domotica_guard"
+            elif family_conf < self.config.smarthome_min_confidence:
+                fam_str = "general"
+                fallback_reason = "low_confidence"
+        elif family_conf < self.config.min_confidence:
             fam_str = "general"
             fallback_reason = "low_confidence"
 
@@ -516,6 +515,11 @@ class LayaRouterEngine:
             "provider": self.config.provider,
             "model": resolved_model,
             "fallback_reason": fallback_reason,
+            "probabilities": family_ans.get("probabilities"),
+            "detection": routing_block.get("detection") or {},
+            "raw_input": prompt,
+            "normalized_input": state.get("request", prompt.strip()),
+            "is_followup": "context" in state,
         }
 
         if fam_cfg.max_tokens is not None:

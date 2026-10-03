@@ -1,0 +1,179 @@
+language: nl
+name: "Nederlands"
+
+generic_nouns:
+  light:
+    - lamp
+    - lampen
+    - licht
+    - lichten
+    - verlichting
+  climate:
+    - thermostaat
+    - temperatuur
+    - klimaat
+  cover:
+    - zonwering
+    - raambekleding
+  switch:
+    - schakelaar
+    - switch
+  fan:
+    - ventilator
+    - ventilatie
+  media_player:
+    - muziek
+    - audio
+    - geluid
+
+domain_keywords:
+  light:
+    - lamp
+    - lampen
+    - licht
+    - lichten
+    - verlichting
+    - spot
+    - spots
+    - led
+    - leds
+    - ledstrip
+    - strip
+    - hanglamp
+    - schemerlamp
+    - plafondlamp
+  climate:
+    - thermostaat
+    - temperatuur
+    - graden
+    - graad
+    - verwarming
+    - airco
+    - ketel
+    - boiler
+    - cv
+    - kachel
+    - warmtepomp
+    - setpoint
+  cover:
+    - gordijn
+    - gordijnen
+    - rolluik
+    - rolluiken
+    - zonwering
+    - scherm
+    - jaloezie
+    - jaloezieën
+    - shutter
+    - shutters
+  switch:
+    - schakelaar
+    - stekker
+    - relais
+    - plug
+    - stopcontact
+  fan:
+    - ventilator
+    - afzuiging
+    - afzuigkap
+    - ventilatie
+  media_player:
+    - muziek
+    - speaker
+    - tv
+    - televisie
+    - radio
+    - audio
+    - geluid
+  lock:
+    - slot
+    - deur
+    - poort
+    - deurslot
+    - voordeur
+    - achterdeur
+  alarm_control_panel:
+    - alarm
+    - beveiliging
+
+action_keywords:
+  turn_on:
+    - aan
+    - aanzetten
+    - aansteken
+    - inschakelen
+    - activeer
+    - activeren
+    - start
+    - starten
+  turn_off:
+    - uit
+    - uitzetten
+    - uitschakelen
+    - doven
+    - deactiveer
+    - deactiveren
+    - stop
+    - stoppen
+  toggle:
+    - wissel
+    - toggle
+    - omschakelen
+  open_cover:
+    - open
+    - openen
+    - omhoog
+    - omhoogdoen
+  close_cover:
+    - sluit
+    - sluiten
+    - dicht
+    - dichtdoen
+    - omlaag
+    - omlaagdoen
+  set_temperature:
+    - graden
+    - graad
+    - verhoog
+    - verlaag
+    - temperatuur naar
+    - zet op
+
+question_words:
+  - staat
+  - staan
+  - is
+  - zijn
+  - wat
+  - hoe
+  - welke
+  - wanneer
+  - waarom
+  - kan
+  - kun
+
+multi_intent_patterns:
+  - "\\ben\\b"
+  - "\\bdaarna\\b"
+  - "\\bvervolgens\\b"
+
+condition_patterns:
+  - "\\bniet\\b"
+  - "\\bals\\b"
+  - "\\btenzij\\b"
+  - "\\bover\\s+\\d+\\s+minut"
+  - "\\bom\\s+\\d{1,2}:\\d{2}\\b"
+
+speech_templates:
+  turn_off: "Oké, {target} {verb} uitgeschakeld."
+  turn_on: "Oké, {target} {verb} aangezet."
+  set_temperature: "Oké, de temperatuur is ingesteld op {temperature} graden."
+  open_cover: "Oké, {target} is geopend."
+  close_cover: "Oké, {target} is gesloten."
+  generic: "Oké, {service} uitgevoerd voor {target}."
+  verb_is: "is"
+  verb_are: "zijn"
+
+laya_criteria:
+  smarthome: "lampen aanzetten of uitzetten, domotica, verlichting, spots, thermostaat, schakelaars, scènes, apparaten bedienen"
+  quick: "kletsen, begroetingen, simpele feiten, eenheden omrekenen, algemene kennis zonder domotica"

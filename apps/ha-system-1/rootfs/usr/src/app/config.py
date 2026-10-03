@@ -46,7 +46,7 @@ class FamilyConfig:
 DEFAULT_FAMILIES: Dict[str, FamilyConfig] = {
     "quick": FamilyConfig(
         name="quick",
-        criteria="small talk, greetings, simple facts, unit conversions, general knowledge questions without tools",
+        criteria="small talk, greetings, simple facts, unit conversions, general knowledge questions without tools or domotica control",
         model="gemini-3.5-flash-lite",
         effort="low",
         max_tokens=1024,
@@ -57,7 +57,7 @@ DEFAULT_FAMILIES: Dict[str, FamilyConfig] = {
     ),
     "smarthome": FamilyConfig(
         name="smarthome",
-        criteria="home automation control, turning lights on or off, thermostat temperature, switches, scenes, checking Home Assistant entities or sensor states",
+        criteria="home automation control, turning lights on or off, lampen aanzetten of uitzetten, domotica, verlichting, spots, thermostaat, switches, scenes, checking Home Assistant entities or sensor states",
         model="gemini-3.5-flash-lite",
         effort="low",
         max_tokens=1024,
@@ -129,6 +129,10 @@ class AppConfig:
         mock_mode: bool = False,
         provider: str = "gemini",
         gateway_url: Optional[str] = None,
+        min_confidence: float = 0.60,
+        domotica_min_confidence: float = 0.70,
+        smarthome_min_confidence: float = 0.50,
+        fast_path_enabled: bool = True,
         families: Optional[Dict[str, FamilyConfig]] = None,
         model_quick: Optional[str] = None,
         model_general: Optional[str] = None,
@@ -146,6 +150,10 @@ class AppConfig:
         self.mock_mode = mock_mode
         self.provider = provider
         self.gateway_url = gateway_url
+        self.min_confidence = min_confidence
+        self.domotica_min_confidence = domotica_min_confidence
+        self.smarthome_min_confidence = smarthome_min_confidence
+        self.fast_path_enabled = fast_path_enabled
 
         if families is not None:
             self.families = dict(families)
@@ -239,6 +247,15 @@ class AppConfig:
         if gateway_url == "":
             gateway_url = None
 
+        min_conf = float(data.get("min_confidence") or os.environ.get("LAYA_MIN_CONFIDENCE", 0.60))
+        domotica_min_conf = float(data.get("domotica_min_confidence") or os.environ.get("LAYA_DOMOTICA_MIN_CONFIDENCE", 0.70))
+        smarthome_min_conf = float(data.get("smarthome_min_confidence") or os.environ.get("LAYA_SMARTHOME_MIN_CONFIDENCE", 0.50))
+        fast_path_enabled_raw = data.get("fast_path_enabled", os.environ.get("LAYA_FAST_PATH_ENABLED", True))
+        if isinstance(fast_path_enabled_raw, str):
+            fast_path_enabled = fast_path_enabled_raw.lower() in ("true", "1", "yes")
+        else:
+            fast_path_enabled = bool(fast_path_enabled_raw)
+
         # Build families map
         loaded_families: Dict[str, FamilyConfig] = {}
         raw_families = data.get("families")
@@ -323,5 +340,9 @@ class AppConfig:
             mock_mode=mock_mode,
             provider=provider,
             gateway_url=gateway_url,
+            min_confidence=min_conf,
+            domotica_min_confidence=domotica_min_conf,
+            smarthome_min_confidence=smarthome_min_conf,
+            fast_path_enabled=fast_path_enabled,
             families=loaded_families,
         )

@@ -1,6 +1,6 @@
 name: "HA System 1"
 description: "Local sub-50ms System 1 cognitive reflex layer, fast-path domotica controller, and OpenAI conversation bridge for Home Assistant"
-version: "0.1.0"
+version: "0.1.4"
 slug: "ha_system_1"
 url: "https://github.com/matthijsberg/HomeAssistant-Apps/tree/main/apps/ha-system-1"
 arch:
@@ -33,9 +33,13 @@ options:
   log_level: "info"
   provider: "gemini"
   gateway_url: ""
+  min_confidence: 0.60
+  domotica_min_confidence: 0.70
+  smarthome_min_confidence: 0.50
+  fast_path_enabled: true
   families:
     - name: "quick"
-      criteria: "small talk, greetings, simple facts, unit conversions, general knowledge questions without tools"
+      criteria: "small talk, greetings, simple facts, unit conversions, general knowledge questions without tools or domotica control"
       model: "gemini-3.5-flash-lite"
       effort: "low"
       max_tokens: 1024
@@ -44,7 +48,7 @@ options:
       needs_memory: false
       allowed_tools: ""
     - name: "smarthome"
-      criteria: "home automation control, turning lights on or off, thermostat temperature, switches, scenes, checking Home Assistant entities or sensor states"
+      criteria: "home automation control, turning lights on or off, lampen aanzetten of uitzetten, domotica, verlichting, spots, thermostaat, switches, scenes, checking Home Assistant entities or sensor states"
       model: "gemini-3.5-flash-lite"
       effort: "low"
       max_tokens: 1024
@@ -83,6 +87,10 @@ schema:
   log_level: "list(debug|info|warn|warning|error)"
   provider: "list(gemini|litellm|openrouter|custom)"
   gateway_url: "str?"
+  min_confidence: "float(0.1,1.0)?"
+  domotica_min_confidence: "float(0.1,1.0)?"
+  smarthome_min_confidence: "float(0.1,1.0)?"
+  fast_path_enabled: "bool?"
   model_quick: "str?"
   model_general: "str?"
   model_code: "str?"

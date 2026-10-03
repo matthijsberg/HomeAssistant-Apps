@@ -38,6 +38,18 @@ configuration:
   gateway_url:
     name: "Gateway Base URL"
     description: "Optional proxy/gateway base URL when using LiteLLM, OpenRouter, or a custom gateway."
+  min_confidence:
+    name: "Minimum Confidence Threshold"
+    description: "Confidence floor for model routing (default 0.60). Turns scoring below this threshold safely fall back to the default family."
+  domotica_min_confidence:
+    name: "Domotica Fast-Path Confidence Threshold"
+    description: "Minimum confidence threshold for fast-path domotica resolution (default 0.70). Ambiguous or novel requests below this threshold safely escalate to the upstream LLM with HA tools."
+  smarthome_min_confidence:
+    name: "Laya Smarthome Detection Confidence Threshold"
+    description: "Minimum confidence threshold (default 0.50) for Laya System 1 to categorize a turn as smarthome and allocate HA tools."
+  fast_path_enabled:
+    name: "Enable Zero-LLM Fast-Path Gate"
+    description: "When enabled (default), evaluates simple imperatives in <0.5ms deterministically. When disabled, routes all domotica turns directly through the System 1 neural model (Laya or local SLM) on the Intel Arc XPU."
   families:
     name: "Task Families & Routing Profiles"
     description: "Configured task families with semantic criteria for Laya System 1 routing, target models, effort levels, token caps, temperatures, and thinking budgets."

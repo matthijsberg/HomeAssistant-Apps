@@ -2,62 +2,89 @@
 
 
 def render_gui_html() -> str:
-    """Generate self-contained, offline-first HTML/CSS/JS interface with flow visibility and debug tracing."""
+    """Generate self-contained, offline-first HTML/CSS/JS interface styled after the Stitch Design System."""
     return """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>HA System 1 — Decision & Domotica Fast-Path Engine</title>
+  <title>HA System 1 — Decision & Domotica Fast-Path Console</title>
   <style>
     :root {
-      --bg: #090d16;
-      --card-bg: #131b2e;
-      --card-sub: #0c1322;
-      --border: #222f49;
+      --bg: #09090b;
+      --card-bg: #121215;
+      --card-sub: #18181b;
+      --card-inner: #1e1e24;
+      --border: #27272a;
+      --border-sub: #3f3f46;
       --border-focus: #3b82f6;
-      --text: #f8fafc;
-      --text-muted: #94a3b8;
-      --text-dim: #64748b;
+      --text: #f4f4f5;
+      --text-muted: #a1a1aa;
+      --text-dim: #71717a;
       --primary: #3b82f6;
       --primary-hover: #2563eb;
-      --primary-light: rgba(59, 130, 246, 0.15);
+      --primary-light: rgba(59, 130, 246, 0.12);
       --success: #10b981;
-      --success-light: rgba(16, 185, 129, 0.15);
+      --success-light: rgba(16, 185, 129, 0.12);
       --warning: #f59e0b;
-      --warning-light: rgba(245, 158, 11, 0.15);
+      --warning-light: rgba(245, 158, 11, 0.12);
       --purple: #8b5cf6;
-      --purple-light: rgba(139, 92, 246, 0.15);
+      --purple-light: rgba(139, 92, 246, 0.12);
       --danger: #ef4444;
-      --cyan: #06b6d4;
       --radius: 10px;
     }
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-    body { background-color: var(--bg); color: var(--text); padding: 24px 16px; min-height: 100vh; }
-    .container { max-width: 1040px; margin: 0 auto; }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif; }
+    body { background-color: var(--bg); color: var(--text); padding-bottom: 40px; min-height: 100vh; -webkit-font-smoothing: antialiased; }
+    .container { max-width: 1080px; margin: 0 auto; padding: 0 16px; }
 
-    /* Header */
-    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; padding-bottom: 18px; border-bottom: 1px solid var(--border); }
-    .logo-area h1 { font-size: 22px; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 10px; }
-    .logo-area p { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
-    .badge-bar { display: flex; gap: 8px; flex-wrap: wrap; }
-    .badge { font-size: 12px; padding: 5px 12px; border-radius: 9999px; background: #1e293b; color: #e2e8f0; font-weight: 500; display: inline-flex; align-items: center; gap: 6px; }
-    .badge.xpu { background: var(--primary-light); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); }
-    .badge.ready { background: var(--success-light); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
-    .badge.provider { background: var(--purple-light); color: #c084fc; border: 1px solid rgba(139, 92, 246, 0.3); }
+    /* Top Sticky Navigation */
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      background: rgba(9, 9, 11, 0.88);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 0;
+      margin-bottom: 24px;
+    }
+    .header-inner { display: flex; justify-content: space-between; align-items: center; }
+    .breadcrumbs { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; }
+    .brand-title { color: #fff; font-weight: 700; display: flex; align-items: center; gap: 8px; font-size: 15px; }
+    .breadcrumb-sep { color: var(--text-dim); }
+    .trace-badge { font-family: monospace; font-size: 11px; background: #1f1f23; border: 1px solid var(--border); padding: 2px 7px; border-radius: 4px; color: #a1a1aa; }
+
+    .header-badges { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .badge {
+      font-size: 11px;
+      padding: 4px 10px;
+      border-radius: 9999px;
+      background: var(--card-sub);
+      color: #e4e4e7;
+      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid var(--border);
+    }
+    .badge.xpu { background: var(--primary-light); color: #60a5fa; border-color: rgba(59, 130, 246, 0.3); }
+    .badge.ready { background: var(--success-light); color: #34d399; border-color: rgba(16, 185, 129, 0.3); }
+    .badge.provider { background: var(--purple-light); color: #c084fc; border-color: rgba(139, 92, 246, 0.3); }
+
+    .pulse-dot { width: 7px; height: 7px; border-radius: 50%; background: #10b981; box-shadow: 0 0 8px #10b981; }
 
     /* Cards */
-    .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px; margin-bottom: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.25); }
-    .card-title { font-size: 14px; font-weight: 700; margin-bottom: 14px; color: #cbd5e1; text-transform: uppercase; letter-spacing: 0.6px; display: flex; justify-content: space-between; align-items: center; }
+    .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-bottom: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
+    .card-title { font-size: 13px; font-weight: 700; margin-bottom: 14px; color: #a1a1aa; text-transform: uppercase; letter-spacing: 0.6px; display: flex; justify-content: space-between; align-items: center; }
 
     /* Chips */
-    .chips-title { font-size: 12px; color: var(--text-muted); margin-bottom: 8px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
-    .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
-    .chip { font-size: 12px; background: var(--card-sub); border: 1px solid var(--border); color: #94a3b8; padding: 7px 14px; border-radius: 8px; cursor: pointer; transition: all 0.15s ease; user-select: none; }
+    .chips-title { font-size: 11px; color: var(--text-dim); margin-bottom: 8px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+    .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+    .chip { font-size: 12px; background: var(--card-sub); border: 1px solid var(--border); color: #a1a1aa; padding: 6px 12px; border-radius: 6px; cursor: pointer; transition: all 0.15s ease; user-select: none; }
     .chip:hover { border-color: var(--primary); color: #fff; background: var(--primary-light); }
 
     /* Inputs */
-    textarea { width: 100%; background: var(--card-sub); border: 1px solid var(--border); border-radius: 8px; padding: 14px; color: #fff; font-size: 14px; outline: none; transition: border 0.15s; min-height: 85px; resize: vertical; margin-bottom: 14px; }
+    textarea { width: 100%; background: var(--card-sub); border: 1px solid var(--border); border-radius: 8px; padding: 14px; color: #fff; font-size: 14px; font-family: monospace; outline: none; transition: border 0.15s; min-height: 75px; resize: vertical; margin-bottom: 12px; }
     textarea:focus { border-color: var(--border-focus); }
 
     .context-toggle { font-size: 12px; font-weight: 600; color: var(--primary); cursor: pointer; margin-bottom: 12px; display: inline-block; user-select: none; }
@@ -65,355 +92,351 @@ def render_gui_html() -> str:
     .context-panel.open { display: block; }
 
     .action-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }
-    .btn { background: var(--primary); color: #fff; border: none; padding: 10px 22px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.15s; font-size: 14px; display: inline-flex; align-items: center; gap: 8px; }
+    .btn { background: var(--primary); color: #fff; border: none; padding: 9px 20px; border-radius: 7px; font-weight: 600; cursor: pointer; transition: all 0.15s; font-size: 13px; display: inline-flex; align-items: center; gap: 7px; }
     .btn:hover { background: var(--primary-hover); transform: translateY(-1px); }
     .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
     .btn.execute { background: var(--success); }
     .btn.execute:hover { background: #059669; }
 
-    /* Visual Flow Pipeline Diagram */
-    .flow-pipeline { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin: 20px 0 24px 0; padding: 20px 14px; background: var(--card-sub); border-radius: 8px; border: 1px solid var(--border); position: relative; }
-    .flow-node { position: relative; display: flex; flex-direction: column; align-items: center; text-align: center; min-width: 145px; cursor: pointer; }
-    .flow-icon { width: 42px; height: 42px; border-radius: 50%; background: #1e293b; border: 2px solid var(--border); display: flex; align-items: center; justify-content: center; font-size: 18px; margin-bottom: 6px; transition: all 0.25s ease; }
-    .flow-icon.active { border-color: var(--primary); background: var(--primary-light); color: #60a5fa; box-shadow: 0 0 14px rgba(59,130,246,0.35); }
-    .flow-icon.fast-path { border-color: var(--success); background: var(--success-light); color: #34d399; box-shadow: 0 0 14px rgba(16,185,129,0.35); }
-    .flow-icon.cloud { border-color: var(--purple); background: var(--purple-light); color: #c084fc; box-shadow: 0 0 14px rgba(139,92,246,0.35); }
-    .flow-icon.bypassed { border-color: #334155; background: #0f172a; color: #475569; opacity: 0.6; }
-    .flow-label { font-size: 12px; font-weight: 700; color: #fff; margin-bottom: 2px; }
-    .flow-sub { font-size: 11px; color: var(--text-muted); }
-    .flow-arrow { font-size: 16px; color: var(--text-dim); }
+    /* Metric Summary Ribbon */
+    .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 20px; }
+    .metric-box { background: var(--card-sub); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+    .metric-label { font-size: 10px; font-family: monospace; text-transform: uppercase; color: var(--text-dim); letter-spacing: 0.5px; }
+    .metric-val { font-size: 20px; font-weight: 700; color: #fff; margin-top: 4px; font-family: monospace; }
+    .metric-sub { font-size: 11px; margin-top: 4px; }
 
-    /* Hover Box Tooltip */
-    .flow-tooltip {
-      visibility: hidden;
-      opacity: 0;
-      position: absolute;
-      top: 118%;
-      left: 50%;
-      transform: translateX(-50%);
-      width: 250px;
-      background: #0f172a;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 12px;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.6);
-      z-index: 100;
-      transition: opacity 0.2s ease, visibility 0.2s ease;
-      pointer-events: none;
-      text-align: left;
+    /* Stepper Ribbon */
+    .pipeline-ribbon { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 24px; }
+    @media (max-width: 768px) {
+      .pipeline-ribbon { grid-template-columns: 1fr; }
     }
-    .flow-node:hover .flow-tooltip {
-      visibility: visible;
-      opacity: 1;
-    }
-    .flow-tooltip-title {
-      font-size: 12px;
-      font-weight: 700;
-      color: #60a5fa;
-      margin-bottom: 4px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-    .flow-tooltip-body {
-      font-size: 11px;
-      color: #cbd5e1;
-      line-height: 1.45;
-      margin-bottom: 6px;
-    }
-    .flow-tooltip-meta {
-      font-size: 10px;
-      color: var(--text-muted);
-      border-top: 1px solid rgba(255,255,255,0.08);
-      padding-top: 5px;
-      font-family: monospace;
-    }
+    .ribbon-stage { background: var(--card-sub); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; cursor: pointer; transition: all 0.2s ease; display: flex; flex-direction: column; justify-content: space-between; }
+    .ribbon-stage:hover { border-color: var(--border-focus); transform: translateY(-1px); }
+    .ribbon-stage.active { border-color: var(--primary); background: rgba(59, 130, 246, 0.08); box-shadow: 0 0 14px rgba(59, 130, 246, 0.2); }
+    .ribbon-stage.fastpath { border-color: var(--success); background: rgba(16, 185, 129, 0.08); box-shadow: 0 0 14px rgba(16, 185, 129, 0.2); }
+    .ribbon-stage.bypassed { opacity: 0.45; border-style: dashed; }
+    .ribbon-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+    .ribbon-idx { font-size: 10px; font-family: monospace; font-weight: 700; color: var(--text-dim); }
+    .ribbon-time { font-size: 10px; font-family: monospace; color: #34d399; }
+    .ribbon-title { font-size: 12px; font-weight: 700; color: #fff; }
+    .ribbon-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+    .ribbon-foot { margin-top: 8px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,0.06); font-size: 10px; font-family: monospace; color: var(--text-dim); display: flex; align-items: center; gap: 5px; }
 
-    /* Results layout */
-    #results-area { display: none; }
-    .tab-bar { display: flex; gap: 8px; margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
-    .tab-btn { background: transparent; border: none; color: var(--text-muted); font-size: 13px; font-weight: 600; padding: 6px 14px; border-radius: 6px; cursor: pointer; transition: all 0.15s; }
-    .tab-btn.active { background: var(--primary-light); color: #60a5fa; border: 1px solid rgba(59,130,246,0.3); }
+    /* Deep Trace Step Cards */
+    .step-card { background: var(--card-sub); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px 20px; margin-bottom: 16px; transition: all 0.25s ease; }
+    .step-card.bypassed { opacity: 0.4; filter: grayscale(0.85); background: rgba(18, 18, 21, 0.4); border-style: dashed; }
+    .step-card.bypassed:hover { opacity: 0.75; filter: grayscale(0.2); }
+    .step-card.bypassed .bypassed-msg { display: block; font-size: 13px; color: var(--text-muted); font-style: italic; padding: 6px 0; }
+    .step-card.bypassed .step-content { display: none; }
+    .step-card:not(.bypassed) .bypassed-msg { display: none; }
+    .step-card:not(.bypassed) .step-content { display: block; }
 
-    .result-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 20px; }
-    .result-box { background: var(--card-sub); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
-    .result-label { font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; margin-bottom: 6px; }
-    .result-val { font-size: 17px; font-weight: 700; color: #fff; }
+    .step-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+    .step-title { font-size: 14px; font-weight: 700; color: #60a5fa; display: flex; align-items: center; gap: 8px; }
+    .step-badge { font-size: 11px; padding: 3px 8px; border-radius: 4px; font-weight: 600; text-transform: uppercase; font-family: monospace; }
 
-    .pill { display: inline-block; padding: 3px 10px; border-radius: 6px; font-size: 12px; font-weight: 700; text-transform: uppercase; }
-    .pill.quick { background: var(--success-light); color: #34d399; }
-    .pill.smarthome { background: rgba(6, 182, 212, 0.2); color: #22d3ee; }
-    .pill.general { background: var(--primary-light); color: #60a5fa; }
-    .pill.code { background: var(--purple-light); color: #c084fc; }
-    .pill.deep { background: var(--warning-light); color: #fbbf24; }
-
-    /* Trace List */
-    .trace-card { background: var(--card-sub); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-bottom: 14px; }
     .trace-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 13px; }
     .trace-item:last-child { border-bottom: none; }
-    .trace-k { color: var(--text-muted); display: flex; align-items: center; gap: 8px; }
+    .trace-k { color: var(--text-muted); }
     .trace-v { font-weight: 600; color: #e2e8f0; font-family: monospace; }
-    .trace-check { color: var(--success); font-weight: 700; }
 
-    pre { background: var(--card-sub); padding: 14px; border-radius: 8px; font-size: 12px; overflow-x: auto; color: #cbd5e1; border: 1px solid var(--border); margin-top: 10px; line-height: 1.5; }
+    /* Probability Bar Styles */
+    .prob-row { margin-bottom: 8px; }
+    .prob-header { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 3px; }
+    .prob-bar-bg { background: #27272a; height: 8px; border-radius: 4px; overflow: hidden; }
+    .prob-bar-fill { height: 100%; transition: width 0.3s ease; }
+
+    pre { background: #0c0c0e; padding: 14px; border-radius: 8px; font-size: 12px; overflow-x: auto; color: #cbd5e1; border: 1px solid var(--border); margin-top: 10px; line-height: 1.5; font-family: monospace; }
     details { margin-top: 14px; cursor: pointer; font-size: 13px; color: var(--text-muted); }
   </style>
 </head>
 <body>
-<div class="container">
-  <header>
-    <div class="logo-area">
-      <h1>⚡ HA System 1</h1>
-      <p>Local Sub-50ms System 1 Decision & Fast-Path Domotica Engine</p>
-    </div>
-    <div class="badge-bar">
-      <div id="badge-device" class="badge xpu">Device: Loading...</div>
-      <div id="badge-status" class="badge ready">Status: Loading...</div>
-      <div id="badge-registry" class="badge provider">Registry: Loading...</div>
-    </div>
-  </header>
 
+<header>
+  <div class="container header-inner">
+    <div class="breadcrumbs">
+      <div class="brand-title">⚡ HA System 1</div>
+      <span class="breadcrumb-sep">/</span>
+      <span style="color: var(--text-muted);">Evaluation &amp; Routing Console</span>
+      <span class="breadcrumb-sep">/</span>
+      <span id="trace-id-badge" class="trace-badge">#live-pass</span>
+    </div>
+    <div class="header-badges">
+      <div id="badge-device" class="badge xpu"><span class="pulse-dot"></span> Device: Loading...</div>
+      <div id="badge-latency" class="badge ready">Latency: --</div>
+      <div id="badge-provider" class="badge provider">Provider: Loading...</div>
+    </div>
+  </div>
+</header>
+
+<div class="container">
+  <!-- Query Editor Card -->
   <div class="card">
-    <div class="card-title">Decision & Routing Playground</div>
+    <div class="card-title">
+      <span>Decision &amp; Routing Playground</span>
+      <span id="prompt-meta" style="font-size: 11px; font-family: monospace; color: var(--text-dim);">UTF-8 Normalized • Multi-Language</span>
+    </div>
 
     <div class="chips-title">Quick Presets:</div>
     <div class="chips">
-      <div class="chip" onclick="loadPreset('lights_off')">💡 Doe de lampen in de serre uit</div>
-      <div class="chip" onclick="loadPreset('lights_on')">💡 Zet de spots in de woonkamer aan</div>
+      <div class="chip" onclick="loadPreset('led_strip')">💡 Doe de led strip in de serre uit</div>
+      <div class="chip" onclick="loadPreset('lights_off')">💡 Doe alle lampen in de serre uit</div>
+      <div class="chip" onclick="loadPreset('en_lights')">💡 Turn off all lights in the serre</div>
+      <div class="chip" onclick="loadPreset('spots')">💡 Doe de spots in de serre uit</div>
       <div class="chip" onclick="loadPreset('climate')">🌡️ Zet de thermostaat op 20.5 graden</div>
       <div class="chip" onclick="loadPreset('quick')">❓ Wat is de hoofdstad van Australië?</div>
-      <div class="chip" onclick="loadPreset('code')">🐍 Schrijf een Python script voor data analyse</div>
       <div class="chip" onclick="loadPreset('deep')">📊 Bereken de annuïtaire hypotheek voor 450k</div>
     </div>
 
-    <label style="font-size: 12px; font-weight: 600; color: #94a3b8; display: block; margin-bottom: 6px;">Prompt / User Command:</label>
-    <textarea id="prompt-input" placeholder="Type a smart home command or user message to evaluate routing and trace the execution flow..."></textarea>
+    <textarea id="prompt-input" placeholder="Enter prompt or smart home command to trace routing and observe execution..."></textarea>
 
     <div class="context-toggle" onclick="toggleContext()">+ Toggle Preceding Conversation History (Optional)</div>
     <div id="context-panel" class="context-panel">
-      <label style="font-size: 12px; color: #94a3b8; display: block; margin-bottom: 4px;">Context (Preceding turns):</label>
-      <textarea id="context-input" style="min-height: 60px;" placeholder="user: Wil je de verwarming aanzetten?\nassistant: Zeker, welke temperatuur wens je?"></textarea>
+      <label style="font-size: 12px; color: var(--text-muted); display: block; margin-bottom: 4px;">Context (Preceding turns):</label>
+      <textarea id="context-input" style="min-height: 55px;" placeholder="user: Wil je de verwarming aanzetten?\nassistant: Zeker, welke temperatuur wens je?"></textarea>
     </div>
 
     <div class="action-row">
-      <span id="timing-hint" style="font-size: 12px; color: var(--text-muted);">Ready for live evaluation</span>
+      <span id="timing-hint" style="font-size: 12px; color: var(--text-muted); font-family: monospace;">Ready for live evaluation</span>
       <div style="display: flex; gap: 10px;">
         <button id="route-btn" class="btn" onclick="evaluateTurn()">
-          <span>🚀 Evaluate & Trace Flow</span>
+          <span>🚀 Evaluate &amp; Trace Flow</span>
         </button>
       </div>
     </div>
   </div>
 
-  <div id="results-area" class="card">
-    <div class="card-title">
-      <span>Evaluation & Decision Trace</span>
-      <span id="flow-verdict-badge" class="pill smarthome">Fast-Path</span>
-    </div>
-
-    <!-- Visual Flow Pipeline Diagram with Hover Details -->
-    <div class="flow-pipeline">
-      <!-- Node 1: Input Normalization -->
-      <div class="flow-node">
-        <div id="flow-node-input" class="flow-icon active">💬</div>
-        <div class="flow-label">1. User Input</div>
-        <div id="flow-sub-input" class="flow-sub">Normalized</div>
-        <div class="flow-tooltip">
-          <div class="flow-tooltip-title"><span>Input Normalization</span><span>Step 1</span></div>
-          <div class="flow-tooltip-body">Strips chat wrapper prefixes, telegram usernames, and folds diacritics. Checks deterministic follow-up markers (RT-04/05).</div>
-          <div id="tt-meta-input" class="flow-tooltip-meta">Follow-up check: Standalone turn</div>
-        </div>
+  <div id="results-area" style="display: none;">
+    <!-- High-Level Metric Summary Ribbon -->
+    <div class="metric-grid">
+      <div class="metric-box">
+        <div class="metric-label">Total Latency</div>
+        <div id="metric-latency" class="metric-val">--<span style="font-size: 12px; color: var(--text-dim); margin-left: 2px;">ms</span></div>
+        <div id="metric-latency-sub" class="metric-sub" style="color: #34d399;">Sub-50ms SLA met</div>
       </div>
-
-      <div class="flow-arrow">➔</div>
-
-      <!-- Node 2: Fast-Path Domotica Gate -->
-      <div class="flow-node">
-        <div id="flow-node-fastpath" class="flow-icon fast-path">⚡</div>
-        <div class="flow-label">2. Fast-Path Gate</div>
-        <div id="flow-sub-fastpath" class="flow-sub">Zero-LLM (&lt;50ms)</div>
-        <div class="flow-tooltip">
-          <div class="flow-tooltip-title"><span>Fast-Path Engine</span><span>Step 2</span></div>
-          <div class="flow-tooltip-body">Zero-LLM deterministic resolver. Matches smart home imperatives against 3,600+ Home Assistant entities without model latency or tokens.</div>
-          <div id="tt-meta-fastpath" class="flow-tooltip-meta">Evaluating smart home intent...</div>
-        </div>
+      <div class="metric-box">
+        <div class="metric-label">Decision Path</div>
+        <div id="metric-path" class="metric-val" style="font-size: 16px;">Fast-Path</div>
+        <div id="metric-path-sub" class="metric-sub" style="color: #60a5fa;">Zero-LLM Local API</div>
       </div>
-
-      <div class="flow-arrow">➔</div>
-
-      <!-- Node 3: Laya System 1 Router (THIS IS LAYA!) -->
-      <div class="flow-node">
-        <div id="flow-node-laya" class="flow-icon cloud">🧠</div>
-        <div class="flow-label">3. Laya System 1</div>
-        <div id="flow-sub-laya" class="flow-sub">Intel Arc iGPU</div>
-        <div class="flow-tooltip">
-          <div class="flow-tooltip-title"><span>Laya Neural Router</span><span>Step 3 (Laya)</span></div>
-          <div class="flow-tooltip-body"><strong>This is Laya!</strong> Local neural network running on Intel Arc GPU (XPU). Categorizes prompt into task families (Deep, Code, General, Quick) in ~80ms.</div>
-          <div id="tt-meta-laya" class="flow-tooltip-meta">Hardware: Level-Zero XPU</div>
-        </div>
+      <div class="metric-box">
+        <div class="metric-label">Confidence Score</div>
+        <div id="metric-conf" class="metric-val" style="color: #60a5fa;">100%</div>
+        <div id="metric-conf-sub" class="metric-sub" style="color: var(--text-dim);">Deterministic rule match</div>
       </div>
-
-      <div class="flow-arrow">➔</div>
-
-      <!-- Node 4: Optimization Gate -->
-      <div class="flow-node">
-        <div id="flow-node-opt" class="flow-icon active">✂️</div>
-        <div class="flow-label">4. Optimization</div>
-        <div id="flow-sub-opt" class="flow-sub">Tool &amp; Memory</div>
-        <div class="flow-tooltip">
-          <div class="flow-tooltip-title"><span>Optimization Gate</span><span>Step 4</span></div>
-          <div class="flow-tooltip-body">Dynamic tool pruning removes developer tools. Smart memory gating strips personal memory context for impersonal queries to save tokens.</div>
-          <div id="tt-meta-opt" class="flow-tooltip-meta">Evaluating gating policies...</div>
-        </div>
-      </div>
-
-      <div class="flow-arrow">➔</div>
-
-      <!-- Node 5: Action Target -->
-      <div class="flow-node">
-        <div id="flow-node-output" class="flow-icon active">🎯</div>
-        <div class="flow-label">5. Action Target</div>
-        <div id="flow-sub-output" class="flow-sub">Dispatched</div>
-        <div class="flow-tooltip">
-          <div class="flow-tooltip-title"><span>Execution Target</span><span>Step 5</span></div>
-          <div class="flow-tooltip-body">Final execution destination: either direct Home Assistant REST service call, or upstream cloud model with calibrated thinking budget.</div>
-          <div id="tt-meta-output" class="flow-tooltip-meta">Destination: Ready</div>
-        </div>
+      <div class="metric-box">
+        <div class="metric-label">Tokens &amp; Cost</div>
+        <div id="metric-tokens" class="metric-val">0 <span style="font-size: 12px; color: var(--text-dim);">tokens</span></div>
+        <div id="metric-tokens-sub" class="metric-sub" style="color: #34d399;">Zero cloud cost</div>
       </div>
     </div>
 
-    <!-- Tabs -->
-    <div class="tab-bar">
-      <button id="tab-btn-fastpath" class="tab-btn active" onclick="switchTab('fastpath')">⚡ Domotica Fast-Path</button>
-      <button id="tab-btn-model" class="tab-btn" onclick="switchTab('model')">🤖 Model &amp; Effort Routing</button>
-      <button id="tab-btn-debug" class="tab-btn" onclick="switchTab('debug')">🔬 Trace &amp; Debug Log</button>
-    </div>
-
-    <!-- Tab 1: Fast Path View -->
-    <div id="tab-content-fastpath">
-      <div class="result-grid">
-        <div class="result-box">
-          <div class="result-label">Fast-Path Eligible</div>
-          <div id="fp-eligible" class="result-val" style="color: #34d399;">YES</div>
+    <!-- Stepper Ribbon (Stage 01 to 05) -->
+    <div class="pipeline-ribbon">
+      <div id="ribbon-1" class="ribbon-stage active" onclick="scrollToStep('card-step-1')">
+        <div class="ribbon-top">
+          <span class="ribbon-idx">STAGE 01</span>
+          <span id="ribbon-time-1" class="ribbon-time">&lt; 0.5ms</span>
         </div>
-        <div class="result-box">
-          <div class="result-label">Target Domain &amp; Action</div>
-          <div id="fp-domain-service" class="result-val">-</div>
-        </div>
-        <div class="result-box">
-          <div class="result-label">Resolved Target Entity/Area</div>
-          <div id="fp-target-id" class="result-val" style="font-size: 14px; word-break: break-all; color: #93c5fd;">-</div>
-        </div>
-        <div class="result-box">
-          <div class="result-label">Decision Latency</div>
-          <div id="fp-latency" class="result-val" style="color: #34d399;">-</div>
-        </div>
+        <div class="ribbon-title">Input Normalization</div>
+        <div class="ribbon-sub">Context isolation</div>
+        <div class="ribbon-foot"><span class="pulse-dot" style="width: 5px; height: 5px;"></span> Deterministic pass</div>
       </div>
 
-      <div class="trace-card">
-        <div style="font-size: 12px; font-weight: 700; color: #cbd5e1; margin-bottom: 10px; text-transform: uppercase;">Generated Home Assistant Tool Call (OpenAI Wire Protocol):</div>
-        <pre id="fp-tool-call" style="margin-top: 0;"></pre>
-        <div style="margin-top: 14px; display: flex; justify-content: flex-end;">
-          <button id="btn-execute-ha" class="btn execute" onclick="executeAgainstHA()">
-            <span>⚡ Execute Live against Home Assistant</span>
-          </button>
+      <div id="ribbon-2" class="ribbon-stage" onclick="scrollToStep('card-step-2')">
+        <div class="ribbon-top">
+          <span class="ribbon-idx">STAGE 02</span>
+          <span id="ribbon-time-2" class="ribbon-time">&lt; 1.0ms</span>
         </div>
-        <div id="execution-feedback" style="margin-top: 10px; font-size: 13px; display: none;"></div>
-      </div>
-    </div>
-
-    <!-- Tab 2: Model Routing View -->
-    <div id="tab-content-model" style="display: none;">
-      <div class="result-grid">
-        <div class="result-box">
-          <div class="result-label">Task Family</div>
-          <div id="res-family" class="result-val"><span class="pill general">-</span></div>
-        </div>
-        <div class="result-box">
-          <div class="result-label">Reasoning Effort</div>
-          <div id="res-effort" class="result-val">-</div>
-        </div>
-        <div class="result-box">
-          <div class="result-label">Assigned Model</div>
-          <div id="res-model" class="result-val" style="font-size: 14px; word-break: break-all;">-</div>
-        </div>
-        <div class="result-box">
-          <div class="result-label">Inference Latency</div>
-          <div id="res-latency" class="result-val" style="color: #34d399;">-</div>
-        </div>
-        <div class="result-box">
-          <div class="result-label">Thinking Budget</div>
-          <div id="res-thinking" class="result-val" style="font-size: 15px; color: #fcd34d;">Unconstrained</div>
-        </div>
-        <div class="result-box">
-          <div class="result-label">Allowed Tools</div>
-          <div id="res-tools" class="result-val" style="font-size: 14px; color: #34d399;">-</div>
-        </div>
-        <div class="result-box">
-          <div class="result-label">Memory Gating</div>
-          <div id="res-memory" class="result-val" style="font-size: 14px; color: #34d399;">-</div>
-        </div>
-        <div class="result-box">
-          <div class="result-label">Confidence</div>
-          <div id="res-conf" class="result-val" style="font-size: 16px; color: #60a5fa;">-</div>
-        </div>
+        <div class="ribbon-title">Zero-LLM Fast Path</div>
+        <div id="ribbon-sub-2" class="ribbon-sub">Safety gates &amp; target</div>
+        <div id="ribbon-foot-2" class="ribbon-foot">Passed Gate</div>
       </div>
 
-      <!-- Interactive Sticky Override Correction Bar (EV-03, OB-03) -->
-      <div class="trace-card" style="margin-top: 14px; border-color: rgba(59, 130, 246, 0.4);">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-          <span style="font-size: 13px; font-weight: 700; color: #93c5fd;">🎯 Correct this Routing (Exact Sticky Override)</span>
-          <span id="override-status-badge" style="font-size: 11px; color: var(--text-muted);">Stored in corrections.yaml</span>
+      <div id="ribbon-3" class="ribbon-stage" onclick="scrollToStep('card-step-3')">
+        <div class="ribbon-top">
+          <span class="ribbon-idx">STAGE 03 • NEURAL</span>
+          <span id="ribbon-time-3" class="ribbon-time">--</span>
         </div>
-        <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">
-          Was this prompt misrouted? Select the true family below to activate an exact normalized override (&lt;0.5ms) and queue it for review:
-        </p>
-        <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px;">
-          <button class="chip" onclick="submitCorrection('quick')">⚡ Quick</button>
-          <button class="chip" onclick="submitCorrection('smarthome')">🏠 Smarthome</button>
-          <button class="chip" onclick="submitCorrection('general')">💬 General</button>
-          <button class="chip" onclick="submitCorrection('code')">🐍 Code</button>
-          <button class="chip" onclick="submitCorrection('deep')">🧠 Deep</button>
+        <div class="ribbon-title">Laya System 1</div>
+        <div id="ribbon-sub-3" class="ribbon-sub">Intel Arc iGPU</div>
+        <div id="ribbon-foot-3" class="ribbon-foot">XPU Matrix</div>
+      </div>
+
+      <div id="ribbon-4" class="ribbon-stage" onclick="scrollToStep('card-step-4')">
+        <div class="ribbon-top">
+          <span class="ribbon-idx">STAGE 04</span>
+          <span id="ribbon-time-4" class="ribbon-time">0ms</span>
         </div>
-        <div id="correction-feedback" style="display: none; font-size: 12px; padding: 8px 12px; border-radius: 6px; background: rgba(16, 185, 129, 0.15); color: #34d399; font-weight: 600;"></div>
+        <div class="ribbon-title">Tool &amp; Memory Gate</div>
+        <div id="ribbon-sub-4" class="ribbon-sub">Dynamic pruning</div>
+        <div id="ribbon-foot-4" class="ribbon-foot">Token optimized</div>
+      </div>
+
+      <div id="ribbon-5" class="ribbon-stage" onclick="scrollToStep('card-step-5')">
+        <div class="ribbon-top">
+          <span class="ribbon-idx">STAGE 05 • FINAL</span>
+          <span id="ribbon-time-5" class="ribbon-time" style="color: #60a5fa;">Ready</span>
+        </div>
+        <div class="ribbon-title">Action &amp; Target</div>
+        <div id="ribbon-sub-5" class="ribbon-sub">Execution dispatch</div>
+        <div id="ribbon-foot-5" class="ribbon-foot"><span class="pulse-dot" style="width: 5px; height: 5px;"></span> Final Destination</div>
       </div>
     </div>
 
-    <!-- Tab 3: Debug Log View -->
-    <div id="tab-content-debug" style="display: none;">
-      <div class="trace-card">
-        <div class="trace-item">
-          <span class="trace-k"><span>🧹</span> Input Normalization</span>
-          <span id="trace-step-norm" class="trace-v trace-check">✓ Done</span>
+    <!-- 5 Detailed Stage Cards -->
+    <div id="pipeline-steps-container">
+      <!-- Step 1 Card: Input Normalization -->
+      <div id="card-step-1" class="step-card">
+        <div class="step-header">
+          <div class="step-title"><span>💬</span> Stage 1: Input Normalization &amp; Context Isolation</div>
+          <span class="step-badge" style="background: rgba(59, 130, 246, 0.2); color: #60a5fa;">Stage 1 Complete</span>
         </div>
-        <div class="trace-item">
-          <span class="trace-k"><span>🏠</span> Fast-Path Domotica Engine</span>
-          <span id="trace-step-fp" class="trace-v">-</span>
-        </div>
-        <div class="trace-item">
-          <span class="trace-k"><span>🧠</span> Laya System 1 Neural Router</span>
-          <span id="trace-step-laya" class="trace-v">-</span>
-        </div>
-        <div class="trace-item">
-          <span class="trace-k"><span>✂️</span> Dynamic Tool Pruning</span>
-          <span id="trace-step-tools" class="trace-v">-</span>
-        </div>
-        <div class="trace-item">
-          <span class="trace-k"><span>🧠</span> Smart Memory Gating</span>
-          <span id="trace-step-mem" class="trace-v">-</span>
-        </div>
-        <div class="trace-item">
-          <span class="trace-k"><span>⏱️</span> Hardware Execution Time</span>
-          <span id="trace-step-time" class="trace-v">-</span>
+        <div class="step-content">
+          <div class="trace-item">
+            <span class="trace-k">Raw User Input:</span>
+            <span id="trace-raw-input" class="trace-v">-</span>
+          </div>
+          <div class="trace-item">
+            <span class="trace-k">Normalized String (UTF-8 Diacritics Folded):</span>
+            <span id="trace-norm-input" class="trace-v">-</span>
+          </div>
+          <div class="trace-item">
+            <span class="trace-k">Deterministic Follow-up Detector (RT-04/05):</span>
+            <span id="trace-followup-status" class="trace-v">-</span>
+          </div>
         </div>
       </div>
 
-      <details open>
-        <summary>Raw JSON Diagnostics</summary>
+      <!-- Step 2 Card: Fast-Path Domotica Gate -->
+      <div id="card-step-2" class="step-card">
+        <div class="step-header">
+          <div class="step-title"><span>⚡</span> Stage 2: Fast-Path Domotica Gate (Sub-50ms Zero-LLM)</div>
+          <span id="badge-step-fp" class="step-badge" style="background: rgba(16, 185, 129, 0.2); color: #34d399;">Qualified</span>
+        </div>
+        <div id="msg-step-fp" class="bypassed-msg">Bypassed: Prompt does not represent an unambiguous smart home imperative. Escalated to Stage 3 (Laya S1).</div>
+        <div class="step-content">
+          <div class="trace-item">
+            <span class="trace-k">Gate Qualification Status:</span>
+            <span id="trace-fp-status" class="trace-v">-</span>
+          </div>
+          <div class="trace-item">
+            <span class="trace-k">Safety Gates Checklist (FP-01..18):</span>
+            <span id="trace-fp-checklist" class="trace-v">-</span>
+          </div>
+          <div class="trace-item">
+            <span class="trace-k">Resolved Target Object:</span>
+            <span id="trace-fp-resolved" class="trace-v">-</span>
+          </div>
+          <div class="trace-item">
+            <span class="trace-k">Resolution Latency:</span>
+            <span id="trace-fp-latency" class="trace-v" style="color: #34d399;">&lt; 0.5 ms</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 3 Card: Laya System 1 Neural Router (Intel Arc iGPU) -->
+      <div id="card-step-3" class="step-card">
+        <div class="step-header">
+          <div class="step-title"><span>🧠</span> Stage 3: Laya System 1 Neural Router (Intel Arc iGPU)</div>
+          <span id="badge-step-laya" class="step-badge" style="background: rgba(139, 92, 246, 0.2); color: #c084fc;">XPU Active</span>
+        </div>
+        <div id="msg-step-laya" class="bypassed-msg">Bypassed — Fast-Path Domotica Gate resolved deterministically without neural model evaluation (0 cloud tokens, &lt;1ms).</div>
+        <div class="step-content">
+          <div class="trace-item">
+            <span class="trace-k">Hardware Device:</span>
+            <span id="trace-laya-hw" class="trace-v">Intel Arc iGPU (Level-Zero DRM XPU)</span>
+          </div>
+          <div class="trace-item">
+            <span class="trace-k">Checkpoint &amp; Language Detection:</span>
+            <span id="trace-laya-checkpoint" class="trace-v">-</span>
+          </div>
+          <div class="trace-item">
+            <span class="trace-k">Hardware Inference Latency:</span>
+            <span id="trace-laya-latency" class="trace-v" style="color: #34d399;">-</span>
+          </div>
+
+          <div style="margin-top: 14px;">
+            <div style="font-size: 11px; font-weight: 700; color: #a1a1aa; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;">Softmax Probability Distribution (All Candidates):</div>
+            <div id="laya-prob-bars"></div>
+          </div>
+
+          <!-- Sticky Override Correction Controls -->
+          <div style="margin-top: 16px; padding: 12px; background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.25); border-radius: 8px;">
+            <div style="font-size: 12px; font-weight: 700; color: #93c5fd; margin-bottom: 6px;">🎯 Correct this Routing (Exact Sticky Override):</div>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px;">
+              <button class="chip" onclick="submitCorrection('quick')">⚡ Quick</button>
+              <button class="chip" onclick="submitCorrection('smarthome')">🏠 Smarthome</button>
+              <button class="chip" onclick="submitCorrection('general')">💬 General</button>
+              <button class="chip" onclick="submitCorrection('code')">🐍 Code</button>
+              <button class="chip" onclick="submitCorrection('deep')">🧠 Deep</button>
+            </div>
+            <div id="correction-feedback" style="display: none; font-size: 12px; padding: 6px 10px; border-radius: 5px;"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 4 Card: Optimization Gate -->
+      <div id="card-step-4" class="step-card">
+        <div class="step-header">
+          <div class="step-title"><span>✂️</span> Stage 4: Optimization Gate (Tools &amp; Memory Gating)</div>
+          <span id="badge-step-opt" class="step-badge" style="background: rgba(59, 130, 246, 0.2); color: #60a5fa;">Optimized</span>
+        </div>
+        <div id="msg-step-opt" class="bypassed-msg">Bypassed — Direct Home Assistant service call requires no LLM context, tool pruning, or token optimization.</div>
+        <div class="step-content">
+          <div class="trace-item">
+            <span class="trace-k">Smart Memory Gating:</span>
+            <span id="trace-opt-mem" class="trace-v">-</span>
+          </div>
+          <div class="trace-item">
+            <span class="trace-k">Dynamic Tool Pruning:</span>
+            <span id="trace-opt-tools" class="trace-v">-</span>
+          </div>
+          <div class="trace-item">
+            <span class="trace-k">Thinking Budget:</span>
+            <span id="trace-opt-thinking" class="trace-v">-</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 5 Card: Action Target & Execution Feedback -->
+      <div id="card-step-5" class="step-card">
+        <div class="step-header">
+          <div class="step-title"><span>🎯</span> Stage 5: Action Target &amp; System Output</div>
+          <span id="badge-step-out" class="step-badge" style="background: rgba(16, 185, 129, 0.2); color: #34d399;">Dispatched</span>
+        </div>
+        <div class="step-content">
+          <div class="trace-item">
+            <span class="trace-k">Target Execution Destination:</span>
+            <span id="trace-target-dest" class="trace-v" style="color: #60a5fa;">-</span>
+          </div>
+          <div class="trace-item">
+            <span class="trace-k">Spoken Speech Confirmation:</span>
+            <span id="trace-target-speech" class="trace-v" style="color: #34d399;">-</span>
+          </div>
+
+          <div style="margin-top: 14px;">
+            <div style="font-size: 11px; font-weight: 700; color: #a1a1aa; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;">Dispatched Wire Payload / Tool Call:</div>
+            <pre id="trace-wire-payload" style="margin-top: 0;"></pre>
+          </div>
+
+          <div style="margin-top: 16px; padding: 14px; background: rgba(16, 185, 129, 0.06); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: 8px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+              <span style="font-size: 13px; font-weight: 700; color: #34d399;">📡 Real-Time Execution Feedback:</span>
+              <button id="btn-execute-live" class="btn execute" onclick="executeCurrentTarget()">
+                <span id="btn-execute-text">⚡ Execute Live against Home Assistant Core</span>
+              </button>
+            </div>
+            <div id="live-execution-output" style="margin-top: 12px; font-size: 13px; color: #cbd5e1; display: none;"></div>
+          </div>
+        </div>
+      </div>
+
+      <details open style="margin-top: 16px;">
+        <summary>Raw JSON Telemetry Dump</summary>
         <pre id="json-dump"></pre>
       </details>
     </div>
-
   </div>
 </div>
 
@@ -426,14 +449,13 @@ def render_gui_html() -> str:
       const res = await fetch('./health');
       if (res.ok) {
         const data = await res.json();
-        document.getElementById('badge-device').textContent = 'Device: ' + data.device.toUpperCase() + (data.device === 'xpu' ? ' (Intel Arc iGPU)' : ' (CPU)');
-        document.getElementById('badge-status').textContent = data.ready ? 'Status: Ready' : 'Status: Preloading...';
-        document.getElementById('badge-status').className = 'badge ' + (data.ready ? 'ready' : 'xpu');
+        document.getElementById('badge-device').innerHTML = '<span class="pulse-dot"></span> ' + data.device.toUpperCase() + (data.device === 'xpu' ? ' (Intel Arc iGPU)' : ' (CPU)');
+        document.getElementById('badge-device').className = 'badge ' + (data.device === 'xpu' ? 'xpu' : '');
       }
       const modelRes = await fetch('./v1/models');
       if (modelRes.ok) {
         const modelData = await modelRes.json();
-        document.getElementById('badge-registry').textContent = 'Provider: ' + modelData.provider.toUpperCase();
+        document.getElementById('badge-provider').textContent = 'Provider: ' + modelData.provider.toUpperCase();
       }
     } catch (e) {
       console.error('Failed to load status:', e);
@@ -445,12 +467,20 @@ def render_gui_html() -> str:
     p.classList.toggle('open');
   }
 
+  function scrollToStep(cardId) {
+    const el = document.getElementById(cardId);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }
+
   const presets = {
-    lights_off: "doe de lampen in de serre uit",
-    lights_on: "zet de spots in de woonkamer aan",
+    led_strip: "doe de led strip in de serre uit",
+    lights_off: "doe alle lampen in de serre uit",
+    en_lights: "turn off all lights in the serre",
+    spots: "doe de spots in de serre uit",
     climate: "zet de thermostaat op 20.5 graden",
     quick: "Wat is de hoofdstad van Australië?",
-    code: "Schrijf een python script om een CSV bestand in te lezen en te plotten met matplotlib",
     deep: "Bereken de annuïtaire hypotheeklasten voor 450k tegen 4% rente over 30 jaar"
   };
 
@@ -460,12 +490,12 @@ def render_gui_html() -> str:
     }
   }
 
-  function switchTab(name) {
-    ['fastpath', 'model', 'debug'].forEach(t => {
-      document.getElementById('tab-btn-' + t).classList.toggle('active', t === name);
-      document.getElementById('tab-content-' + t).style.display = (t === name) ? 'block' : 'none';
-    });
-  }
+  // Keyboard shortcut Ctrl/Cmd + Enter to trigger evaluation
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      evaluateTurn();
+    }
+  });
 
   async function evaluateTurn() {
     const prompt = document.getElementById('prompt-input').value.trim();
@@ -500,6 +530,7 @@ def render_gui_html() -> str:
 
       renderPipelineResults(domoticaData, routeData, wallMs);
       timing.textContent = `Evaluation complete in ${wallMs} ms`;
+      document.getElementById('badge-latency').textContent = `Latency: ${wallMs}ms`;
     } catch (e) {
       alert('Error evaluating turn: ' + e);
       timing.textContent = 'Error occurred';
@@ -514,147 +545,304 @@ def render_gui_html() -> str:
     const isDomotica = domotica && domotica.is_domotica;
     const isFastPath = domotica && domotica.fast_path;
 
-    // Visual Flow Pipeline updates
-    const badge = document.getElementById('flow-verdict-badge');
-    const fpNode = document.getElementById('flow-node-fastpath');
-    const layaNode = document.getElementById('flow-node-laya');
-    const optNode = document.getElementById('flow-node-opt');
-    const outNode = document.getElementById('flow-node-output');
+    // Reset execution feedback
+    document.getElementById('live-execution-output').style.display = 'none';
 
-    const subFp = document.getElementById('flow-sub-fastpath');
-    const subLaya = document.getElementById('flow-sub-laya');
-    const subOpt = document.getElementById('flow-sub-opt');
-    const subOut = document.getElementById('flow-sub-output');
+    // Summary Metric updates
+    document.getElementById('metric-latency').innerHTML = `${wallMs}<span style="font-size: 12px; color: var(--text-dim); margin-left: 2px;">ms</span>`;
+    document.getElementById('metric-latency-sub').textContent = wallMs < 50 ? 'Sub-50ms SLA met' : (wallMs < 150 ? 'Edge XPU SLA met' : 'Completed');
+    document.getElementById('metric-latency-sub').style.color = wallMs < 150 ? '#34d399' : '#f59e0b';
 
-    // Tooltip dynamic metadata
-    const ttFp = document.getElementById('tt-meta-fastpath');
-    const ttLaya = document.getElementById('tt-meta-laya');
-    const ttOpt = document.getElementById('tt-meta-opt');
-    const ttOut = document.getElementById('tt-meta-output');
+    // Ribbons & Cards
+    const r1 = document.getElementById('ribbon-1');
+    const r2 = document.getElementById('ribbon-2');
+    const r3 = document.getElementById('ribbon-3');
+    const r4 = document.getElementById('ribbon-4');
+    const r5 = document.getElementById('ribbon-5');
+
+    const cardFp = document.getElementById('card-step-2');
+    const cardLaya = document.getElementById('card-step-3');
+    const cardOpt = document.getElementById('card-step-4');
+    const cardOut = document.getElementById('card-step-5');
+
+    const traceId = 'tr-' + Math.random().toString(36).substring(2, 10);
+    document.getElementById('trace-id-badge').textContent = '#' + traceId;
 
     if (isFastPath) {
-      badge.textContent = 'Fast-Path Active (<50ms)';
-      badge.className = 'pill smarthome';
-      fpNode.className = 'flow-icon fast-path';
-      layaNode.className = 'flow-icon bypassed';
-      optNode.className = 'flow-icon active';
-      outNode.className = 'flow-icon fast-path';
+      // Metric cards
+      document.getElementById('metric-path').textContent = 'Fast-Path (HA)';
+      document.getElementById('metric-path').style.color = '#34d399';
+      document.getElementById('metric-path-sub').textContent = (domotica.domain || 'HA') + '.' + (domotica.service || 'call');
+      document.getElementById('metric-conf').textContent = '100%';
+      document.getElementById('metric-conf').style.color = '#34d399';
+      document.getElementById('metric-conf-sub').textContent = 'Deterministic rule qualification';
+      document.getElementById('metric-tokens').innerHTML = '0 <span style="font-size: 12px; color: var(--text-dim);">tokens</span>';
+      document.getElementById('metric-tokens-sub').textContent = 'Zero cloud cost';
 
-      subFp.textContent = (domotica.domain || 'HA') + '.' + (domotica.service || 'call');
-      subLaya.textContent = 'Bypassed (Zero-LLM)';
-      subOpt.textContent = 'Zero-Token Fastpath';
-      subOut.textContent = 'Direct HA Call';
+      // Ribbon States
+      r2.className = 'ribbon-stage fastpath';
+      r2.classList.remove('bypassed');
+      document.getElementById('ribbon-sub-2').textContent = (domotica.domain || 'HA') + '.' + (domotica.service || 'call');
+      document.getElementById('ribbon-foot-2').innerHTML = '<span style="color:#34d399;">✓ Qualified</span>';
 
-      ttFp.innerHTML = `<span style="color:#34d399;">✓ Qualified! Action: ${domotica.domain}.${domotica.service} on ${domotica.target_id}</span>`;
-      ttLaya.innerHTML = `<span style="color:#94a3b8;">Bypassed: Fast-path resolved deterministically in &lt;1ms.</span>`;
-      ttOpt.innerHTML = `<span style="color:#34d399;">Zero cloud tokens consumed.</span>`;
-      ttOut.innerHTML = `<span style="color:#34d399;">Target: Home Assistant Core API</span>`;
+      r3.className = 'ribbon-stage bypassed';
+      document.getElementById('ribbon-time-3').textContent = '0ms';
+      document.getElementById('ribbon-sub-3').textContent = 'Bypassed (Zero-LLM)';
+      document.getElementById('ribbon-foot-3').textContent = 'Skipped';
 
-      switchTab('fastpath');
+      r4.className = 'ribbon-stage bypassed';
+      document.getElementById('ribbon-sub-4').textContent = 'Bypassed (Zero-Token)';
+      document.getElementById('ribbon-foot-4').textContent = '0 tokens';
+
+      r5.className = 'ribbon-stage fastpath';
+      document.getElementById('ribbon-sub-5').textContent = 'HA Core API';
+      document.getElementById('ribbon-foot-5').innerHTML = '<span style="color:#34d399;">Direct Service Call</span>';
+
+      // Detailed Cards Bypassed styling
+      cardFp.classList.remove('bypassed');
+      cardLaya.classList.add('bypassed');
+      cardOpt.classList.add('bypassed');
+      cardOut.classList.remove('bypassed');
+
+      document.getElementById('badge-step-fp').textContent = 'QUALIFIED';
+      document.getElementById('badge-step-fp').style.background = 'rgba(16, 185, 129, 0.2)';
+      document.getElementById('badge-step-fp').style.color = '#34d399';
+
+      document.getElementById('badge-step-laya').textContent = 'BYPASSED';
+      document.getElementById('badge-step-laya').style.background = 'rgba(100, 116, 139, 0.2)';
+      document.getElementById('badge-step-laya').style.color = '#94a3b8';
+
+      document.getElementById('badge-step-opt').textContent = 'BYPASSED';
+      document.getElementById('badge-step-opt').style.background = 'rgba(100, 116, 139, 0.2)';
+      document.getElementById('badge-step-opt').style.color = '#94a3b8';
+
+      document.getElementById('badge-step-out').textContent = 'DISPATCHED TO HA';
+      document.getElementById('badge-step-out').style.background = 'rgba(16, 185, 129, 0.2)';
+      document.getElementById('badge-step-out').style.color = '#34d399';
+
+      document.getElementById('trace-target-dest').textContent = 'Home Assistant Core REST API (/services/' + domotica.domain + '/' + domotica.service + ')';
+      document.getElementById('trace-target-speech').textContent = domotica.speech || 'Action confirmed';
+      document.getElementById('trace-wire-payload').textContent = domotica.openai_tool_call
+        ? JSON.stringify(domotica.openai_tool_call, null, 2)
+        : JSON.stringify({ domain: domotica.domain, service: domotica.service, target: domotica.target_id }, null, 2);
+
+      document.getElementById('btn-execute-text').textContent = '⚡ Execute Live against Home Assistant Core';
     } else {
-      badge.textContent = 'Cloud LLM Route';
-      badge.className = 'pill ' + (routing ? routing.family : 'general');
-      fpNode.className = 'flow-icon bypassed';
-      layaNode.className = 'flow-icon cloud';
-      optNode.className = 'flow-icon active';
-      outNode.className = 'flow-icon cloud';
-
+      // Model route active
       const rejectReason = domotica ? (domotica.rejected_reason || 'not_domotica') : 'none';
-      subFp.textContent = `Bypassed (${rejectReason})`;
-      subLaya.textContent = (routing ? routing.family.toUpperCase() : 'Cloud Route');
-      subOpt.textContent = routing && routing.needs_memory === false ? 'Memory Stripped' : 'Full Context';
-      subOut.textContent = (routing ? routing.model : 'LLM Call');
+      const famName = routing ? routing.family.toUpperCase() : 'GENERAL';
+      const famConf = Math.round(((routing ? routing.confidence.family : 0) * 100));
 
-      ttFp.innerHTML = `<span style="color:#f59e0b;">Bypassed: ${rejectReason} (routed to Laya System 1).</span>`;
-      ttLaya.innerHTML = `<span style="color:#c084fc;">Intel Arc XPU: classified as ${routing ? routing.family.toUpperCase() : 'general'} (${Math.round(((routing ? routing.confidence.family : 0) * 100))}% conf).</span>`;
-      ttOpt.innerHTML = routing && routing.needs_memory === false ? `<span style="color:#34d399;">Tools pruned. Memory stripped.</span>` : `<span style="color:#60a5fa;">Full tools and memory retained.</span>`;
-      ttOut.innerHTML = `<span style="color:#c084fc;">Model: ${routing ? routing.model : '-'} (${routing ? routing.provider : '-'})</span>`;
+      document.getElementById('metric-path').textContent = famName;
+      document.getElementById('metric-path').style.color = '#c084fc';
+      document.getElementById('metric-path-sub').textContent = routing ? routing.model : 'Cloud LLM';
+      document.getElementById('metric-conf').textContent = famConf + '%';
+      document.getElementById('metric-conf').style.color = '#c084fc';
+      document.getElementById('metric-conf-sub').textContent = 'Neural classification confidence';
+      document.getElementById('metric-tokens').innerHTML = (routing && routing.needs_memory === false) ? 'Stripped <span style="font-size: 12px; color: var(--text-dim);">-2k tokens</span>' : 'Retained';
+      document.getElementById('metric-tokens-sub').textContent = routing && routing.needs_memory === false ? 'Context memory stripped' : 'Full context enabled';
 
-      switchTab('model');
+      // Ribbon States
+      r2.className = 'ribbon-stage bypassed';
+      document.getElementById('ribbon-sub-2').textContent = `Bypassed (${rejectReason})`;
+      document.getElementById('ribbon-foot-2').textContent = 'Escalated to S1';
+
+      r3.className = 'ribbon-stage active';
+      r3.classList.remove('bypassed');
+      document.getElementById('ribbon-time-3').textContent = (routing ? routing.latency_ms.toFixed(1) : '80') + 'ms';
+      document.getElementById('ribbon-sub-3').textContent = famName;
+      document.getElementById('ribbon-foot-3').innerHTML = `<span style="color:#c084fc;">${famConf}% confidence</span>`;
+
+      r4.className = 'ribbon-stage active';
+      r4.classList.remove('bypassed');
+      document.getElementById('ribbon-sub-4').textContent = routing && routing.needs_memory === false ? 'Memory Stripped' : 'Tools Pruned';
+      document.getElementById('ribbon-foot-4').textContent = 'Token saving active';
+
+      r5.className = 'ribbon-stage active';
+      r5.classList.remove('bypassed');
+      document.getElementById('ribbon-sub-5').textContent = routing ? routing.model : 'Cloud LLM';
+      document.getElementById('ribbon-foot-5').innerHTML = '<span style="color:#60a5fa;">Upstream Dispatched</span>';
+
+      // Detailed Cards Bypassed styling
+      cardFp.classList.add('bypassed');
+      cardLaya.classList.remove('bypassed');
+      cardOpt.classList.remove('bypassed');
+      cardOut.classList.remove('bypassed');
+
+      document.getElementById('badge-step-fp').textContent = 'BYPASSED';
+      document.getElementById('badge-step-fp').style.background = 'rgba(245, 158, 11, 0.2)';
+      document.getElementById('badge-step-fp').style.color = '#f59e0b';
+      document.getElementById('msg-step-fp').textContent = `Bypassed (${rejectReason}): Prompt escalated to Laya System 1 Neural Router.`;
+
+      document.getElementById('badge-step-laya').textContent = routing && routing.override_applied ? 'EXACT OVERRIDE' : 'XPU ACTIVE';
+      document.getElementById('badge-step-laya').style.background = 'rgba(139, 92, 246, 0.2)';
+      document.getElementById('badge-step-laya').style.color = '#c084fc';
+
+      document.getElementById('badge-step-opt').textContent = 'OPTIMIZED';
+      document.getElementById('badge-step-opt').style.background = 'rgba(59, 130, 246, 0.2)';
+      document.getElementById('badge-step-opt').style.color = '#60a5fa';
+
+      document.getElementById('badge-step-out').textContent = 'DISPATCHED TO LLM';
+      document.getElementById('badge-step-out').style.background = 'rgba(139, 92, 246, 0.2)';
+      document.getElementById('badge-step-out').style.color = '#c084fc';
+
+      document.getElementById('trace-target-dest').textContent = `${routing ? routing.model : 'LLM'} via ${routing ? routing.provider : 'Provider'}`;
+      document.getElementById('trace-target-speech').textContent = 'Direct Upstream Model Completion';
+      document.getElementById('trace-wire-payload').textContent = JSON.stringify({
+        model: routing ? routing.model : 'gemini-flash-latest',
+        temperature: routing ? routing.temperature : 0.7,
+        max_tokens: routing ? routing.max_tokens : 4096,
+        thinking_budget: routing ? routing.thinking_budget : null,
+        tools_enabled: routing ? routing.allowed_tools : '*'
+      }, null, 2);
+
+      document.getElementById('btn-execute-text').textContent = '💬 Query Upstream Model / Chat Endpoint';
     }
 
-    // Populate Fast-Path Tab
+    // Populate Step 1 (Input)
+    const rawP = document.getElementById('prompt-input').value;
+    document.getElementById('trace-raw-input').textContent = rawP;
+    document.getElementById('trace-norm-input').textContent = (routing && routing.normalized_input) || rawP.trim().toLowerCase();
+    const isFollowup = routing ? routing.is_followup : false;
+    document.getElementById('trace-followup-status').innerHTML = isFollowup
+      ? '<span style="color:#f59e0b;">Follow-up turn (context injected)</span>'
+      : '<span style="color:#34d399;">✓ Standalone turn (isolated evaluation)</span>';
+
+    // Populate Step 2 (Fast Path)
     if (domotica) {
-      document.getElementById('fp-eligible').textContent = isFastPath ? 'YES (<50ms)' : (isDomotica ? 'Ambiguous Target' : 'NO (Not Domotica)');
-      document.getElementById('fp-eligible').style.color = isFastPath ? '#34d399' : '#f59e0b';
-      document.getElementById('fp-domain-service').textContent = (domotica.domain || '-') + ' ➔ ' + (domotica.service || '-');
-      document.getElementById('fp-target-id').textContent = domotica.target_id ? `${domotica.target_id} (${domotica.target_type})` : (domotica.target_name || 'No target');
-      document.getElementById('fp-latency').textContent = '< 1.0 ms';
-      document.getElementById('fp-tool-call').textContent = domotica.openai_tool_call ? JSON.stringify(domotica.openai_tool_call, null, 2) : 'No tool call generated';
-      document.getElementById('btn-execute-ha').style.display = isFastPath ? 'inline-flex' : 'none';
-      document.getElementById('execution-feedback').style.display = 'none';
+      document.getElementById('trace-fp-status').innerHTML = isFastPath
+        ? '<span style="color:#34d399;">✓ Qualified for sub-50ms execution</span>'
+        : `<span style="color:#f59e0b;">Bypassed (${domotica.rejected_reason || 'not domotica'})</span>`;
+      document.getElementById('trace-fp-checklist').innerHTML = isFastPath
+        ? '✓ Imperative | ✓ Single Intent | ✓ Non-conditional | ✓ Safe Target'
+        : (domotica.rejected_reason === 'question' ? '✗ Rejected: Question sentence' : 'Bypassed: Non-domotica or low confidence');
+      document.getElementById('trace-fp-resolved').textContent = domotica.target_id
+        ? `${domotica.target_id} (${domotica.target_type})`
+        : (domotica.target_name || 'None');
     }
 
-    // Populate Model Routing Tab
+    // Populate Step 3 (Laya Neural Router)
     if (routing) {
-      const famEl = document.getElementById('res-family');
-      famEl.innerHTML = '<span class="pill ' + routing.family + '">' + routing.family + '</span>';
-      document.getElementById('res-effort').textContent = (routing.effort || '-').toUpperCase();
-      document.getElementById('res-model').textContent = routing.model + ' (' + routing.provider + ')';
-      document.getElementById('res-latency').textContent = (routing.latency_ms || 0).toFixed(1) + ' ms';
-      document.getElementById('res-thinking').textContent = routing.thinking_budget !== undefined && routing.thinking_budget !== null ? routing.thinking_budget + ' tokens' : 'Unconstrained';
+      document.getElementById('trace-laya-latency').textContent = (routing.latency_ms || 0).toFixed(1) + ' ms';
+      const layaCp = routing.checkpoint || 'multilingual';
+      const detLang = (routing.detection && routing.detection.language) ? routing.detection.language.toUpperCase() : 'NL/EN';
+      document.getElementById('trace-laya-checkpoint').textContent = `${layaCp} (Language: ${detLang})`;
 
-      const allowedTools = routing.allowed_tools;
-      if (Array.isArray(allowedTools)) {
-        document.getElementById('res-tools').textContent = allowedTools.length === 0 ? 'Pruned (0 tools)' : allowedTools.join(', ');
-      } else {
-        document.getElementById('res-tools').textContent = 'All tools allowed (*)';
+      // Render Probability Bars
+      const barContainer = document.getElementById('laya-prob-bars');
+      barContainer.innerHTML = '';
+      if (routing.probabilities) {
+        for (const [cand, p] of Object.entries(routing.probabilities)) {
+          const pct = Math.round(p * 100);
+          const isWinner = (cand === routing.family);
+          const barColor = isWinner ? '#3b82f6' : (pct > 20 ? '#52525b' : '#27272a');
+          const textColor = isWinner ? '#60a5fa' : '#a1a1aa';
+          barContainer.innerHTML += `
+            <div class="prob-row">
+              <div class="prob-header">
+                <span style="font-weight: 600; color: ${textColor};">${cand.toUpperCase()}${isWinner ? ' ★' : ''}</span>
+                <span style="font-family: monospace; color: #cbd5e1;">${pct}%</span>
+              </div>
+              <div class="prob-bar-bg">
+                <div class="prob-bar-fill" style="width: ${pct}%; background: ${barColor};"></div>
+              </div>
+            </div>`;
+        }
       }
-
-      document.getElementById('res-memory').textContent = routing.needs_memory === false ? 'Bypassed (Stripped)' : 'Enabled';
-      const famConf = Math.round(((routing.confidence || {}).family || 0) * 100);
-      document.getElementById('res-conf').textContent = famConf + '%';
     }
 
-    // Populate Debug Tab
-    document.getElementById('trace-step-fp').textContent = isFastPath ? `Resolved to ${domotica.target_id}` : `Bypassed (${domotica.rejected_reason || 'not domotica'})`;
-    document.getElementById('trace-step-laya').textContent = routing ? `${routing.family.toUpperCase()} (${Math.round((routing.confidence.family || 0)*100)}% on Arc iGPU)` : '-';
-    document.getElementById('trace-step-tools').textContent = (routing && routing.needs_memory === false) ? 'Pruned for token efficiency' : 'Preserved full toolset';
-    document.getElementById('trace-step-mem').textContent = (routing && routing.needs_memory === false) ? 'Stripped <memory-context>' : 'Memory context preserved';
-    document.getElementById('trace-step-time').textContent = `${wallMs} ms (Hardware XPU)`;
+    // Populate Step 4 (Optimization)
+    if (routing) {
+      document.getElementById('trace-opt-mem').innerHTML = (routing.needs_memory === false)
+        ? '<span style="color:#34d399;">Bypassed &amp; Stripped (Token savings: ~2,000 chars)</span>'
+        : '<span style="color:#60a5fa;">Full personal context retained</span>';
 
+      document.getElementById('trace-opt-tools').innerHTML = Array.isArray(routing.allowed_tools)
+        ? `<span style="color:#34d399;">Allowed: [${routing.allowed_tools.join(', ')}] (developer tools pruned)</span>`
+        : '<span style="color:#60a5fa;">All tools allowed (*)</span>';
+
+      document.getElementById('trace-opt-thinking').textContent = (routing.thinking_budget !== undefined && routing.thinking_budget !== null)
+        ? `${routing.thinking_budget} tokens`
+        : 'Unconstrained (Deep thinking enabled)';
+    }
+
+    // Raw Dump
     document.getElementById('json-dump').textContent = JSON.stringify({
-      step_1_input: { prompt, normalized: true },
-      step_2_fast_path_domotica: domotica,
+      step_1_input_normalization: {
+        raw: rawP,
+        normalized: (routing && routing.normalized_input) || rawP.trim().toLowerCase(),
+        is_followup: isFollowup
+      },
+      step_2_fast_path_gate: domotica,
       step_3_laya_system_one_router: routing,
       step_4_optimization: {
+        memory_gated: routing ? routing.needs_memory === false : false,
         tools_allowed: routing ? routing.allowed_tools : null,
-        memory_gated: routing ? routing.needs_memory === false : false
+        thinking_budget: routing ? routing.thinking_budget : null
       },
-      step_5_action_target: {
+      step_5_execution_target: {
         destination: isFastPath ? "Home Assistant Core API" : (routing ? routing.model : "LLM"),
+        speech: domotica ? domotica.speech : null,
         wall_clock_ms: parseFloat(wallMs)
       }
     }, null, 2);
   }
 
-  async function executeAgainstHA() {
-    if (!lastDomoticaAction) return;
-    const btn = document.getElementById('btn-execute-ha');
-    const fb = document.getElementById('execution-feedback');
+  async function executeCurrentTarget() {
+    const isFastPath = lastDomoticaAction && lastDomoticaAction.fast_path;
+    const btn = document.getElementById('btn-execute-live');
+    const fb = document.getElementById('live-execution-output');
     btn.disabled = true;
     fb.style.display = 'block';
-    fb.innerHTML = '<span style="color: #60a5fa;">Dispatching direct REST call to Home Assistant Core...</span>';
 
-    try {
-      const res = await fetch('./v1/domotica/route', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: document.getElementById('prompt-input').value.trim(),
-          execute: true
-        })
-      });
-      const data = await res.json();
-      if (data.executed) {
-        fb.innerHTML = '<span style="color: #34d399; font-weight: 700;">✓ Executed successfully in Home Assistant! (' + data.domain + '.' + data.service + ')</span>';
-      } else {
-        fb.innerHTML = '<span style="color: #ef4444; font-weight: 700;">✗ Execution failed or dry-run rejected.</span>';
+    if (isFastPath) {
+      fb.innerHTML = '<span style="color: #60a5fa;">Dispatching direct REST call to Home Assistant Core...</span>';
+      try {
+        const res = await fetch('./v1/domotica/route', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt: document.getElementById('prompt-input').value.trim(),
+            execute: true
+          })
+        });
+        const data = await res.json();
+        if (data.executed) {
+          fb.innerHTML = `
+            <div style="color: #34d399; font-weight: 700; margin-bottom: 4px;">✓ Executed successfully in Home Assistant!</div>
+            <div style="font-family: monospace; font-size: 12px; color: #a1a1aa;">Service: ${data.domain}.${data.service} on ${data.target_id}</div>
+            <div style="font-family: monospace; font-size: 11px; color: #cbd5e1; margin-top: 6px; background: #0c0c0e; padding: 8px; border-radius: 4px;">${JSON.stringify(data.execution_result || { status: 'confirmed' }, null, 2)}</div>
+          `;
+        } else {
+          fb.innerHTML = '<span style="color: #ef4444; font-weight: 700;">✗ Execution failed or dry-run rejected.</span>';
+        }
+      } catch (e) {
+        fb.innerHTML = '<span style="color: #ef4444;">Error calling HA: ' + e + '</span>';
+      } finally {
+        btn.disabled = false;
       }
-    } catch (e) {
-      fb.innerHTML = '<span style="color: #ef4444;">Error calling HA: ' + e + '</span>';
-    } finally {
-      btn.disabled = false;
+    } else {
+      fb.innerHTML = '<span style="color: #c084fc;">Querying conversation completion endpoint...</span>';
+      try {
+        const res = await fetch('./v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            messages: [{ role: 'user', content: document.getElementById('prompt-input').value.trim() }],
+            model: lastModelDecision ? lastModelDecision.model : 'default'
+          })
+        });
+        const data = await res.json();
+        const content = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || JSON.stringify(data);
+        fb.innerHTML = `
+          <div style="color: #c084fc; font-weight: 700; margin-bottom: 4px;">✓ Response from System 1 Bridge:</div>
+          <div style="font-size: 13px; color: #f4f4f5; background: #0c0c0e; padding: 10px; border-radius: 6px; border: 1px solid var(--border);">${content}</div>
+        `;
+      } catch (e) {
+        fb.innerHTML = '<span style="color: #ef4444;">Error calling chat completion: ' + e + '</span>';
+      } finally {
+        btn.disabled = false;
+      }
     }
   }
 

@@ -14,7 +14,7 @@ QUESTION_SETS: Dict[str, Dict[str, Any]] = {
                 "type": "choice",
                 "instructions": "What kind of task is this?",
                 "criteria": {
-                    "quick": "small talk, greetings, simple facts, unit conversions, one-step home control commands",
+                    "quick": "small talk, greetings, simple facts, unit conversions, general knowledge questions without tools or smart home control",
                     "general": "everyday writing, explaining, summarising, translating, ordinary questions that need a few tool calls",
                     "code": "writing or debugging code or configuration files, multi-step tool or agent work",
                     "deep": "hard reasoning where a wrong answer is costly: maths, finance, planning, comparing complex options",

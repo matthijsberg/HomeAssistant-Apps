@@ -18,89 +18,18 @@ import re
 import time
 from typing import Any, Dict, Optional, Set, Tuple
 
+from i18n import languages
 from pydantic import BaseModel, Field
 from resolver import HAResolver
 
 logger = logging.getLogger("ha_system_1.domotica")
 
 
-# Generic domain nouns representing broad categories (stripped when extracting specific device names)
-GENERIC_DOMAIN_NOUNS: Dict[str, Set[str]] = {
-    "light": {"lamp", "lampen", "licht", "lichten", "verlichting"},
-    "climate": {"thermostaat", "temperatuur", "klimaat"},
-    "cover": {"zonwering"},
-    "switch": {"schakelaar", "switch"},
-    "fan": {"ventilator", "ventilatie"},
-    "media_player": {"muziek", "audio", "geluid"},
-}
+# Dynamically loaded multilingual dictionaries via LanguageRegistry
+GENERIC_DOMAIN_NOUNS: Dict[str, Set[str]] = languages.get_aggregated_generic_nouns()
+DOMAIN_KEYWORDS: Dict[str, Tuple[str, ...]] = languages.get_aggregated_domain_keywords()
+ACTION_KEYWORDS: Dict[str, Tuple[str, ...]] = languages.get_aggregated_action_keywords()
 
-
-# Canonical device domain triggers (FP-01 whole-token matching)
-DOMAIN_KEYWORDS: Dict[str, Tuple[str, ...]] = {
-    "light": (
-        "lamp", "lampen", "licht", "lichten", "verlichting", "spot", "spots",
-        "led", "leds", "ledstrip", "strip", "hanglamp", "schemerlamp", "plafondlamp",
-    ),
-    "climate": (
-        "thermostaat", "temperatuur", "graden", "graad", "verwarming", "airco",
-        "ketel", "boiler", "cv", "kachel", "warmtepomp", "setpoint",
-    ),
-    "cover": (
-        "gordijn", "gordijnen", "rolluik", "rolluiken", "zonwering", "scherm",
-        "jaloezie", "jaloezieën", "shutter", "shutters",
-    ),
-    "switch": (
-        "schakelaar", "stekker", "relais", "plug", "stopcontact",
-    ),
-    "fan": (
-        "ventilator", "afzuiging", "afzuigkap", "ventilatie",
-    ),
-    "media_player": (
-        "muziek", "speaker", "tv", "televisie", "radio", "audio", "geluid",
-    ),
-    "lock": (
-        "slot", "deur", "poort", "deurslot", "voordeur", "achterdeur",
-    ),
-    "alarm_control_panel": (
-        "alarm", "beveiliging",
-    ),
-}
-
-# Canonical action verbs mapping to Home Assistant service names
-ACTION_KEYWORDS: Dict[str, Tuple[str, ...]] = {
-    "turn_on": (
-        "aan", "aanzetten", "aansteken", "inschakelen", "activeer", "activeren",
-        "start", "starten", "turn on", "switch on", "enable",
-    ),
-    "turn_off": (
-        "uit", "uitzetten", "uitschakelen", "doven", "deactiveer", "deactiveren",
-        "stop", "stoppen", "turn off", "switch off", "disable",
-    ),
-    "toggle": (
-        "wissel", "toggle", "omschakelen",
-    ),
-    "open_cover": (
-        "open", "openen", "omhoog", "omhoogdoen",
-    ),
-    "close_cover": (
-        "sluit", "sluiten", "dicht", "dichtdoen", "omlaag", "omlaagdoen",
-    ),
-    "set_temperature": (
-        "graden", "graad", "verhoog", "verlaag", "temperatuur naar", "zet op",
-    ),
-    "media_pause": (
-        "pauzeer", "pause", "pauze",
-    ),
-    "media_play": (
-        "hervat", "speel af", "play", "unpause",
-    ),
-    "media_next_track": (
-        "volgend", "volgende", "next",
-    ),
-    "media_previous_track": (
-        "vorig", "vorige", "previous",
-    ),
-}
 
 # FP-11 / D-5: Sensitive domains that MUST NEVER take the fast path
 SENSITIVE_DOMAINS = {"lock", "alarm_control_panel", "siren", "valve"}
@@ -124,6 +53,10 @@ class DomoticaAction(BaseModel):
     executed: bool = Field(default=False, description="Whether the action was directly executed against HA API")
     execution_status: str = Field(default="none", description="Truthful execution status: 'none', 'confirmed', 'accepted', 'failed' (FP-15)")
     execution_result: Optional[Any] = Field(default=None, description="Result returned by Home Assistant API if executed")
+    raw_input: Optional[str] = Field(default=None, description="Raw input text received")
+    normalized_input: Optional[str] = Field(default=None, description="Normalized string evaluated")
+    semantic_slots: Optional[Dict[str, Any]] = Field(default=None, description="Laya neural semantic slot predictions")
+    gate_checks: Optional[Dict[str, Any]] = Field(default=None, description="Detailed trace of all gate checks evaluated")
 
 
 class DomoticaEngine:
@@ -133,9 +66,13 @@ class DomoticaEngine:
         self,
         resolver: Optional[HAResolver] = None,
         router_engine: Optional[Any] = None,
+        min_confidence: float = 0.70,
+        fast_path_enabled: bool = True,
     ) -> None:
         self.resolver = resolver or HAResolver()
         self.router_engine = router_engine
+        self.min_confidence = min_confidence
+        self.fast_path_enabled = fast_path_enabled
 
     def classify_semantic_slots(self, prompt: str) -> Optional[Dict[str, Any]]:
         """Run Laya System 1 single-forward-pass semantic slot extraction on Intel Arc XPU."""
@@ -163,10 +100,13 @@ class DomoticaEngine:
             logger.debug("Laya semantic slot extraction skipped: %s", exc)
             return None
 
-    def parse(self, prompt: str) -> DomoticaAction:
-        """Parse natural language prompt into a structured DomoticaAction enforcing FP-01..FP-18."""
+    def _parse_internal(self, prompt: str) -> DomoticaAction:
+        """Internal parser enforcing FP-01..FP-18."""
         if not prompt or not prompt.strip():
             return DomoticaAction(is_domotica=False, confidence=0.0, rejected_reason="no_action")
+
+        if not self.fast_path_enabled:
+            return DomoticaAction(is_domotica=True, fast_path=False, rejected_reason="fast_path_disabled")
 
         clean_p = prompt.strip().lower()
 
@@ -192,24 +132,18 @@ class DomoticaEngine:
         if "?" in prompt:
             return DomoticaAction(is_domotica=True, fast_path=False, domain=detected_domain, rejected_reason="question")
 
-        leading_question_words = (
-            "staat", "staan", "is", "zijn", "wat", "hoe", "welke", "wanneer", "waarom",
-            "are", "what", "how", "when", "why", "who", "kan", "kun",
-        )
+        leading_question_words = languages.get_aggregated_question_words()
         tokens = clean_p.split()
         if tokens and tokens[0] in leading_question_words:
             return DomoticaAction(is_domotica=True, fast_path=False, domain=detected_domain, rejected_reason="question")
 
         # FP-04: Single intent only (reject multi-intent compound sentences)
-        multi_intent_patterns = (r"\ben\b", r"\band\b", r"\bdaarna\b", r"\bthen\b", r"\bvervolgens\b")
+        multi_intent_patterns = languages.get_aggregated_multi_intent_patterns()
         if any(re.search(pat, clean_p) for pat in multi_intent_patterns):
             return DomoticaAction(is_domotica=True, fast_path=False, domain=detected_domain, rejected_reason="multi_intent")
 
         # FP-05: Negations, conditions, schedules never take fast path
-        condition_patterns = (
-            r"\bniet\b", r"\bnot\b", r"\bals\b", r"\bif\b", r"\btenzij\b", r"\bunless\b",
-            r"\bover\s+\d+\s+minut", r"\bom\s+\d{1,2}:\d{2}\b",
-        )
+        condition_patterns = languages.get_aggregated_condition_patterns()
         if any(re.search(pat, clean_p) for pat in condition_patterns):
             return DomoticaAction(is_domotica=True, fast_path=False, domain=detected_domain, rejected_reason="conditional")
 
@@ -222,15 +156,18 @@ class DomoticaEngine:
                 rejected_reason="sensitive_target",
             )
 
-        # RG-03: If mirror is older than max_staleness_minutes, disable fast path
+        # RG-03: If mirror is older than max_staleness_minutes, auto-sync and check
         if self.resolver.is_stale:
-            return DomoticaAction(
-                is_domotica=True,
-                fast_path=False,
-                domain=detected_domain,
-                service=detected_action,
-                rejected_reason="mirror_stale",
-            )
+            if self.resolver.is_configured:
+                self.resolver.sync(force=True)
+            if self.resolver.is_stale:
+                return DomoticaAction(
+                    is_domotica=True,
+                    fast_path=False,
+                    domain=detected_domain,
+                    service=detected_action,
+                    rejected_reason="mirror_stale",
+                )
 
         # Normalize cover actions to standard cover domain services
         if detected_domain == "cover":
@@ -305,10 +242,39 @@ class DomoticaEngine:
         target_id = None
         overall_conf = 0.95
 
-        if slots and slots.get("room") and slots["room"] != "unspecified":
+        # Whole-home scope detection (e.g. "turn off all lights in the house", "doe alle lampen in huis uit")
+        whole_home_markers = (
+            "in the house", "in het huis", "in huis", "throughout the house", "in all rooms",
+            "all lights in the house", "all lights in house", "alle lampen in huis", "alle lampen in het huis",
+            "all lights", "alle lampen", "every light",
+        )
+        is_whole_home = (
+            slots and slots.get("scope") == "entire_area" and (slots.get("room") in ("unspecified", "house", "home", "all", "overal", "huis", "woning")) and any(m in clean_p for m in ("house", "huis", "home", "all", "overal"))
+        ) or any(m in clean_p for m in whole_home_markers)
+
+        if is_whole_home:
+            target_type = "area_id" if "huiswijd" in self.resolver._area_name_map else "domain_all"
+            target_id = self.resolver._area_name_map.get("huiswijd", "all")
+            extracted_target = "alle lampen in huis" if detected_domain == "light" else "huis"
+            overall_conf = 0.98
+        elif slots and slots.get("room") and slots["room"] != "unspecified":
             s_room = slots["room"]
             s_scope = slots.get("scope")
             s_dev = slots.get("device_type")
+            r_conf = slots.get("room_conf", 0.0)
+            d_conf = slots.get("device_type_conf", 0.0)
+
+            # Conservative Gating (D-3): If confidence is below threshold, safely escalate to upstream LLM
+            if r_conf < self.min_confidence or (s_scope == "specific_device" and d_conf < self.min_confidence):
+                return DomoticaAction(
+                    is_domotica=True,
+                    fast_path=False,
+                    domain=detected_domain,
+                    service=detected_action,
+                    target_name=extracted_target,
+                    service_data=service_data,
+                    rejected_reason="low_confidence",
+                )
 
             if s_scope == "entire_area":
                 target_type = "area_id"
@@ -366,6 +332,9 @@ class DomoticaEngine:
                 tool_args["domain"] = detected_domain
         elif target_type == "entity_id":
             tool_args["name"] = target_id
+        elif target_type == "domain_all":
+            if detected_domain:
+                tool_args["domain"] = detected_domain
 
         tool_call = {
             "id": f"call_hasys1_{int(time.time()*1000) % 1000000}",
@@ -377,23 +346,25 @@ class DomoticaEngine:
         }
 
         # 7. Localized Natural Speech Confirmation Template (FP-16)
-        if target_type == "area_id":
-            display_target = f"alle lampen in de {target_id}" if detected_domain == "light" else f"{detected_domain} in {target_id}"
-            verb_state = "zijn" if detected_domain == "light" else "is"
+        detected_lang = languages.detect_language(prompt)
+        is_multiple = (target_type in ("area_id", "domain_all") and detected_domain == "light") or "lampen" in clean_p or "lights" in clean_p
+        if target_type == "domain_all" or is_whole_home:
+            display_target = "alle lampen in huis" if detected_lang == "nl" else "all lights in the house"
+        elif target_type == "area_id":
+            if detected_lang == "nl":
+                display_target = f"alle lampen in de {target_id}" if detected_domain == "light" else f"{detected_domain} in {target_id}"
+            else:
+                display_target = f"all lights in {target_id}" if detected_domain == "light" else f"{detected_domain} in {target_id}"
         else:
             display_target = extracted_target or detected_domain
-            verb_state = "is"
 
-        if detected_action == "turn_off":
-            speech = f"Oké, {display_target} {verb_state} uitgeschakeld."
-        elif detected_action == "turn_on":
-            speech = f"Oké, {display_target} {verb_state} aangezet."
-        elif detected_action == "set_temperature":
-            speech = f"Oké, de temperatuur is ingesteld op {service_data.get('temperature', '')} graden."
-        elif detected_action in ("open_cover", "close_cover"):
-            speech = f"Oké, {display_target} is {'geopend' if detected_action == 'open_cover' else 'gesloten'}."
-        else:
-            speech = f"Oké, {detected_action} uitgevoerd voor {display_target}."
+        speech = languages.format_speech(
+            action=detected_action,
+            target_name=display_target,
+            lang=detected_lang,
+            is_multiple=is_multiple,
+            extra={"temperature": service_data.get("temperature", "")},
+        )
 
         return DomoticaAction(
             is_domotica=True,
@@ -410,6 +381,26 @@ class DomoticaEngine:
             executed=False,
             execution_status="none",
         )
+
+    def parse(self, prompt: str) -> DomoticaAction:
+        """Public parser returning DomoticaAction enriched with gate checks and semantic trace."""
+        action = self._parse_internal(prompt)
+        action.raw_input = prompt
+        clean_p = prompt.strip().lower() if prompt else ""
+        action.normalized_input = clean_p
+        action.semantic_slots = self.classify_semantic_slots(prompt) if action.is_domotica else None
+
+        tokens = clean_p.split()
+
+        action.gate_checks = {
+            "has_input": bool(prompt and prompt.strip()),
+            "is_imperative": not ("?" in prompt or (tokens and tokens[0] in languages.get_aggregated_question_words())),
+            "is_single_intent": not any(re.search(pat, clean_p) for pat in languages.get_aggregated_multi_intent_patterns()),
+            "no_conditions": not any(re.search(pat, clean_p) for pat in languages.get_aggregated_condition_patterns()),
+            "not_sensitive": action.domain not in SENSITIVE_DOMAINS if action.domain else True,
+            "fast_path_qualified": action.fast_path,
+        }
+        return action
 
     def route_and_execute(self, prompt: str, execute: bool = False) -> DomoticaAction:
         """Route natural language prompt and optionally execute service call against HA."""
