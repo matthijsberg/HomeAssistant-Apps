@@ -487,6 +487,7 @@ def render_gui_html() -> str:
   function loadPreset(key) {
     if (presets[key]) {
       document.getElementById('prompt-input').value = presets[key];
+      evaluateTurn();
     }
   }
 
@@ -506,23 +507,34 @@ def render_gui_html() -> str:
     btn.disabled = true;
     timing.textContent = 'Tracing decision and evaluating on Intel Arc iGPU...';
 
+    const warmupTimer = setTimeout(() => {
+      timing.innerHTML = '<span style="color:#f59e0b;">⏳ Initial JIT GPU shader compiling on Intel Arc, please wait...</span>';
+    }, 2000);
+
     const t0 = performance.now();
     try {
-      // 1. Evaluate Fast-Path Domotica Engine
-      const domoticaPromise = fetch('./v1/domotica/route', {
+      const controller = new AbortController();
+      const abortTimer = setTimeout(() => controller.abort(), 45000);
+
+      // 1. Evaluate Fast-Path Domotica Engine sequentially to prevent GPU thread contention
+      const domoticaData = await fetch('./v1/domotica/route', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, execute: false })
-      }).then(r => r.ok ? r.json() : null);
+        body: JSON.stringify({ prompt, execute: false }),
+        signal: controller.signal
+      }).then(r => r.ok ? r.json() : null).catch(() => null);
 
       // 2. Evaluate Model Router Engine
-      const routePromise = fetch('./v1/route', {
+      const routeData = await fetch('./v1/route', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, recent_turns: [], question_set: 'hermes-v1' })
-      }).then(r => r.ok ? r.json() : null);
+        body: JSON.stringify({ prompt, recent_turns: [], question_set: 'hermes-v1' }),
+        signal: controller.signal
+      }).then(r => r.ok ? r.json() : null).catch(() => null);
 
-      const [domoticaData, routeData] = await Promise.all([domoticaPromise, routePromise]);
+      clearTimeout(abortTimer);
+      clearTimeout(warmupTimer);
+
       const wallMs = (performance.now() - t0).toFixed(1);
 
       lastDomoticaAction = domoticaData;
@@ -532,8 +544,8 @@ def render_gui_html() -> str:
       timing.textContent = `Evaluation complete in ${wallMs} ms`;
       document.getElementById('badge-latency').textContent = `Latency: ${wallMs}ms`;
     } catch (e) {
-      alert('Error evaluating turn: ' + e);
-      timing.textContent = 'Error occurred';
+      clearTimeout(warmupTimer);
+      timing.textContent = 'Error: ' + e;
     } finally {
       btn.disabled = false;
     }

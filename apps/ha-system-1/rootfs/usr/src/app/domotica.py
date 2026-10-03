@@ -86,7 +86,10 @@ class DomoticaEngine:
             q_spec = get_question_set("domotica-v1")
             questions = q_spec["questions"]
             state = {"request": prompt.strip()}
-            res = router.predict(state, questions)
+            if hasattr(self.router_engine, "predict_locked"):
+                res = self.router_engine.predict_locked(state, questions)
+            else:
+                res = router.predict(state, questions)
             answers = res.get("answers", {})
             return {
                 "scope": answers.get("target_scope", {}).get("choice"),

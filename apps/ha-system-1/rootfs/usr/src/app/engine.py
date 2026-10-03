@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Union
@@ -158,6 +159,7 @@ class LayaRouterEngine:
         self.laya_version: str = "0.3.21"
         self.loaded_checkpoints: List[str] = []
         self.overrides: Dict[str, Dict[str, Any]] = {}
+        self._lock = threading.Lock()
         self.load_overrides()
 
     def load_overrides(self) -> None:
@@ -332,9 +334,6 @@ class LayaRouterEngine:
             self.loaded_checkpoints = getattr(self.router, "loaded", self.config.checkpoints)
             self.ready = True
             logger.info("Laya Router checkpoints successfully preloaded and ready: %s", self.loaded_checkpoints)
-
-            # Optional warmup pass in background or quick priming
-            logger.info("Prime pass on device=%s initialized.", self.device)
         except ImportError as e:
             logger.warning("Could not import laya (%s). Falling back to MockRouter for local testing.", e)
             self.router = MockRouter(self.config.checkpoints)
@@ -344,6 +343,13 @@ class LayaRouterEngine:
             logger.error("Failed to preload Laya Router checkpoints: %s", e, exc_info=True)
             self.ready = False
             raise
+
+    def predict_locked(self, state: Dict[str, Any], questions: Dict[str, Any], **kwargs: Any) -> Dict[str, Any]:
+        """Thread-safe forward-pass protecting Intel Arc XPU Level-Zero driver from concurrent deadlocks."""
+        if not self.ready or self.router is None:
+            raise RuntimeError("Laya Router is not ready: checkpoints are still loading.")
+        with self._lock:
+            return self.router.predict(state, questions, **kwargs)
 
     @staticmethod
     def format_state(prompt: str, recent_turns: Optional[List[Any]] = None) -> Dict[str, Any]:
@@ -448,7 +454,7 @@ class LayaRouterEngine:
         state = self.format_state(prompt, recent_turns)
 
         t0 = time.perf_counter()
-        result = self.router.predict(state, questions)
+        result = self.predict_locked(state, questions)
         latency_ms = (time.perf_counter() - t0) * 1000.0
 
         answers = result.get("answers", {})
@@ -551,4 +557,4 @@ class LayaRouterEngine:
             if key in body and body[key] is not None:
                 predict_kwargs[key] = body[key]
 
-        return self.router.predict(state, questions, model=model, **predict_kwargs)
+        return self.predict_locked(state, questions, model=model, **predict_kwargs)
