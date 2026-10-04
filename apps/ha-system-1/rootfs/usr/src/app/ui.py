@@ -161,6 +161,10 @@ def render_gui_html() -> str:
       <span class="text-secondary font-label-code-sm">Local XPU Online</span>
       <kbd class="ml-2 font-label-code-sm text-[10px] bg-surface-container-lowest px-1 rounded border border-surface-container-highest text-tertiary">Sub-50ms</kbd>
     </div>
+        <!-- Gear Wheel Settings Button in Top Right -->
+    <button id="gear-btn" onclick="switchView('config')" class="p-1.5 rounded hover:bg-surface-container-low transition-colors duration-150 text-secondary hover:text-primary cursor-pointer border border-transparent hover:border-surface-container-highest" title="System Settings / Flow Pipeline Configuration">
+      <span class="material-symbols-outlined text-[20px]">settings</span>
+    </button>
     <button onclick="syncRegistry()" class="p-1.5 rounded hover:bg-surface-container-low transition-colors duration-150 text-secondary" title="Sync Home Assistant Registry Mirror">
       <span class="material-symbols-outlined text-[18px]">sync</span>
     </button>
@@ -555,140 +559,613 @@ def render_gui_html() -> str:
 </div>
 
 <!-- ========================================================================= -->
-<!-- VIEW 2: FLOW PIPELINE & ENGINE CONFIGURATION                              -->
+<!-- VIEW 2: FLOW PIPELINE & ENGINE CONFIGURATION WORKSTATION                  -->
 <!-- ========================================================================= -->
-<div id="view-config" class="flex-1 overflow-y-auto bg-surface p-space-md lg:p-space-lg space-y-space-md hidden">
-  <div class="max-w-[1400px] mx-auto space-y-space-md">
+<div id="view-config" class="flex-1 overflow-y-auto bg-surface flex flex-col hidden">
+<header class="flex justify-between items-center w-full px-space-md h-12 border-b border-surface-container-highest bg-surface-container-lowest z-40 sticky top-0"><div class="flex items-center gap-space-md"><button onclick="switchView('eval')" class="flex items-center gap-1.5 px-2 py-1 rounded hover:bg-surface-container cursor-pointer transition-colors text-secondary hover:text-on-surface font-label-code-sm text-label-code-sm" href="javascript:void(0)" onclick="switchView('eval')"><span class="material-symbols-outlined text-[15px]">arrow_back</span><span class="">Back to Evaluation Console</span></a><span class="text-surface-container-highest">/</span><h1 class="font-headline-sm text-headline-sm font-semibold tracking-tight text-on-surface">System 1 Flow Configuration</h1></div><div class="flex items-center gap-space-md"><div class="hidden md:flex items-center gap-2 text-label-code-sm font-label-code-sm text-secondary"><span class="flex h-2 w-2 relative"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span></span><span class="font-medium text-on-surface">Production Edge</span><span class="text-surface-container-highest">·</span><code class="text-tertiary">d7f8a11</code></div><button onclick="savePolicyConfig()" class="flex items-center gap-1.5 bg-primary hover:bg-primary-hover text-on-primary px-3 py-1.5 rounded text-label-code-sm font-label-code-sm font-medium transition-all shadow-sm active:scale-[0.99] cursor-pointer"><span class="material-symbols-outlined text-[15px]">bolt</span><span id="btn-deploy-policy">Deploy Policy</span></button></div></header>
+<!-- Secondary Cluster Status Bar -->
 
-    <!-- Title & Segmented Navigation -->
-    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-surface-container-highest pb-4">
-      <div>
-        <h1 class="text-headline-lg font-headline-lg font-semibold tracking-tight text-on-surface flex items-center gap-2">
-          <span>System 1 Flow Configuration</span>
-          <span class="text-label-code-sm font-label-code-sm text-tertiary font-normal px-2 py-0.5 rounded border border-surface-container-highest bg-surface-container-lowest">v0.1.4</span>
-        </h1>
-        <p class="text-body-sm font-body-sm text-secondary mt-0.5">
-          Declarative execution graph, threshold sliders, and hardware execution topology for Intel Arc iGPU.
+<!-- Primary Configuration Workstation Shell -->
+<main class="flex-1 w-full max-w-[1600px] mx-auto p-space-md lg:p-space-lg flex flex-col gap-space-lg">
+<!-- Page Title & Section Switcher Pill Bar -->
+<div class="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-surface-container-highest pb-4">
+<div>
+<h1 class="text-headline-lg font-headline-lg font-semibold tracking-tight text-on-surface flex items-center gap-2">
+<span class="">System 1 LLM Flow Configuration</span>
+<span class="text-label-code-sm font-label-code-sm text-tertiary font-normal px-2 py-0.5 rounded border border-surface-container-highest bg-surface-container-lowest">v2.4.1-rc</span>
+</h1>
+<p class="text-body-sm font-body-sm text-secondary mt-0.5">
+          Deterministic pre-route inspection, normalization hooks, and neural confidence calibration settings for low-latency decision agents.
         </p>
-      </div>
-    </div>
+</div>
+<!-- Segmented Navigation Tier Selector -->
+<div class="inline-flex p-1 rounded-xl bg-surface-container border border-surface-container-highest font-label-code-sm text-label-code-sm">
+<a class="px-3 py-1.5 rounded-lg bg-surface-container-lowest text-on-surface font-medium shadow-xs border border-surface-container-highest flex items-center gap-1.5" href="#span-1">
+<span class="w-1.5 h-1.5 rounded-full bg-primary"></span>
+<span class="">Span 1: Normalization</span>
+</a>
+<a class="px-3 py-1.5 rounded-lg text-secondary hover:text-on-surface transition-colors flex items-center gap-1.5" href="#span-2">
+<span class="w-1.5 h-1.5 rounded-full bg-surface-container-highest"></span>
+<span class="">Span 2: Code Processing</span>
+</a>
+<a class="px-3 py-1.5 rounded-lg text-secondary hover:text-on-surface transition-colors flex items-center gap-1.5" href="#span-3">
+<span class="w-1.5 h-1.5 rounded-full bg-surface-container-highest"></span>
+<span class="">Span 3: Laya Engine</span>
+</a>
+</div>
+</div>
+<!-- ========================================================================= -->
+<!-- SECTION 1: SPAN 1 - INPUT NORMALIZATION & CANONICALIZATION -->
+<!-- ========================================================================= -->
+<section class="rounded-xl border border-surface-container-highest bg-surface-container-lowest overflow-hidden shadow-xs" id="span-1">
+<!-- Section Header -->
+<div class="p-space-md border-b border-surface-container-highest bg-surface flex flex-wrap items-center justify-between gap-2">
+<div class="flex items-center gap-2.5">
+<div class="w-6 h-6 rounded bg-primary-fixed flex items-center justify-center text-primary font-label-code-sm font-bold border border-outline-variant">
+            01
+          </div>
+<div>
+<h2 class="text-headline-sm font-headline-sm font-semibold text-on-surface flex items-center gap-2">
+<span class="">Span 1: Input Normalization &amp; Canonicalization</span>
+<span class="text-label-code-sm font-label-code-sm text-primary font-normal bg-primary-fixed px-2 py-0.5 rounded border border-outline-variant">HOT PATH &lt; 2.0ms</span>
+</h2>
+<p class="text-caption font-caption text-secondary">Pre-embeddings text cleansing, script identification, and unicode folding pipeline.</p>
+</div>
+</div>
+<div class="flex items-center gap-2">
+<span class="text-label-code-sm font-label-code-sm text-secondary">Execution Target:</span>
+<span class="text-label-code-sm font-label-code-sm px-2 py-0.5 rounded bg-surface-container-highest font-mono text-on-surface">C-Python / Regex 2024.11</span>
+</div>
+</div>
+<!-- Content Split: Rule Controls + Dark Code Editor Box -->
+<div class="grid grid-cols-1 lg:grid-cols-12 divide-y lg:divide-y-0 lg:divide-x divide-surface-container-highest">
+<!-- Left: Configurable Rule Toggles (5 Cols) -->
+<div class="lg:col-span-5 p-space-md space-y-4">
+<div class="text-label-code-sm font-label-code-sm font-semibold text-tertiary tracking-wider uppercase">Pipeline Flags &amp; Toggles</div>
+<!-- Rule 1: Unicode NFKC -->
+<div class="flex items-start justify-between gap-3 p-3 rounded-lg border border-surface-container-highest bg-surface hover:border-outline-variant transition-colors">
+<div>
+<div class="flex items-center gap-1.5">
+<span class="font-medium text-body-sm text-on-surface">Unicode NFKC Canonicalization</span>
+<span class="text-[10px] px-1.5 rounded bg-primary-fixed text-primary font-label-code-sm">Active</span>
+</div>
+<p class="text-caption font-caption text-secondary mt-1">Normalizes compatibility characters, full-width kana/digits, and decomposed diacritics into standard precomposed form.</p>
+</div>
+<!-- Toggle switch (active vermilion) -->
+<button class="w-10 h-5 rounded-full bg-primary p-0.5 transition-colors relative shrink-0">
+<div class="w-4 h-4 rounded-full bg-white ml-auto shadow-xs"></div>
+</button>
+</div>
+<!-- Rule 2: Control Char & Whitespace Sanitization -->
+<div class="flex items-start justify-between gap-3 p-3 rounded-lg border border-surface-container-highest bg-surface hover:border-outline-variant transition-colors">
+<div>
+<div class="flex items-center gap-1.5">
+<span class="font-medium text-body-sm text-on-surface">Whitespace &amp; Control Character Strip</span>
+<span class="text-[10px] px-1.5 rounded bg-primary-fixed text-primary font-label-code-sm">Active</span>
+</div>
+<p class="text-caption font-caption text-secondary mt-1">Strips ANSI escape codes, null bytes (\x00), zero-width spaces (\u200B), and folds multi-spaces into single space.</p>
+</div>
+<button class="w-10 h-5 rounded-full bg-primary p-0.5 transition-colors relative shrink-0">
+<div class="w-4 h-4 rounded-full bg-white ml-auto shadow-xs"></div>
+</button>
+</div>
+<!-- Rule 3: Language Identification & Script Routing -->
+<div class="p-3 rounded-lg border border-surface-container-highest bg-surface space-y-2">
+<div class="flex items-center justify-between">
+<span class="font-medium text-body-sm text-on-surface">Script &amp; LID Multi-Language Routing</span>
+<span class="text-caption font-caption text-primary font-medium">Built-in &lt;0.5ms Pure Py</span>
+</div>
+<p class="text-caption font-caption text-secondary">Resolves primary script boundary before token count estimation.</p>
+<div class="grid grid-cols-2 gap-2 pt-1 font-label-code-sm text-label-code-sm">
+<label class="flex items-center gap-2 p-1.5 rounded border border-surface-container-highest bg-surface-container-lowest cursor-pointer">
+<input checked="" class="text-primary focus:ring-primary h-3.5 w-3.5" name="lid_backend" type="radio">
+<span class="">Pure-Py Regex (&lt;0.4ms)</span>
+</label>
+<label class="flex items-center gap-2 p-1.5 rounded border border-surface-container-highest bg-surface-container-lowest cursor-pointer opacity-70">
+<input class="text-primary focus:ring-primary h-3.5 w-3.5" name="lid_backend" type="radio">
+<span class="">FastText Hook (1.8ms)</span>
+</label>
+</div>
+<div class="flex items-center justify-between text-caption font-caption text-tertiary pt-1">
+<span class="">Fallback Locale:</span>
+<span class="font-mono bg-surface-container-high px-1.5 py-0.5 rounded text-on-surface">nl-NL (Dutch / Benelux)</span>
+</div>
+</div>
+<!-- Rule 4: Stopword & Punctuation Filter Mode -->
+<div class="flex items-center justify-between p-3 rounded-lg border border-surface-container-highest bg-surface">
+<div>
+<span class="font-medium text-body-sm text-on-surface">Punctuation &amp; Mask Token Normalizer</span>
+<p class="text-caption font-caption text-secondary">Retains ModernBERT special tokens: [MASK], [SEP], [CLS]</p>
+</div>
+<button class="w-10 h-5 rounded-full bg-surface-container-highest p-0.5 transition-colors relative shrink-0">
+<div class="w-4 h-4 rounded-full bg-white shadow-xs"></div>
+</button>
+</div>
+</div>
+<!-- Right: Developer Terminal Code Editor + Live Dry-Run (7 Cols) -->
+<div class="lg:col-span-7 flex flex-col bg-terminal-bg">
+<!-- Code Editor Top Bar -->
+<div class="px-4 py-2 bg-terminal-panel border-b border-terminal-border flex items-center justify-between text-label-code-sm font-label-code-sm text-zinc-400"><div class="flex items-center gap-2 font-mono text-zinc-200 text-xs"><span class="material-symbols-outlined text-[15px] text-zinc-400">code</span><span class="font-medium text-zinc-200">span1_normalize.py</span><span class="text-zinc-500 font-sans text-xs">· hook: `normalize_input`</span></div><div class="flex items-center gap-3"><span class="text-[11px] text-zinc-400 font-mono">UTF-8 NFKC</span><button class="text-zinc-400 hover:text-zinc-100 transition-colors p-1" title="Copy hook code"><span class="material-symbols-outlined text-[15px]">content_copy</span></button></div></div>
+<!-- Monospace Code Editor Area -->
+<div class="p-4 font-caption text-[12px] leading-relaxed overflow-x-auto text-zinc-200 selection:bg-rose-900/60 selection:text-white">
+<pre><code><span class="syn-keyword">import</span> unicodedata
+<span class="syn-keyword">from</span> typing <span class="syn-keyword">import</span> Optional, Dict
+<span class="syn-keyword">from</span> dataclasses <span class="syn-keyword">import</span> dataclass
 
-    <!-- 5 Spans Grid Cards -->
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-space-md">
+<span class="syn-decorator">@dataclass(slots=True)</span>
+<span class="syn-keyword">class</span> <span class="syn-type">NormalizedPayload</span>:
+    text: <span class="syn-type">str</span>
+    locale: <span class="syn-type">str</span>
+    token_estimate: <span class="syn-type">int</span>
+    has_control_chars: <span class="syn-type">bool</span> = <span class="syn-num">False</span>
 
-      <!-- Span 1 Config -->
-      <div class="bg-surface-container-lowest border border-[#e5e5e4] rounded-lg p-space-md shadow-sm space-y-3">
-        <div class="flex items-center justify-between border-b border-[#e5e5e4] pb-2">
-          <span class="font-label-code-sm font-semibold text-on-surface">Span 1 // Normalization</span>
-          <span class="text-[10px] font-label-code-sm bg-emerald-50 text-emerald-800 border border-emerald-200 px-1.5 py-0.5 rounded">ACTIVE</span>
-        </div>
-        <p class="text-body-sm text-secondary text-xs">Diacritic folding, lowercasing, and follow-up turn context windowing.</p>
-        <div class="space-y-2 text-label-code-sm text-xs">
-          <div class="flex justify-between items-center py-1 border-b border-[#e5e5e4]">
-            <span class="text-tertiary">Diacritic Folding</span>
-            <span class="font-medium text-emerald-700">Enabled (RG-04)</span>
-          </div>
-          <div class="flex justify-between items-center py-1 border-b border-[#e5e5e4]">
-            <span class="text-tertiary">Follow-up Window</span>
-            <span class="font-medium">Max 2 turns (RT-04)</span>
-          </div>
-          <div class="flex justify-between items-center py-1">
-            <span class="text-tertiary">Languages</span>
-            <span class="font-medium">NL, EN (Dynamic YAML)</span>
-          </div>
-        </div>
-      </div>
+<span class="syn-keyword">def</span> <span class="syn-def">normalize_input</span>(raw_text: <span class="syn-type">str</span>, metadata: <span class="syn-type">dict</span>) -&gt; <span class="syn-type">NormalizedPayload</span>:
+    <span class="syn-comment"># UTF-8 NFKC canonicalization + whitespace folding (&lt;0.2ms)</span>
+    sanitized = <span class="syn-str">" "</span>.join(raw_text.strip().split())
+    text = unicodedata.normalize(<span class="syn-str">'NFKC'</span>, sanitized)
 
-      <!-- Span 2 Config (Fast Path Switch) -->
-      <div class="bg-surface-container-lowest border border-[#e5e5e4] rounded-lg p-space-md shadow-sm space-y-3">
-        <div class="flex items-center justify-between border-b border-[#e5e5e4] pb-2">
-          <span class="font-label-code-sm font-semibold text-on-surface">Span 2 // Fast-Path Gate</span>
-          <span class="text-[10px] font-label-code-sm bg-emerald-50 text-emerald-800 border border-emerald-200 px-1.5 py-0.5 rounded">CONFIGURABLE</span>
-        </div>
-        <p class="text-body-sm text-secondary text-xs">Sub-0.5ms deterministic rule qualification before neural execution.</p>
-        <div class="space-y-2 text-label-code-sm text-xs">
-          <div class="flex justify-between items-center py-1 border-b border-[#e5e5e4]">
-            <span class="text-tertiary">Fast-Path Gate Switch</span>
-            <span class="font-semibold text-emerald-700">fast_path_enabled: true</span>
-          </div>
-          <div class="flex justify-between items-center py-1 border-b border-[#e5e5e4]">
-            <span class="text-tertiary">Domotica Threshold</span>
-            <span class="font-medium">domotica_min_confidence: 0.70</span>
-          </div>
-          <div class="flex justify-between items-center py-1">
-            <span class="text-tertiary">Safety Filters</span>
-            <span class="font-medium">Lock, Alarm, Valve rejected</span>
-          </div>
-        </div>
-      </div>
+    <span class="syn-comment"># Fast-path regex script detection (Dutch fallback)</span>
+    lang = detect_script_or_lid(text, fallback=<span class="syn-str">'nl-NL'</span>)
 
-      <!-- Span 3 Config (Laya System 1) -->
-      <div class="bg-surface-container-lowest border border-[#e5e5e4] rounded-lg p-space-md shadow-sm space-y-3">
-        <div class="flex items-center justify-between border-b border-[#e5e5e4] pb-2">
-          <span class="font-label-code-sm font-semibold text-on-surface">Span 3 // Laya System 1 Router</span>
-          <span class="text-[10px] font-label-code-sm bg-primary-light text-primary border border-primary-border px-1.5 py-0.5 rounded">XPU ACCELERATED</span>
-        </div>
-        <p class="text-body-sm text-secondary text-xs">ModernBERT &amp; mmBERT cross-encoder matrix running on Intel Arc DRM.</p>
-        <div class="space-y-2 text-label-code-sm text-xs">
-          <div class="flex justify-between items-center py-1 border-b border-[#e5e5e4]">
-            <span class="text-tertiary">Inference Device</span>
-            <span class="font-semibold text-primary">Intel Arc iGPU (xpu)</span>
+    <span class="syn-keyword">return</span> <span class="syn-type">NormalizedPayload</span>(
+        text=text,
+        locale=lang,
+        token_estimate=<span class="syn-type">len</span>(text.split()),
+        has_control_chars=<span class="syn-num">False</span>
+    )</code></pre>
+</div>
+<!-- Live Interactive Dry-Run / Test Input Preview -->
+<div class="mt-auto border-t border-terminal-border p-3 bg-terminal-panel">
+<div class="flex items-center justify-between text-label-code-sm font-label-code-sm mb-1.5">
+<span class="text-zinc-300 font-semibold flex items-center gap-1.5">
+<span class="material-symbols-outlined text-[14px] text-primary">play_arrow</span>
+<span class="">Live Test / Normalizer Dry-Run</span>
+</span>
+<div class="flex items-center gap-2">
+<span class="text-emerald-400 font-mono text-[11px]">Latency: 1.2ms</span>
+<span class="text-zinc-500">·</span>
+<span class="text-zinc-400 font-mono text-[11px]">Tokens: 5</span>
+</div>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-2 font-label-code-sm text-label-code-sm">
+<div class="bg-black/40 rounded p-2 border border-zinc-800">
+<div class="text-[10px] text-zinc-500 uppercase tracking-wider mb-1 font-mono">Raw Input Payload:</div>
+<div class="text-zinc-300 font-mono text-xs">"Bereken de   annuïtaire   hypotheeklasten..."</div>
+<div class="text-[10px] text-amber-400 mt-1 flex items-center gap-1">
+<span class="material-symbols-outlined text-[11px]">info</span>
+<span class="">Decomposed diacritic detected (\u0308)</span>
+</div>
+</div>
+<div class="bg-black/60 rounded p-2 border border-zinc-700/80">
+<div class="text-[10px] text-emerald-400 uppercase tracking-wider mb-1 font-mono">Normalized Payload Output:</div>
+<div class="text-white font-mono text-xs">"Bereken de annuïtaire hypotheeklasten..."</div>
+<div class="flex items-center gap-2 text-[10px] text-zinc-400 mt-1">
+<span class="">locale: <strong class="text-zinc-200">nl-NL</strong></span>
+<span class="">·</span>
+<span class="">status: <strong class="text-emerald-400">PASSED</strong></span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- ========================================================================= -->
+<!-- SECTION 2: SPAN 2 - CODE PROCESSING (FAST-PATH & GUARDRAILS) -->
+<!-- ========================================================================= -->
+<section class="rounded-xl border border-surface-container-highest bg-surface-container-lowest overflow-hidden shadow-xs" id="span-2">
+<!-- Section Header -->
+<div class="p-space-md border-b border-surface-container-highest bg-surface flex flex-wrap items-center justify-between gap-2">
+<div class="flex items-center gap-2.5">
+<div class="w-6 h-6 rounded bg-primary-fixed flex items-center justify-center text-primary font-label-code-sm font-bold border border-outline-variant">
+            02
           </div>
-          <div class="flex justify-between items-center py-1 border-b border-[#e5e5e4]">
-            <span class="text-tertiary">Smarthome Min Conf</span>
-            <span class="font-medium">smarthome_min_confidence: 0.50</span>
-          </div>
-          <div class="flex justify-between items-center py-1">
-            <span class="text-tertiary">Model Routing Floor</span>
-            <span class="font-medium">min_confidence: 0.60</span>
-          </div>
-        </div>
-      </div>
+<div>
+<h2 class="text-headline-sm font-headline-sm font-semibold text-on-surface flex items-center gap-2">
+<span class="">Span 2: Code Processing (Fast-Path Logic &amp; Deterministic Gates)</span>
+<span class="text-label-code-sm font-label-code-sm text-secondary bg-surface-container-high px-2 py-0.5 rounded">TRIE / REGEX ENGINE</span>
+</h2>
+<p class="text-caption font-caption text-secondary">Zero-GPU deterministic execution. Intercepts frequent imperative commands in &lt;5.0ms prior to neural inference.</p>
+</div>
+</div>
+<div class="flex items-center gap-2">
+<span class="text-label-code-sm font-label-code-sm text-tertiary">Max Latency Budget:</span>
+<span class="text-label-code-sm font-label-code-sm px-2 py-0.5 rounded bg-primary-fixed text-primary font-mono font-semibold border border-outline-variant">5.0 ms SLA</span>
+</div>
+</div>
+<!-- Content Split: Rule Table & Parameters + Dark Code Editor -->
+<div class="grid grid-cols-1 lg:grid-cols-12 divide-y lg:divide-y-0 lg:divide-x divide-surface-container-highest">
+<!-- Left: Rule Matrix and Latency Guard Controls (5 Cols) -->
+<div class="lg:col-span-5 p-space-md space-y-4">
+<div class="flex items-center justify-between">
+<span class="text-label-code-sm font-label-code-sm font-semibold text-tertiary tracking-wider uppercase">Active Fast-Path Gateways</span>
+<span class="text-[11px] text-secondary">3 of 3 Active</span>
+</div>
+<!-- Fast Path Rule Cards -->
+<div class="space-y-2.5">
+<!-- Rule 1: Domotica light/switch direct hook -->
+<div class="p-2.5 rounded-lg border border-surface-container-highest bg-surface flex items-center justify-between">
+<div class="space-y-0.5">
+<div class="flex items-center gap-2">
+<span class="font-medium text-body-sm text-on-surface">Domotica Light/Switch Direct Hook</span>
+<span class="text-[10px] font-mono px-1 rounded bg-zinc-200 text-zinc-800">4.1ms avg</span>
+</div>
+<div class="text-caption font-caption text-secondary">Trie matcher for turn_on, turn_off, set_dimmer</div>
+</div>
+<button class="w-9 h-5 rounded-full bg-primary p-0.5 transition-colors relative shrink-0">
+<div class="w-4 h-4 rounded-full bg-white ml-auto shadow-xs"></div>
+</button>
+</div>
+<!-- Rule 2: Quick math calculation hook -->
+<div class="p-2.5 rounded-lg border border-surface-container-highest bg-surface flex items-center justify-between">
+<div class="space-y-0.5">
+<div class="flex items-center gap-2">
+<span class="font-medium text-body-sm text-on-surface">Quick Math Calculation Hook</span>
+<span class="text-[10px] font-mono px-1 rounded bg-zinc-200 text-zinc-800">0.9ms avg</span>
+</div>
+<div class="text-caption font-caption text-secondary">SymPy evaluated arithmetic expressions</div>
+</div>
+<button class="w-9 h-5 rounded-full bg-primary p-0.5 transition-colors relative shrink-0">
+<div class="w-4 h-4 rounded-full bg-white ml-auto shadow-xs"></div>
+</button>
+</div>
+<!-- Rule 3: Regex triage classifier -->
+<div class="p-2.5 rounded-lg border border-surface-container-highest bg-surface flex items-center justify-between">
+<div class="space-y-0.5">
+<div class="flex items-center gap-2">
+<span class="font-medium text-body-sm text-on-surface">Regex Triage Classifier</span>
+<span class="text-[10px] font-mono px-1 rounded bg-zinc-200 text-zinc-800">2.4ms avg</span>
+</div>
+<div class="text-caption font-caption text-secondary">Direct routing to FAQ cache for canned responses</div>
+</div>
+<button class="w-9 h-5 rounded-full bg-primary p-0.5 transition-colors relative shrink-0">
+<div class="w-4 h-4 rounded-full bg-white ml-auto shadow-xs"></div>
+</button>
+</div>
+</div>
+<!-- Safety Gate Checklist Requirements -->
+<div class="p-3 rounded-lg border border-surface-container-highest bg-surface-container-low space-y-2">
+<span class="text-label-code-sm font-label-code-sm font-semibold text-on-surface block">Deterministic Safety Gate Requirements:</span>
+<div class="grid grid-cols-2 gap-2 text-caption font-caption">
+<div class="flex items-center gap-1.5 text-on-surface">
+<span class="material-symbols-outlined text-primary text-[15px]">check_circle</span>
+<span class="">Imperative Verb Root</span>
+</div>
+<div class="flex items-center gap-1.5 text-on-surface">
+<span class="material-symbols-outlined text-primary text-[15px]">check_circle</span>
+<span class="">Single Intent Verified</span>
+</div>
+<div class="flex items-center gap-1.5 text-on-surface">
+<span class="material-symbols-outlined text-primary text-[15px]">check_circle</span>
+<span class="">Non-conditional Syntax</span>
+</div>
+<div class="flex items-center gap-1.5 text-on-surface">
+<span class="material-symbols-outlined text-primary text-[15px]">check_circle</span>
+<span class="">Safe Target Whitelisted</span>
+</div>
+</div>
+<div class="pt-1 text-[11px] text-tertiary">
+              Failure on any criteria triggers immediate fall-through to <strong>Span 3: System 1 Router</strong>.
+            </div>
+</div>
+</div>
+<!-- Right: Code Editor for Fast Path Gate Logic (7 Cols) -->
+<div class="lg:col-span-7 flex flex-col bg-terminal-bg">
+<div class="px-4 py-2 bg-terminal-panel border-b border-terminal-border flex items-center justify-between text-label-code-sm font-label-code-sm text-zinc-400"><div class="flex items-center gap-2 font-mono text-zinc-200 text-xs"><span class="material-symbols-outlined text-[15px] text-zinc-400">code</span><span class="font-medium text-zinc-200">span2_fastpath_gate.py</span></div><div class="flex items-center gap-2"><span class="text-amber-400 font-mono text-[11px] bg-amber-950/40 px-2 py-0.5 rounded border border-amber-800/60">Deterministic FastPath</span><button class="text-zinc-400 hover:text-zinc-100 transition-colors p-1" title="Copy hook code"><span class="material-symbols-outlined text-[15px]">content_copy</span></button></div></div>
+<div class="p-4 font-caption text-[12px] leading-relaxed overflow-x-auto text-zinc-200 selection:bg-rose-900/60 selection:text-white flex-1">
+<pre><code><span class="syn-keyword">from</span> laya.fastpath <span class="syn-keyword">import</span> fast_path_gate, FastPathResult
+<span class="syn-keyword">from</span> typing <span class="syn-keyword">import</span> Optional
 
-      <!-- Span 4 Config (Optimization) -->
-      <div class="bg-surface-container-lowest border border-[#e5e5e4] rounded-lg p-space-md shadow-sm space-y-3">
-        <div class="flex items-center justify-between border-b border-[#e5e5e4] pb-2">
-          <span class="font-label-code-sm font-semibold text-on-surface">Span 4 // Token Optimization</span>
-          <span class="text-[10px] font-label-code-sm bg-blue-50 text-blue-800 border border-blue-200 px-1.5 py-0.5 rounded">ACTIVE</span>
-        </div>
-        <p class="text-body-sm text-secondary text-xs">Dynamic personal context memory stripping and tool list pruning.</p>
-        <div class="space-y-2 text-label-code-sm text-xs">
-          <div class="flex justify-between items-center py-1 border-b border-[#e5e5e4]">
-            <span class="text-tertiary">Memory Gating</span>
-            <span class="font-medium text-emerald-700">Active (-2k chars on quick/smart)</span>
-          </div>
-          <div class="flex justify-between items-center py-1 border-b border-[#e5e5e4]">
-            <span class="text-tertiary">Tool Pruning</span>
-            <span class="font-medium">Developer tools stripped</span>
-          </div>
-          <div class="flex justify-between items-center py-1">
-            <span class="text-tertiary">Thinking Budget</span>
-            <span class="font-medium">0 on quick, high on deep</span>
-          </div>
-        </div>
-      </div>
+<span class="syn-decorator">@fast_path_gate(max_latency_ms=5.0, strict_mode=True)</span>
+<span class="syn-keyword">def</span> <span class="syn-def">evaluate_code_rules</span>(payload: <span class="syn-type">NormalizedPayload</span>) -&gt; <span class="syn-type">Optional</span>[<span class="syn-type">FastPathResult</span>]:
+    <span class="syn-comment"># 1. Deterministic regex / compiled trie matching before neural pass</span>
+    <span class="syn-keyword">for</span> pattern, target <span class="syn-keyword">in</span> COMPILED_DOMOTICA_RULES:
+        <span class="syn-keyword">if</span> match := pattern.match(payload.text):
+            <span class="syn-keyword">return</span> <span class="syn-type">FastPathResult</span>(
+                gate_passed=<span class="syn-num">True</span>,
+                target=target,
+                confidence=<span class="syn-num">1.0</span>,
+                latency_ms=<span class="syn-num">4.1</span>
+            )
 
-      <!-- Span 5 Config (Execution Targets) -->
-      <div class="bg-surface-container-lowest border border-[#e5e5e4] rounded-lg p-space-md shadow-sm space-y-3 md:col-span-2">
-        <div class="flex items-center justify-between border-b border-[#e5e5e4] pb-2">
-          <span class="font-label-code-sm font-semibold text-on-surface">Span 5 // Dispatched Execution Topologies</span>
-          <span class="text-[10px] font-label-code-sm bg-surface-container-low text-secondary border border-[#e5e5e4] px-1.5 py-0.5 rounded">MULTI-TARGET</span>
-        </div>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-          <div class="p-2.5 rounded border border-emerald-200 bg-emerald-50/50">
-            <span class="font-semibold text-emerald-800 block">🏠 Local Target: Home Assistant Core API</span>
-            <span class="text-secondary text-[11px] mt-1 block">Receives HassTurnOn/Off or direct service payloads. Executed locally over Unix socket or loopback with ZERO cloud tokens.</span>
-          </div>
-          <div class="p-2.5 rounded border border-purple-200 bg-purple-50/50">
-            <span class="font-semibold text-purple-800 block">🌐 Upstream Target: Cloud LLM Tiering</span>
-            <span class="text-secondary text-[11px] mt-1 block">Routes quick prompts to Gemini 3.5 Flash Lite, code to Gemini Flash, and deep financial reasoning to Gemini Pro.</span>
-          </div>
-        </div>
-      </div>
+    <span class="syn-comment"># 2. Arithmetic / Direct Expression Hook</span>
+    <span class="syn-keyword">if</span> payload.text.startswith((<span class="syn-str">"calc:"</span>, <span class="syn-str">"bereken:"</span>)):
+        <span class="syn-keyword">return</span> evaluate_math_kernel(payload.text)
 
-    </div>
-
-  </div>
+    <span class="syn-comment"># 3. Fall-through to System 1 Neural Classifier</span>
+    <span class="syn-keyword">return</span> <span class="syn-num">None</span>  <span class="syn-comment"># Escalate to Laya Engine</span></code></pre>
+</div>
+<div class="p-3 bg-terminal-panel border-t border-terminal-border flex items-center justify-between text-label-code-sm font-label-code-sm">
+<div class="text-zinc-400 flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+<span class="">Fast-Path Bypass Rate: <strong class="text-zinc-200">28.4% of total traffic</strong></span>
+</div>
+<div class="text-zinc-500 font-mono text-[11px]">Estimated GPU savings: ~$412 / day</div>
+</div>
+</div>
+</div>
+</section>
+<!-- ========================================================================= -->
+<!-- SECTION 3: SPAN 3 - SYSTEM 1 / LAYA ENGINE SETTINGS -->
+<!-- ========================================================================= -->
+<section class="rounded-xl border border-surface-container-highest bg-surface-container-lowest overflow-hidden shadow-xs" id="span-3">
+<!-- Section Header -->
+<div class="p-space-md border-b border-surface-container-highest bg-surface flex flex-wrap items-center justify-between gap-2">
+<div class="flex items-center gap-2.5">
+<div class="w-6 h-6 rounded bg-primary-fixed flex items-center justify-center text-primary font-label-code-sm font-bold border border-outline-variant">
+            03
+          </div>
+<div>
+<h2 class="text-headline-sm font-headline-sm font-semibold text-on-surface flex items-center gap-2">
+<span class="">Span 3: System 1 / Laya Engine Settings</span>
+<span class="text-label-code-sm font-label-code-sm text-on-primary bg-primary px-2 py-0.5 rounded font-mono font-medium">convaiinnovations/laya</span>
+</h2>
+<p class="text-caption font-caption text-secondary">Neural checkpoint architecture, resident memory management, and temperature-scaled decision primitives.</p>
+</div>
+</div>
+<div class="flex items-center gap-3">
+<span class="text-label-code-sm font-label-code-sm text-secondary">Scoring Rule:</span>
+<span class="text-label-code-sm font-label-code-sm px-2 py-0.5 rounded bg-surface-container font-mono text-on-surface border border-surface-container-highest">RLCD (Spherical + Log)</span>
+</div>
+</div>
+<!-- Main Engine Configuration Canvas -->
+<div class="p-space-md space-y-6">
+<!-- Part A: Checkpoint Selection Visual Model Cards -->
+<div>
+<div class="flex items-center justify-between mb-3">
+<div>
+<h3 class="text-body-sm font-body-sm font-semibold text-on-surface">Neural Checkpoint Selection</h3>
+<p class="text-caption font-caption text-secondary">ModernBERT architecture optimized for calibrated masked-language decision routing.</p>
+</div>
+<span class="text-caption font-caption text-primary font-mono">Current resident checkpoint: convaiinnovations/laya</span>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+<!-- Card 1: Selected (ModernBERT-large) -->
+<div class="relative rounded-lg p-3.5 border-2 border-primary bg-surface flex flex-col justify-between shadow-xs">
+<div class="absolute -top-2.5 right-3 px-2 py-0.5 rounded bg-primary text-white text-[10px] font-label-code-sm font-medium tracking-wide">
+                ACTIVE CHECKPOINT
+              </div>
+<div class="space-y-2">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-[18px]">verified</span>
+<div class="font-label-code-md font-semibold text-on-surface truncate">convaiinnovations/laya</div>
+</div>
+<div class="text-caption font-caption text-secondary">
+                  ModernBERT-large base. High-throughput English &amp; Benelux triage routing.
+                </div>
+<div class="flex flex-wrap gap-1.5 pt-1 text-[11px] font-mono">
+<span class="px-1.5 py-0.5 rounded bg-surface-container text-tertiary">421M params</span>
+<span class="px-1.5 py-0.5 rounded bg-surface-container text-tertiary">512 context</span>
+<span class="px-1.5 py-0.5 rounded bg-primary-fixed text-primary font-semibold">18.4ms P95</span>
+</div>
+</div>
+<div class="mt-4 pt-2 border-t border-surface-container-highest flex items-center justify-between text-caption font-caption">
+<span class="text-secondary">Resident in VRAM</span>
+<span class="text-primary font-medium flex items-center gap-1">
+<span class="w-1.5 h-1.5 rounded-full bg-primary"></span>
+                  Active Edge Node
+                </span>
+</div>
+</div>
+<!-- Card 2: Multilingual (mmBERT) -->
+<div class="rounded-lg p-3.5 border border-surface-container-highest bg-surface-container-lowest hover:border-outline-variant transition-colors flex flex-col justify-between">
+<div class="space-y-2">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-secondary text-[18px]">translate</span>
+<div class="font-label-code-md font-semibold text-on-surface truncate">convaiinnovations/laya-multilingual</div>
+</div>
+<div class="text-caption font-caption text-secondary">
+                  mmBERT-base. 100+ languages supported out of the box with zero-shot cross-lingual transfer.
+                </div>
+<div class="flex flex-wrap gap-1.5 pt-1 text-[11px] font-mono">
+<span class="px-1.5 py-0.5 rounded bg-surface-container text-tertiary">322M params</span>
+<span class="px-1.5 py-0.5 rounded bg-surface-container text-tertiary">1024-8192 ctx</span>
+<span class="px-1.5 py-0.5 rounded bg-surface-container text-tertiary">32.8ms fwd</span>
+</div>
+</div>
+<div class="mt-4 pt-2 border-t border-surface-container-highest flex items-center justify-between text-caption font-caption">
+<span class="text-secondary">Standby In Memory</span>
+<button class="text-primary hover:underline font-medium">Switch to Model</button>
+</div>
+</div>
+<!-- Card 3: Typed Decisions -->
+<div class="rounded-lg p-3.5 border border-surface-container-highest bg-surface-container-lowest hover:border-outline-variant transition-colors flex flex-col justify-between">
+<div class="space-y-2">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-secondary text-[18px]">schema</span>
+<div class="font-label-code-md font-semibold text-on-surface truncate">convaiinnovations/laya-typed-decisions</div>
+</div>
+<div class="text-caption font-caption text-secondary">
+                  ModernBERT-large fine-tuned on strictly typed enterprise schema workflows.
+                </div>
+<div class="flex flex-wrap gap-1.5 pt-1 text-[11px] font-mono">
+<span class="px-1.5 py-0.5 rounded bg-surface-container text-tertiary">421M params</span>
+<span class="px-1.5 py-0.5 rounded bg-surface-container text-tertiary">0.766 typed acc</span>
+<span class="px-1.5 py-0.5 rounded bg-surface-container text-tertiary">Banking77 eval</span>
+</div>
+</div>
+<div class="mt-4 pt-2 border-t border-surface-container-highest flex items-center justify-between text-caption font-caption">
+<span class="text-secondary">Cold Storage</span>
+<button class="text-primary hover:underline font-medium">Switch to Model</button>
+</div>
+</div>
+</div>
+</div>
+<!-- Part B: Execution Hyperparameters & Hardware Configuration Bento -->
+<div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4">
+<!-- Hyperparameter 1: Checkpoint Resident Preloading -->
+<div class="p-3.5 rounded-lg border border-surface-container-highest bg-surface space-y-3">
+<div class="flex items-center justify-between">
+<span class="font-medium text-body-sm text-on-surface">Checkpoint Preloading</span>
+<button class="w-9 h-5 rounded-full bg-primary p-0.5 transition-colors relative">
+<div class="w-4 h-4 rounded-full bg-white ml-auto shadow-xs"></div>
+</button>
+</div>
+<div class="text-caption font-caption text-secondary">
+<code class="text-primary font-mono">Router(preload=True)</code> keeps checkpoints active in resident device memory to guarantee sub-35ms cold starts.
+            </div>
+<div class="pt-1 flex items-center justify-between text-[11px] font-mono">
+<span class="text-tertiary">Max Loaded Checkpoints:</span>
+<span class="font-semibold text-on-surface bg-surface-container px-2 py-0.5 rounded">max_loaded=2</span>
+</div>
+</div>
+<!-- Hyperparameter 2: Execution Hardware Acceleration -->
+<div class="p-3.5 rounded-lg border border-surface-container-highest bg-surface space-y-2">
+<div class="flex items-center justify-between">
+<span class="font-medium text-body-sm text-on-surface">Execution Device</span>
+<span class="text-[10px] text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded font-mono font-medium">ONLINE</span>
+</div>
+<p class="text-caption font-caption text-secondary">Kernel compute backend for tensor operations.</p>
+<select class="w-full text-label-code-sm font-label-code-sm rounded border-surface-container-highest bg-surface-container-lowest focus:border-primary focus:ring-0">
+<option selected="">Intel Arc iGPU (Level-Zero DRM)</option>
+<option>NVIDIA CUDA (cu124 / TensorRT)</option>
+<option>Apple Silicon MPS (Metal)</option>
+<option>CPU (AVX-512 VNNI Vectorized)</option>
+</select>
+</div>
+<!-- Hyperparameter 3: Option Budget (head_max_len) -->
+<div class="p-3.5 rounded-lg border border-surface-container-highest bg-surface space-y-2">
+<div class="flex items-center justify-between">
+<span class="font-medium text-body-sm text-on-surface">Option Budget (head_max_len)</span>
+<span class="font-mono text-caption text-primary font-bold">256 tok</span>
+</div>
+<p class="text-caption font-caption text-secondary">Max token budget for high-cardinality label space choices (e.g. Banking77).</p>
+<div class="flex items-center gap-1.5 pt-1">
+<button class="flex-1 py-1 rounded text-label-code-sm font-label-code-sm border border-surface-container-highest bg-surface-container-lowest text-secondary hover:text-on-surface">192</button>
+<button class="flex-1 py-1 rounded text-label-code-sm font-label-code-sm border border-primary bg-primary-fixed text-primary font-semibold">256</button>
+<button class="flex-1 py-1 rounded text-label-code-sm font-label-code-sm border border-surface-container-highest bg-surface-container-lowest text-secondary hover:text-on-surface">512</button>
+</div>
+</div>
+<!-- Hyperparameter 4: Context Window Limit (max_len) -->
+<div class="p-3.5 rounded-lg border border-surface-container-highest bg-surface space-y-2">
+<div class="flex items-center justify-between">
+<span class="font-medium text-body-sm text-on-surface">Context Limit (max_len)</span>
+<span class="text-caption font-caption text-tertiary font-mono">RoPE Rotary</span>
+</div>
+<p class="text-caption font-caption text-secondary">Maximum sequence length fed to ModernBERT attention.</p>
+<div class="flex items-center gap-1.5 pt-1">
+<button class="flex-1 py-1 rounded text-label-code-sm font-label-code-sm border border-surface-container-highest bg-surface-container-lowest text-secondary">512</button>
+<button class="flex-1 py-1 rounded text-label-code-sm font-label-code-sm border border-primary bg-primary-fixed text-primary font-semibold">1024</button>
+<button class="flex-1 py-1 rounded text-label-code-sm font-label-code-sm border border-surface-container-highest bg-surface-container-lowest text-secondary">8192</button>
+</div>
+</div>
+</div>
+<!-- Part C: Calibration & Decision Primitives (2-Col Deep Inspection) -->
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+<!-- Calibration & Temperature Scaling -->
+<div class="p-4 rounded-lg border border-surface-container-highest bg-surface space-y-3">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-[18px]">tune</span>
+<span class="font-medium text-body-sm text-on-surface">Temperature Scaling &amp; ECE Calibration</span>
+</div>
+<span class="font-label-code-sm text-label-code-sm px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-mono">
+                ECE: 0.081 (Optimized)
+              </span>
+</div>
+<p class="text-caption font-caption text-secondary">
+              Calibrated via Platt scaling &amp; isotonic temperature optimization. Prevents overconfident routing failures on boundary ambiguities.
+            </p>
+<div class="space-y-3 pt-2">
+<div>
+<div class="flex items-center justify-between text-label-code-sm font-label-code-sm mb-1">
+<span class="text-secondary font-mono">Domain Temperature:</span>
+<span class="font-mono text-primary font-bold">0.20 T</span>
+</div>
+<input class="w-full accent-primary h-1.5 bg-surface-container-highest rounded-lg cursor-pointer" max="1.0" min="0.05" step="0.05" type="range" value="0.20">
+<div class="flex justify-between text-[10px] text-tertiary font-mono mt-0.5">
+<span class="">0.05 (Rigid ArgMax)</span>
+<span class="">0.20 (Optimal)</span>
+<span class="">1.0 (Raw Logits)</span>
+</div>
+</div>
+<div class="p-2.5 rounded bg-surface-container-lowest border border-surface-container-highest text-caption font-caption space-y-1">
+<div class="flex justify-between">
+<span class="text-secondary">Expected Calibration Error (ECE):</span>
+<span class="font-mono text-on-surface font-semibold">0.081 (-62% vs uncalibrated)</span>
+</div>
+<div class="flex justify-between">
+<span class="text-secondary">Brier Score Calibration Loss:</span>
+<span class="font-mono text-on-surface font-semibold">0.042</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Decision Primitives & Guardrail Escalation -->
+<div class="p-4 rounded-lg border border-surface-container-highest bg-surface space-y-3">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-[18px]">rule</span>
+<span class="font-medium text-body-sm text-on-surface">Decision Primitives &amp; LLM Fallback Gate</span>
+</div>
+<span class="text-label-code-sm font-label-code-sm font-mono text-secondary">3 Enabled</span>
+</div>
+<p class="text-caption font-caption text-secondary">
+              Active primitives executed over ModernBERT [MASK] token probability distributions.
+            </p>
+<!-- Primitives Chips -->
+<div class="flex flex-wrap gap-2 pt-1">
+<div class="flex items-center gap-1.5 px-2.5 py-1 rounded bg-surface-container-lowest border border-surface-container-highest text-label-code-sm font-label-code-sm">
+<span class="material-symbols-outlined text-emerald-600 text-[14px]">check</span>
+<code>choice</code>
+<span class="text-tertiary text-[10px]">(Softmax over [MASK])</span>
+</div>
+<div class="flex items-center gap-1.5 px-2.5 py-1 rounded bg-surface-container-lowest border border-surface-container-highest text-label-code-sm font-label-code-sm">
+<span class="material-symbols-outlined text-emerald-600 text-[14px]">check</span>
+<code>noul</code>
+<span class="text-tertiary text-[10px]">(Binary Yes/No)</span>
+</div>
+<div class="flex items-center gap-1.5 px-2.5 py-1 rounded bg-surface-container-lowest border border-surface-container-highest text-label-code-sm font-label-code-sm">
+<span class="material-symbols-outlined text-emerald-600 text-[14px]">check</span>
+<code>score</code>
+<span class="text-tertiary text-[10px]">(Ordinal 1..5)</span>
+</div>
+</div>
+<!-- Confidence Gate Slider -->
+<div class="pt-2 border-t border-surface-container-highest space-y-2">
+<div class="flex items-center justify-between text-label-code-sm font-label-code-sm">
+<span class="text-on-surface font-medium">Confidence Escalation Threshold:</span>
+<span class="font-mono text-primary font-bold">0.40 (40%)</span>
+</div>
+<input class="w-full accent-primary h-1.5 bg-surface-container-highest rounded-lg cursor-pointer" max="0.90" min="0.10" step="0.05" type="range" value="0.40">
+<!-- Warning Badge as requested -->
+<div class="p-2 rounded bg-amber-50 border border-amber-200 text-caption font-caption text-amber-900 flex items-start gap-1.5">
+<span class="material-symbols-outlined text-[15px] text-amber-600 shrink-0 mt-0.5">warning</span>
+<span class=""><strong>Note:</strong> confidence is calibrated; <code>act_probability</code> raw signal remains uncalibrated. Queries below 0.40 escalate directly to Downstream Claude 3.5 / GPT-4o.</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+</main>
+<!-- Sticky Fixed Bottom Action Footer Bar -->
+<footer class="sticky bottom-0 w-full border-t border-surface-container-highest bg-surface-container-lowest px-space-md py-2.5 z-40 shadow-md">
+<div class="max-w-[1600px] mx-auto flex flex-wrap items-center justify-between gap-3">
+<!-- Left: Status & Modified Pills -->
+<div class="flex items-center gap-3 text-label-code-sm font-label-code-sm">
+<span class="w-2 h-2 rounded-full bg-amber-500 inline-block"></span>
+<span class="text-on-surface font-medium">1 Parameter Modified:</span>
+<code class="text-secondary bg-surface-container px-2 py-0.5 rounded">span3.ece_domain_temp = 0.20</code>
+<span class="text-tertiary text-caption font-caption hidden sm:inline">· Unsaved draft buffer</span>
+</div>
+<!-- Right: Action Buttons Group -->
+<div class="flex items-center gap-2.5 font-label-code-sm text-label-code-sm">
+<button onclick="switchView('eval')" class="px-3 py-1.5 rounded border border-surface-container-highest bg-surface-container-lowest hover:bg-surface-container text-secondary hover:text-on-surface transition-colors font-medium cursor-pointer">
+          Return to Trace Console
+        </button>
+<button class="px-3 py-1.5 rounded border border-surface-container-highest bg-surface-container-lowest hover:bg-surface-container text-on-surface transition-colors flex items-center gap-1.5 font-medium">
+<span class="material-symbols-outlined text-[15px]">download</span>
+<span class="">Export config.json</span>
+</button>
+<!-- Vermilion Primary Action Button (#e34234) -->
+<button onclick="savePolicyConfig()" class="px-4 py-1.5 rounded bg-primary hover:bg-primary-hover text-on-primary font-semibold flex items-center gap-2 shadow-sm transition-all active:scale-[0.99] cursor-pointer">
+<span class="material-symbols-outlined text-[16px]">cloud_upload</span>
+<span class="">Save &amp; Deploy to Edge Cluster</span>
+</button>
+</div>
+</div>
+</footer>
 </div>
 
 <!-- Subtle Bottom Status Bar -->
