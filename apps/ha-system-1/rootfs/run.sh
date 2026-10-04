@@ -44,8 +44,11 @@ export LAYA_REVISION="$LAYA_REVISION"
 export LAYA_API_KEY="$API_KEY"
 export LAYA_LOG_LEVEL="$LOG_LEVEL"
 export HF_HOME="/data/hf"
+export NEO_CACHE_DIR="/data/neo_cache"
+export OCL_CACHE_DIR="/data/neo_cache"
+export TORCHINDUCTOR_CACHE_DIR="/data/torch_cache"
 
-mkdir -p /data/hf
+mkdir -p /data/hf /data/neo_cache /data/torch_cache
 
 echo "Inference Device   : ${LAYA_DEVICE}"
 echo "PyTorch Threads    : ${LAYA_THREADS}"

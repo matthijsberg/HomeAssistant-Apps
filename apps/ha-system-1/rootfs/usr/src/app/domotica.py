@@ -249,11 +249,13 @@ class DomoticaEngine:
         whole_home_markers = (
             "in the house", "in het huis", "in huis", "throughout the house", "in all rooms",
             "all lights in the house", "all lights in house", "alle lampen in huis", "alle lampen in het huis",
-            "all lights", "alle lampen", "every light",
+            "overal in huis", "overal in het huis",
         )
-        is_whole_home = (
-            slots and slots.get("scope") == "entire_area" and (slots.get("room") in ("unspecified", "house", "home", "all", "overal", "huis", "woning")) and any(m in clean_p for m in ("house", "huis", "home", "all", "overal"))
-        ) or any(m in clean_p for m in whole_home_markers)
+        has_specific_room = bool(slots and slots.get("room") and slots["room"] != "unspecified")
+        is_whole_home = not has_specific_room and (
+            any(m in clean_p for m in whole_home_markers)
+            or (slots and slots.get("scope") == "entire_area" and any(w in clean_p.split() for w in ("house", "huis", "home", "overal")))
+        )
 
         if is_whole_home:
             target_type = "area_id" if "huiswijd" in self.resolver._area_name_map else "domain_all"
@@ -383,6 +385,7 @@ class DomoticaEngine:
             speech=speech,
             executed=False,
             execution_status="none",
+            semantic_slots=slots,
         )
 
     def parse(self, prompt: str) -> DomoticaAction:
@@ -391,7 +394,6 @@ class DomoticaEngine:
         action.raw_input = prompt
         clean_p = prompt.strip().lower() if prompt else ""
         action.normalized_input = clean_p
-        action.semantic_slots = self.classify_semantic_slots(prompt) if action.is_domotica else None
 
         tokens = clean_p.split()
 
