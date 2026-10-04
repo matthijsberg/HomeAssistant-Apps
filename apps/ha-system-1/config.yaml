@@ -1,6 +1,6 @@
 name: "HA System 1"
 description: "Local sub-50ms System 1 cognitive reflex layer, fast-path domotica controller, and OpenAI conversation bridge for Home Assistant"
-version: "0.1.4"
+version: "0.1.5"
 slug: "ha_system_1"
 url: "https://github.com/matthijsberg/HomeAssistant-Apps/tree/main/apps/ha-system-1"
 arch:

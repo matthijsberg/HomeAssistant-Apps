@@ -18,7 +18,7 @@ def test_config_yaml_manifest():
 
     assert cfg["name"] == "HA System 1"
     assert cfg["slug"] == "ha_system_1"
-    assert cfg["version"] == "0.1.4"
+    assert cfg["version"] == "0.1.5"
     assert cfg["arch"] == ["amd64"]
     assert cfg["startup"] == "services"
     assert cfg["boot"] == "auto"
