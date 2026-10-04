@@ -37,6 +37,8 @@ options:
   domotica_min_confidence: 0.70
   smarthome_min_confidence: 0.50
   fast_path_enabled: true
+  model_backend: "laya"
+  bge_model: "BAAI/bge-reranker-v2-m3"
   families:
     - name: "quick"
       criteria: "small talk, greetings, simple facts, unit conversions, general knowledge questions without tools or domotica control"
@@ -91,6 +93,8 @@ schema:
   domotica_min_confidence: "float(0.1,1.0)?"
   smarthome_min_confidence: "float(0.1,1.0)?"
   fast_path_enabled: "bool?"
+  model_backend: "list(laya|bge_reranker)?"
+  bge_model: "str?"
   model_quick: "str?"
   model_general: "str?"
   model_code: "str?"

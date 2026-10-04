@@ -50,6 +50,12 @@ configuration:
   fast_path_enabled:
     name: "Enable Zero-LLM Fast-Path Gate"
     description: "When enabled (default), evaluates simple imperatives in <0.5ms deterministically. When disabled, routes all domotica turns directly through the System 1 neural model (Laya or local SLM) on the Intel Arc XPU."
+  model_backend:
+    name: "System 1 Neural Model Backend"
+    description: "Select which neural engine runs on the Intel Arc XPU: 'laya' (ModernBERT/mmBERT cross-encoder) or 'bge_reranker' (BAAI/bge-reranker-v2-m3 multilingual cross-encoder)."
+  bge_model:
+    name: "BGE Reranker Checkpoint Model ID"
+    description: "Hugging Face model ID for BGE Reranker (default: BAAI/bge-reranker-v2-m3 or BAAI/bge-reranker-base)."
   families:
     name: "Task Families & Routing Profiles"
     description: "Configured task families with semantic criteria for Laya System 1 routing, target models, effort levels, token caps, temperatures, and thinking budgets."

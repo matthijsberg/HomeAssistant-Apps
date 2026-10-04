@@ -112,6 +112,95 @@ class MockRouter:
         }
 
 
+class BGERerankerRouter:
+    """BAAI/bge-reranker multilingual cross-encoder router."""
+
+    def __init__(self, model_name: str = "BAAI/bge-reranker-v2-m3", device: str = "cpu"):
+        self.model_name = model_name
+        self.device = device
+        self.loaded = [model_name]
+        self.tokenizer = None
+        self.model = None
+        self._init_model()
+
+    def _init_model(self) -> None:
+        import torch
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+        logger.info("Loading BGE Reranker model %s on %s...", self.model_name, self.device)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        self.model = AutoModelForSequenceClassification.from_pretrained(self.model_name)
+        if self.device == "xpu" and hasattr(torch, "xpu") and torch.xpu.is_available():
+            self.model = self.model.to("xpu")
+        else:
+            self.model = self.model.to("cpu")
+        self.model.eval()
+        logger.info("BGE Reranker model %s loaded successfully on %s.", self.model_name, self.device)
+
+    def predict(
+        self,
+        state: Union[str, Dict[str, Any]],
+        questions: Dict[str, Any],
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        import torch
+
+        if isinstance(state, str):
+            prompt = state
+        elif isinstance(state, dict):
+            prompt = str(state.get("request", ""))
+        else:
+            prompt = str(state)
+
+        answers: Dict[str, Any] = {}
+        for q_key, q_data in questions.items():
+            criteria = q_data.get("criteria", {})
+            if not criteria:
+                continue
+
+            cand_keys = list(criteria.keys())
+            pairs = [[prompt, criteria[k]] for k in cand_keys]
+
+            with torch.no_grad():
+                inputs = self.tokenizer(
+                    pairs,
+                    padding=True,
+                    truncation=True,
+                    return_tensors="pt",
+                    max_length=512,
+                )
+                if self.device == "xpu" and hasattr(torch, "xpu") and torch.xpu.is_available():
+                    inputs = {k: v.to("xpu") for k, v in inputs.items()}
+
+                scores = self.model(**inputs, return_dict=True).logits.view(-1).float()
+                probs = torch.softmax(scores, dim=-1).cpu().tolist()
+
+            prob_map = {k: round(p, 4) for k, p in zip(cand_keys, probs, strict=True)}
+            winner_idx = int(torch.argmax(scores).item())
+            winner_key = cand_keys[winner_idx]
+            winner_conf = round(probs[winner_idx], 4)
+
+            answers[q_key] = {
+                "choice": winner_key,
+                "answer": winner_key,
+                "confidence": winner_conf,
+                "answer_confidence": winner_conf,
+                "probabilities": prob_map,
+            }
+
+        return {
+            "answers": answers,
+            "model": self.model_name,
+            "routing": {
+                "model": "bge-multilingual",
+                "checkpoint": self.model_name,
+                "detection": {"language": "multilingual", "is_english": False},
+            },
+            "detection": {"language": "multilingual", "is_english": False},
+        }
+
+
 FOLLOWUP_MARKERS: Set[str] = {
     # Dutch reference markers (RT-04)
     "hem", "haar", "die", "dat", "deze", "ook", "nog", "hetzelfde", "ja", "nee",
@@ -317,32 +406,45 @@ class LayaRouterEngine:
             logger.warning("PyTorch not installed in current environment")
             self.device = actual_device
 
-        try:
-            import laya  # type: ignore
-            from laya import Router  # type: ignore
+        if getattr(self.config, "model_backend", "laya") == "bge_reranker":
+            try:
+                os.environ["HF_HOME"] = self.config.hf_home
+                self.router = BGERerankerRouter(model_name=self.config.bge_model, device=self.device)
+                self.loaded_checkpoints = [self.config.bge_model]
+                self.ready = True
+                logger.info("BGE Reranker backend initialized successfully: %s on %s", self.config.bge_model, self.device)
+            except Exception as e:
+                logger.warning("Could not load BGE Reranker (%s). Falling back to MockRouter for local testing.", e)
+                self.router = MockRouter([self.config.bge_model])
+                self.loaded_checkpoints = [self.config.bge_model]
+                self.ready = True
+        else:
+            try:
+                import laya  # type: ignore
+                from laya import Router  # type: ignore
 
-            self.laya_version = getattr(laya, "__version__", self.laya_version)
-            os.environ["HF_HOME"] = self.config.hf_home
+                self.laya_version = getattr(laya, "__version__", self.laya_version)
+                os.environ["HF_HOME"] = self.config.hf_home
 
-            logger.info("Preloading Laya checkpoints (%s) on device=%s ...", self.config.checkpoints, self.device)
-            # Instantiate router and preload specified checkpoints
-            self.router = Router(
-                device=self.device,
-                preload=True,
-                default=self.config.router_default,
-            )
-            self.loaded_checkpoints = getattr(self.router, "loaded", self.config.checkpoints)
-            self.ready = True
-            logger.info("Laya Router checkpoints successfully preloaded and ready: %s", self.loaded_checkpoints)
-        except ImportError as e:
-            logger.warning("Could not import laya (%s). Falling back to MockRouter for local testing.", e)
-            self.router = MockRouter(self.config.checkpoints)
-            self.loaded_checkpoints = list(self.config.checkpoints)
-            self.ready = True
-        except Exception as e:
-            logger.error("Failed to preload Laya Router checkpoints: %s", e, exc_info=True)
-            self.ready = False
-            raise
+                logger.info("Preloading Laya checkpoints (%s) on device=%s ...", self.config.checkpoints, self.device)
+                # Instantiate router and preload specified checkpoints
+                self.router = Router(
+                    device=self.device,
+                    preload=True,
+                    default=self.config.router_default,
+                )
+                self.loaded_checkpoints = getattr(self.router, "loaded", self.config.checkpoints)
+                self.ready = True
+                logger.info("Laya Router checkpoints successfully preloaded and ready: %s", self.loaded_checkpoints)
+            except ImportError as e:
+                logger.warning("Could not import laya (%s). Falling back to MockRouter for local testing.", e)
+                self.router = MockRouter(self.config.checkpoints)
+                self.loaded_checkpoints = list(self.config.checkpoints)
+                self.ready = True
+            except Exception as e:
+                logger.error("Failed to preload Laya Router checkpoints: %s", e, exc_info=True)
+                self.ready = False
+                raise
 
     def predict_locked(self, state: Dict[str, Any], questions: Dict[str, Any], **kwargs: Any) -> Dict[str, Any]:
         """Thread-safe forward-pass protecting Intel Arc XPU Level-Zero driver from concurrent deadlocks."""

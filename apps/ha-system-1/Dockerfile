@@ -38,7 +38,8 @@ RUN pip install --no-cache-dir \
     "laya[serve]==${LAYA_VERSION}" \
     fastapi \
     "uvicorn[standard]" \
-    pydantic
+    pydantic \
+    sentencepiece
 
 # Create persistent storage dir and app directory
 RUN mkdir -p /data/hf /usr/src/app

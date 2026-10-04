@@ -25,6 +25,8 @@ if [ -f "$OPTIONS_FILE" ]; then
     LAYA_REVISION=$(jq -r '.laya_revision // "main"' "$OPTIONS_FILE")
     API_KEY=$(jq -r '.api_key // ""' "$OPTIONS_FILE")
     LOG_LEVEL=$(jq -r '.log_level // "info"' "$OPTIONS_FILE")
+    MODEL_BACKEND=$(jq -r '.model_backend // "laya"' "$OPTIONS_FILE")
+    BGE_MODEL=$(jq -r '.bge_model // "BAAI/bge-reranker-v2-m3"' "$OPTIONS_FILE")
 else
     echo "No ${OPTIONS_FILE} found; using environment variables or defaults."
     DEVICE="${LAYA_DEVICE:-$DEVICE}"
@@ -34,6 +36,8 @@ else
     LAYA_REVISION="${LAYA_REVISION:-$LAYA_REVISION}"
     API_KEY="${LAYA_API_KEY:-$API_KEY}"
     LOG_LEVEL="${LAYA_LOG_LEVEL:-$LOG_LEVEL}"
+    MODEL_BACKEND="${LAYA_MODEL_BACKEND:-laya}"
+    BGE_MODEL="${LAYA_BGE_MODEL:-BAAI/bge-reranker-v2-m3}"
 fi
 
 export LAYA_DEVICE="$DEVICE"
@@ -43,6 +47,8 @@ export LAYA_ROUTER_DEFAULT="$ROUTER_DEFAULT"
 export LAYA_REVISION="$LAYA_REVISION"
 export LAYA_API_KEY="$API_KEY"
 export LAYA_LOG_LEVEL="$LOG_LEVEL"
+export LAYA_MODEL_BACKEND="$MODEL_BACKEND"
+export LAYA_BGE_MODEL="$BGE_MODEL"
 export HF_HOME="/data/hf"
 export NEO_CACHE_DIR="/data/neo_cache"
 export OCL_CACHE_DIR="/data/neo_cache"

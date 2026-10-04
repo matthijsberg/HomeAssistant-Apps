@@ -133,6 +133,8 @@ class AppConfig:
         domotica_min_confidence: float = 0.70,
         smarthome_min_confidence: float = 0.50,
         fast_path_enabled: bool = True,
+        model_backend: str = "laya",
+        bge_model: str = "BAAI/bge-reranker-v2-m3",
         families: Optional[Dict[str, FamilyConfig]] = None,
         model_quick: Optional[str] = None,
         model_general: Optional[str] = None,
@@ -154,6 +156,8 @@ class AppConfig:
         self.domotica_min_confidence = domotica_min_confidence
         self.smarthome_min_confidence = smarthome_min_confidence
         self.fast_path_enabled = fast_path_enabled
+        self.model_backend = model_backend
+        self.bge_model = bge_model
 
         if families is not None:
             self.families = dict(families)
@@ -255,6 +259,8 @@ class AppConfig:
             fast_path_enabled = fast_path_enabled_raw.lower() in ("true", "1", "yes")
         else:
             fast_path_enabled = bool(fast_path_enabled_raw)
+        model_backend = str(data.get("model_backend") or os.environ.get("LAYA_MODEL_BACKEND", "laya")).strip().lower()
+        bge_model = str(data.get("bge_model") or os.environ.get("LAYA_BGE_MODEL", "BAAI/bge-reranker-v2-m3")).strip()
 
         # Build families map
         loaded_families: Dict[str, FamilyConfig] = {}
@@ -344,5 +350,7 @@ class AppConfig:
             domotica_min_confidence=domotica_min_conf,
             smarthome_min_confidence=smarthome_min_conf,
             fast_path_enabled=fast_path_enabled,
+            model_backend=model_backend,
+            bge_model=bge_model,
             families=loaded_families,
         )
