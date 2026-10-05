@@ -134,16 +134,16 @@ def render_gui_html() -> str:
 <body class="bg-background text-on-surface antialiased font-body-sm min-h-screen flex flex-col selection:bg-primary-light selection:text-primary">
 
 <!-- TopNavBar -->
-<header class="flex justify-between items-center w-full px-space-md h-12 border-b border-surface-container-highest bg-surface-container-lowest z-40 shrink-0 sticky top-0">
-  <div class="flex items-center gap-space-lg">
-    <div class="flex items-center gap-2">
-      <span class="w-2.5 h-2.5 rounded-full bg-primary animate-pulse"></span>
-      <span class="text-headline-sm font-headline-sm font-semibold tracking-tight text-on-surface">HA System 1 // RouteTrace Console</span>
-      <span class="text-[10px] font-label-code-sm uppercase px-1.5 py-0.5 rounded border border-[#e5e5e4] bg-[#fafaf9] text-tertiary">v0.1.4 • Intel Arc XPU</span>
+<header class="flex justify-between items-center w-full px-3 sm:px-space-md h-12 border-b border-surface-container-highest bg-surface-container-lowest z-40 shrink-0 sticky top-0">
+  <div class="flex items-center gap-2 sm:gap-space-lg min-w-0">
+    <div class="flex items-center gap-2 min-w-0">
+      <span class="w-2.5 h-2.5 rounded-full bg-primary animate-pulse shrink-0"></span>
+      <span class="text-sm sm:text-headline-sm font-semibold tracking-tight text-on-surface truncate">HA System 1 <span class="hidden sm:inline">// RouteTrace Console</span></span>
+      <span class="hidden md:inline-block text-[10px] font-label-code-sm uppercase px-1.5 py-0.5 rounded border border-[#e5e5e4] bg-[#fafaf9] text-tertiary shrink-0">v0.1.5 • Intel Arc XPU</span>
     </div>
 
     <!-- View Switcher Tabs -->
-    <div class="hidden sm:inline-flex p-0.5 rounded bg-surface-container border border-surface-container-highest font-label-code-sm text-[11px]">
+    <div class="hidden sm:inline-flex p-0.5 rounded bg-surface-container border border-surface-container-highest font-label-code-sm text-[11px] shrink-0">
       <button id="tab-btn-eval" onclick="switchView('eval')" class="px-2.5 py-1 rounded bg-surface-container-lowest text-on-surface font-medium shadow-xs border border-surface-container-highest flex items-center gap-1.5 transition-all">
         <span class="w-1.5 h-1.5 rounded-full bg-primary"></span>
         <span>Trace &amp; Evaluation</span>
@@ -155,13 +155,14 @@ def render_gui_html() -> str:
     </div>
   </div>
 
-  <div class="flex items-center gap-space-sm">
-    <div class="flex items-center gap-1.5 bg-surface-container-low border border-surface-container-highest rounded px-2.5 py-1 text-label-code-sm text-secondary">
+  <div class="flex items-center gap-1.5 sm:gap-space-sm shrink-0">
+    <div class="hidden sm:flex items-center gap-1.5 bg-surface-container-low border border-surface-container-highest rounded px-2.5 py-1 text-label-code-sm text-secondary">
       <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
       <span class="text-secondary font-label-code-sm">Local XPU Online</span>
       <kbd class="ml-2 font-label-code-sm text-[10px] bg-surface-container-lowest px-1 rounded border border-surface-container-highest text-tertiary">Sub-50ms</kbd>
     </div>
-        <!-- Gear Wheel Settings Button in Top Right -->
+    <span class="sm:hidden w-2 h-2 rounded-full bg-emerald-500 mr-1" title="Local XPU Online"></span>
+    <!-- Gear Wheel Settings Button in Top Right -->
     <button id="gear-btn" onclick="switchView('config')" class="p-1.5 rounded hover:bg-surface-container-low transition-colors duration-150 text-secondary hover:text-primary cursor-pointer border border-transparent hover:border-surface-container-highest" title="System Settings / Flow Pipeline Configuration">
       <span class="material-symbols-outlined text-[20px]">settings</span>
     </button>
@@ -172,14 +173,14 @@ def render_gui_html() -> str:
 </header>
 
 <!-- Breadcrumb & Trace Context Bar -->
-<div class="w-full bg-surface-container-lowest border-b border-surface-container-highest px-space-md py-1.5 flex flex-wrap items-center justify-between text-label-code-sm gap-2">
-  <div class="flex items-center gap-2">
-    <span class="text-caption uppercase tracking-wider text-tertiary font-semibold">Active Topology:</span>
-    <span class="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-semibold">LOCAL FIRST (HA REFLEX)</span>
+<div class="w-full bg-surface-container-lowest border-b border-surface-container-highest px-3 sm:px-space-md py-1.5 flex flex-wrap items-center justify-between text-label-code-sm gap-1.5">
+  <div class="flex items-center gap-1.5 truncate">
+    <span class="text-caption uppercase tracking-wider text-tertiary font-semibold text-[10px]">Active Topology:</span>
+    <span class="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-semibold">LOCAL FIRST</span>
     <span class="text-tertiary">/</span>
-    <span id="active-trace-tag" class="text-on-surface font-label-code-sm">trace_live_eval</span>
+    <span id="active-trace-tag" class="text-on-surface font-label-code-sm truncate">trace_live_eval</span>
   </div>
-  <div class="flex items-center gap-3">
+  <div class="hidden sm:flex items-center gap-3">
     <span class="inline-flex items-center gap-1.5 text-label-code-sm text-secondary">
       <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>Hardware: <strong class="text-on-surface font-medium">Intel Arc iGPU (Level-Zero DRM)</strong>
     </span>
@@ -191,10 +192,10 @@ def render_gui_html() -> str:
 <!-- ========================================================================= -->
 <!-- VIEW 1: TRACE & EVALUATION CONSOLE (VERMILION EDITION)                    -->
 <!-- ========================================================================= -->
-<div id="view-eval" class="flex-1 flex overflow-hidden">
+<div id="view-eval" class="flex-1 flex flex-col lg:flex-row overflow-y-auto lg:overflow-hidden min-w-0">
 
   <!-- LEFT/CENTER WORKSPACE: Main Trace & Evaluation Inspector -->
-  <main class="flex-1 overflow-y-auto bg-surface p-space-md lg:p-space-lg space-y-space-md">
+  <main class="w-full flex-1 p-3 sm:p-space-md lg:p-space-lg space-y-3 sm:space-y-space-md overflow-y-visible lg:overflow-y-auto min-w-0">
 
     <!-- Top Query & Prompt Input Box -->
     <section class="bg-surface-container-lowest border border-[#e5e5e4] rounded-lg shadow-sm overflow-hidden">
@@ -217,6 +218,46 @@ def render_gui_html() -> str:
       </div>
 
       <div class="p-space-md">
+        <!-- Review Horizon: Goldfish (Stateless) vs Elephant (Contextual) -->
+        <div class="mb-3 p-2 rounded bg-[#f7f7f6] border border-[#e5e5e4] flex flex-wrap items-center justify-between gap-2">
+          <div class="flex items-center gap-2">
+            <span class="text-[11px] font-label-code-sm font-semibold uppercase tracking-wider text-secondary">Review Horizon:</span>
+            <div class="inline-flex p-0.5 rounded bg-white border border-[#e5e5e4] text-xs font-label-code-sm">
+              <button id="mode-goldfish-btn" onclick="setReviewMode('goldfish')" class="px-2.5 py-1 rounded font-semibold text-xs transition-all bg-primary text-white shadow-xs flex items-center gap-1 cursor-pointer">
+                <span>🐠</span> <span>Goldfish (Stateless)</span>
+              </button>
+              <button id="mode-elephant-btn" onclick="setReviewMode('elephant')" class="px-2.5 py-1 rounded font-medium text-xs transition-all text-secondary hover:text-on-surface flex items-center gap-1 cursor-pointer">
+                <span>🐘</span> <span>Elephant (Contextual)</span>
+              </button>
+            </div>
+          </div>
+          <div id="elephant-status-pill" class="hidden text-[11px] font-label-code-sm text-amber-800 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded flex items-center gap-1.5">
+            <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+            <span>Elephant Memory: <strong id="elephant-turn-count">0</strong> prior turns active</span>
+            <button onclick="clearElephantContext()" class="ml-1 text-[10px] text-amber-700 hover:text-amber-900 underline cursor-pointer">Clear</button>
+          </div>
+        </div>
+
+        <!-- Elephant Context Drawer (visible only in Elephant mode) -->
+        <div id="elephant-context-drawer" class="hidden mb-3 p-2.5 rounded bg-[#fdfaf5] border border-amber-200 text-xs font-label-code-sm space-y-2">
+          <div class="flex items-center justify-between text-amber-900 font-semibold border-b border-amber-200/60 pb-1">
+            <span class="flex items-center gap-1.5"><span>🐘</span> Conversational Turn Memory (Context Buffer)</span>
+            <span class="text-[10px] text-amber-700">Pronoun &amp; Anaphora binding enabled</span>
+          </div>
+          <div id="elephant-context-list" class="space-y-1 text-slate-700">
+            <div class="text-[11px] text-secondary italic">No prior turns yet. Run a command like "zet de spots in de serre aan" to seed memory, then follow up with "zet ze op 50%".</div>
+          </div>
+          <div class="flex flex-wrap items-center gap-1.5 pt-1.5 border-t border-amber-200/60">
+            <span class="text-[10px] text-amber-800 font-semibold uppercase">Multi-Turn Benchmarks:</span>
+            <button onclick="runElephantBenchmark(1)" class="px-2 py-0.5 rounded bg-amber-100/80 hover:bg-amber-100 text-amber-900 border border-amber-300 text-[11px] cursor-pointer">
+              Seq 1: Spots serre aan ➔ Zet ze op 50% ➔ Doe hem uit
+            </button>
+            <button onclick="runElephantBenchmark(2)" class="px-2 py-0.5 rounded bg-amber-100/80 hover:bg-amber-100 text-amber-900 border border-amber-300 text-[11px] cursor-pointer">
+              Seq 2: Woonkamer lampen aan ➔ Dim hem ➔ Uit
+            </button>
+          </div>
+        </div>
+
         <!-- Presets Ribbon -->
         <div class="mb-3 space-y-2">
           <div class="flex flex-wrap items-center gap-1.5">
@@ -437,7 +478,7 @@ def render_gui_html() -> str:
   </main>
 
   <!-- RIGHT RAIL: Vertical Dotted Timeline Pipeline -->
-  <aside class="w-72 lg:w-80 border-l border-surface-container-highest bg-surface-container-lowest flex flex-col shrink-0 overflow-y-auto">
+  <aside class="w-full lg:w-80 border-t lg:border-t-0 lg:border-l border-surface-container-highest bg-surface-container-lowest flex flex-col shrink-0">
     <div class="p-space-md border-b border-surface-container-highest flex items-center justify-between">
       <div>
         <span class="text-caption font-caption uppercase tracking-wider text-tertiary block font-medium">EXECUTION PIPELINE</span>

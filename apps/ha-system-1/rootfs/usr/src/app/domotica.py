@@ -16,7 +16,7 @@ safety gates (FP-01..FP-18):
 import logging
 import re
 import time
-from typing import Any, Dict, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from i18n import languages
 from pydantic import BaseModel, Field
@@ -33,6 +33,12 @@ ACTION_KEYWORDS: Dict[str, Tuple[str, ...]] = languages.get_aggregated_action_ke
 
 # FP-11 / D-5: Sensitive domains that MUST NEVER take the fast path
 SENSITIVE_DOMAINS = {"lock", "alarm_control_panel", "siren", "valve"}
+
+# Pronouns & anaphoric references resolved in Elephant review mode
+PRONOUN_TARGETS: Set[str] = {
+    "ze", "hem", "het", "die", "deze", "dezelfde", "daar", "die lamp", "die lampen", "deze lamp", "deze lampen",
+    "it", "them", "that", "those", "these", "the same", "there", "this light", "these lights",
+}
 
 
 class DomoticaAction(BaseModel):
@@ -57,6 +63,9 @@ class DomoticaAction(BaseModel):
     normalized_input: Optional[str] = Field(default=None, description="Normalized string evaluated")
     semantic_slots: Optional[Dict[str, Any]] = Field(default=None, description="Laya neural semantic slot predictions")
     gate_checks: Optional[Dict[str, Any]] = Field(default=None, description="Detailed trace of all gate checks evaluated")
+    review_mode: str = Field(default="goldfish", description="'goldfish' (stateless atomic) or 'elephant' (contextual multi-turn)")
+    context_applied: bool = Field(default=False, description="Whether previous turn context was resolved and applied")
+    context_source: Optional[Dict[str, Any]] = Field(default=None, description="Metadata describing entity or state carried over from previous turns")
 
 
 class DomoticaEngine:
@@ -103,13 +112,28 @@ class DomoticaEngine:
             logger.debug("Laya semantic slot extraction skipped: %s", exc)
             return None
 
-    def _parse_internal(self, prompt: str) -> DomoticaAction:
-        """Internal parser enforcing FP-01..FP-18."""
+    def _parse_internal(
+        self,
+        prompt: str,
+        recent_turns: Optional[List[Dict[str, Any]]] = None,
+        review_mode: str = "goldfish",
+    ) -> DomoticaAction:
+        """Internal parser enforcing FP-01..FP-18 with Goldfish/Elephant review modes."""
         if not prompt or not prompt.strip():
-            return DomoticaAction(is_domotica=False, confidence=0.0, rejected_reason="no_action")
+            return DomoticaAction(
+                is_domotica=False,
+                confidence=0.0,
+                rejected_reason="no_action",
+                review_mode=review_mode,
+            )
 
         if not self.fast_path_enabled:
-            return DomoticaAction(is_domotica=True, fast_path=False, rejected_reason="fast_path_disabled")
+            return DomoticaAction(
+                is_domotica=True,
+                fast_path=False,
+                rejected_reason="fast_path_disabled",
+                review_mode=review_mode,
+            )
 
         clean_p = prompt.strip().lower()
 
@@ -129,26 +153,55 @@ class DomoticaEngine:
 
         # If neither domain nor action is detected, this is NOT a domotica command
         if not detected_domain and not detected_action:
-            return DomoticaAction(is_domotica=False, confidence=0.0, rejected_reason="no_action")
+            return DomoticaAction(
+                is_domotica=False,
+                confidence=0.0,
+                rejected_reason="no_action",
+                review_mode=review_mode,
+            )
 
         # FP-03: Imperatives only. Questions never take the fast path
         if "?" in prompt:
-            return DomoticaAction(is_domotica=True, fast_path=False, domain=detected_domain, rejected_reason="question")
+            return DomoticaAction(
+                is_domotica=True,
+                fast_path=False,
+                domain=detected_domain,
+                rejected_reason="question",
+                review_mode=review_mode,
+            )
 
         leading_question_words = languages.get_aggregated_question_words()
         tokens = clean_p.split()
         if tokens and tokens[0] in leading_question_words:
-            return DomoticaAction(is_domotica=True, fast_path=False, domain=detected_domain, rejected_reason="question")
+            return DomoticaAction(
+                is_domotica=True,
+                fast_path=False,
+                domain=detected_domain,
+                rejected_reason="question",
+                review_mode=review_mode,
+            )
 
         # FP-04: Single intent only (reject multi-intent compound sentences)
         multi_intent_patterns = languages.get_aggregated_multi_intent_patterns()
         if any(re.search(pat, clean_p) for pat in multi_intent_patterns):
-            return DomoticaAction(is_domotica=True, fast_path=False, domain=detected_domain, rejected_reason="multi_intent")
+            return DomoticaAction(
+                is_domotica=True,
+                fast_path=False,
+                domain=detected_domain,
+                rejected_reason="multi_intent",
+                review_mode=review_mode,
+            )
 
         # FP-05: Negations, conditions, schedules never take fast path
         condition_patterns = languages.get_aggregated_condition_patterns()
         if any(re.search(pat, clean_p) for pat in condition_patterns):
-            return DomoticaAction(is_domotica=True, fast_path=False, domain=detected_domain, rejected_reason="conditional")
+            return DomoticaAction(
+                is_domotica=True,
+                fast_path=False,
+                domain=detected_domain,
+                rejected_reason="conditional",
+                review_mode=review_mode,
+            )
 
         # FP-11 / D-5: Sensitive devices never take the fast path
         if detected_domain in SENSITIVE_DOMAINS:
@@ -157,6 +210,7 @@ class DomoticaEngine:
                 fast_path=False,
                 domain=detected_domain,
                 rejected_reason="sensitive_target",
+                review_mode=review_mode,
             )
 
         # RG-03: If mirror is older than max_staleness_minutes, auto-sync and check
@@ -170,6 +224,7 @@ class DomoticaEngine:
                     domain=detected_domain,
                     service=detected_action,
                     rejected_reason="mirror_stale",
+                    review_mode=review_mode,
                 )
 
         # Normalize cover actions to standard cover domain services
@@ -179,9 +234,36 @@ class DomoticaEngine:
             elif detected_action in ("turn_off", "close_cover"):
                 detected_action = "close_cover"
 
-        # Not a domotica command if missing either domain or action
+        # If domain is not explicitly stated in prompt, check for Elephant context or pronoun references
+        if not detected_domain and detected_action:
+            if review_mode == "elephant" and recent_turns:
+                for turn in reversed(recent_turns):
+                    if turn.get("domain"):
+                        detected_domain = turn.get("domain")
+                        break
+            if not detected_domain:
+                tokens_set = set(clean_p.split())
+                if tokens_set & PRONOUN_TARGETS:
+                    return DomoticaAction(
+                        is_domotica=True,
+                        fast_path=False,
+                        rejected_reason="unknown_target",
+                        review_mode=review_mode,
+                    )
+                return DomoticaAction(
+                    is_domotica=False,
+                    confidence=0.1,
+                    rejected_reason="no_action",
+                    review_mode=review_mode,
+                )
+
         if not detected_domain or not detected_action:
-            return DomoticaAction(is_domotica=False, confidence=0.1, rejected_reason="no_action")
+            return DomoticaAction(
+                is_domotica=False,
+                confidence=0.1,
+                rejected_reason="no_action",
+                review_mode=review_mode,
+            )
 
         # 3. Extract Target Name (room or entity words)
         target_tokens = []
@@ -310,6 +392,39 @@ class DomoticaEngine:
                 domain=detected_domain,
                 target_name=extracted_target,
             )
+            if target_id:
+                overall_conf = res_conf
+
+        # Contextual Anaphora & Pronoun Resolution (Elephant Review Mode)
+        context_applied = False
+        context_source = None
+        if review_mode == "elephant" and recent_turns and not target_id:
+            tokens_set = set(clean_p.split())
+            is_anaphoric = (
+                bool(tokens_set & PRONOUN_TARGETS)
+                or (extracted_target and extracted_target in PRONOUN_TARGETS)
+                or not extracted_target
+            )
+            if is_anaphoric:
+                for idx, turn in enumerate(reversed(recent_turns)):
+                    prev_target_id = turn.get("target_id")
+                    if prev_target_id:
+                        target_id = prev_target_id
+                        target_type = turn.get("target_type", "entity_id")
+                        if not detected_domain or detected_domain == "light":
+                            detected_domain = turn.get("domain", detected_domain or "light")
+                        extracted_target = turn.get("target_name") or prev_target_id
+                        context_applied = True
+                        context_source = {
+                            "turn_offset": idx + 1,
+                            "target_id": prev_target_id,
+                            "target_type": target_type,
+                            "target_name": extracted_target,
+                            "domain": detected_domain,
+                            "reason": "anaphora_pronoun_resolution",
+                        }
+                        overall_conf = 0.96
+                        break
 
         if not target_id:
             # FP-09: Targets are NEVER invented. Route to LLM if target is unknown.
@@ -321,6 +436,9 @@ class DomoticaEngine:
                 target_name=extracted_target,
                 service_data=service_data,
                 rejected_reason="unknown_target",
+                review_mode=review_mode,
+                context_applied=context_applied,
+                context_source=context_source,
             )
 
         # 6. Format Standard OpenAI Tool Call for Home Assistant Assist (FP-13)
@@ -386,11 +504,19 @@ class DomoticaEngine:
             executed=False,
             execution_status="none",
             semantic_slots=slots,
+            review_mode=review_mode,
+            context_applied=context_applied,
+            context_source=context_source,
         )
 
-    def parse(self, prompt: str) -> DomoticaAction:
+    def parse(
+        self,
+        prompt: str,
+        recent_turns: Optional[List[Dict[str, Any]]] = None,
+        review_mode: str = "goldfish",
+    ) -> DomoticaAction:
         """Public parser returning DomoticaAction enriched with gate checks and semantic trace."""
-        action = self._parse_internal(prompt)
+        action = self._parse_internal(prompt, recent_turns=recent_turns, review_mode=review_mode)
         action.raw_input = prompt
         clean_p = prompt.strip().lower() if prompt else ""
         action.normalized_input = clean_p
@@ -404,12 +530,20 @@ class DomoticaEngine:
             "no_conditions": not any(re.search(pat, clean_p) for pat in languages.get_aggregated_condition_patterns()),
             "not_sensitive": action.domain not in SENSITIVE_DOMAINS if action.domain else True,
             "fast_path_qualified": action.fast_path,
+            "review_mode": review_mode,
+            "context_applied": action.context_applied,
         }
         return action
 
-    def route_and_execute(self, prompt: str, execute: bool = False) -> DomoticaAction:
+    def route_and_execute(
+        self,
+        prompt: str,
+        execute: bool = False,
+        recent_turns: Optional[List[Dict[str, Any]]] = None,
+        review_mode: str = "goldfish",
+    ) -> DomoticaAction:
         """Route natural language prompt and optionally execute service call against HA."""
-        action = self.parse(prompt)
+        action = self.parse(prompt, recent_turns=recent_turns, review_mode=review_mode)
         if execute and action.fast_path and action.domain and action.service and action.target_type and action.target_id:
             success, res = self.resolver.execute_service(
                 domain=action.domain,

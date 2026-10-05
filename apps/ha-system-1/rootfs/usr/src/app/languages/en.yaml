@@ -103,6 +103,8 @@ action_keywords:
     - enable
     - start
     - activate
+    - dim
+    - brighten
   turn_off:
     - "off"
     - turn off

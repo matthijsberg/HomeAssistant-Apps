@@ -252,6 +252,8 @@ def systemone_passthrough(body: Dict[str, Any]) -> JSONResponse:
 class DomoticaRouteRequest(BaseModel):
     prompt: str = Field(description="Natural language home automation command")
     execute: bool = Field(default=False, description="Whether to execute the resolved service against Home Assistant REST API")
+    recent_turns: Optional[List[Dict[str, Any]]] = Field(default=None, description="Prior conversational turns for Elephant context resolution")
+    review_mode: Optional[str] = Field(default="goldfish", description="'goldfish' (stateless isolation) or 'elephant' (contextual multi-turn)")
 
 
 class ChatCompletionRequest(BaseModel):
@@ -270,9 +272,14 @@ class ChatCompletionRequest(BaseModel):
     dependencies=[Depends(verify_api_key)],
 )
 def route_domotica_action(req: DomoticaRouteRequest) -> DomoticaAction:
-    """Fast-Path Domotica endpoint: resolves commands directly to HA actions in <50ms."""
+    """Fast-Path Domotica endpoint: resolves commands directly to HA actions in <50ms with Elephant/Goldfish review."""
     try:
-        return domotica_engine.route_and_execute(req.prompt, execute=req.execute)
+        return domotica_engine.route_and_execute(
+            req.prompt,
+            execute=req.execute,
+            recent_turns=req.recent_turns,
+            review_mode=req.review_mode or "goldfish",
+        )
     except Exception as exc:
         logger.exception("Domotica routing error for prompt: %s", req.prompt[:100])
         raise HTTPException(
