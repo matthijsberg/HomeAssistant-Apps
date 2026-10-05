@@ -531,7 +531,10 @@ def render_gui_html() -> str:
   <aside id="pipeline-rail" class="rail-collapsed border-l border-surface-container-highest bg-surface-container-lowest flex flex-col shrink-0 transition-all duration-300 ease-in-out z-30 select-none overflow-hidden">
     <div class="px-2 py-2.5 border-b border-surface-container-highest flex items-center justify-between min-h-[44px]">
       <div class="rail-text overflow-hidden pl-2">
-        <span class="text-caption font-caption uppercase tracking-wider text-tertiary block font-semibold text-[10px]">EXECUTION PIPELINE</span>
+        <div class="flex items-center gap-1.5">
+          <span class="text-caption font-caption uppercase tracking-wider text-tertiary block font-semibold text-[10px]">EXECUTION PIPELINE</span>
+          <span id="pipeline-status-badge" class="px-1.5 py-0.2 rounded text-[9px] font-label-code-sm bg-surface-container-low text-on-surface border border-surface-container-highest font-medium">STANDBY</span>
+        </div>
         <span id="pipeline-spans-count" class="text-label-code-md font-semibold text-on-surface block text-xs">5 Spans Defined</span>
       </div>
       <button id="rail-toggle-btn" onclick="togglePipelineRail()" class="p-1 rounded hover:bg-surface-container text-secondary hover:text-primary transition-colors cursor-pointer flex items-center justify-center w-8 h-8 shrink-0 mx-auto lg:ml-auto lg:mr-0" title="Toggle Pipeline Rail (Expand / Collapse)">
@@ -1282,6 +1285,12 @@ def render_gui_html() -> str:
   let currentReviewMode = 'goldfish';
   let elephantHistory = [];
 
+  function safeSetText(id, text) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = text;
+    return el;
+  }
+
   function setReviewMode(mode) {
     currentReviewMode = mode;
     const gfBtn = document.getElementById('mode-goldfish-btn');
@@ -1549,57 +1558,57 @@ def render_gui_html() -> str:
     const prompt = document.getElementById('prompt-input').value.trim();
 
     // Top badges
-    document.getElementById('badge-tokens').textContent = `${Math.ceil(prompt.length / 4)} tokens`;
+    safeSetText('badge-tokens', `${Math.ceil(prompt.length / 4)} tokens`);
     const detLang = (routing && routing.detection && routing.detection.language)
       ? (routing.detection.language === 'nl' ? 'Dutch nl-NL' : 'English en-US')
       : (domotica && domotica.raw_input ? 'Auto (NL/EN)' : 'Auto-detect');
-    document.getElementById('badge-lang').textContent = detLang;
+    safeSetText('badge-lang', detLang);
 
     // Telemetry micro pills
-    document.getElementById('telemetry-latency').textContent = `${wallMs} ms`;
-    document.getElementById('telemetry-checkpoint').textContent = isLocalHA
+    safeSetText('telemetry-latency', `${wallMs} ms`);
+    safeSetText('telemetry-checkpoint', isLocalHA
       ? (isFastPath ? 'regex-fast-gate' : 'bge-multilingual-xpu')
-      : ((routing && routing.checkpoint) ? routing.checkpoint : 'laya-edge');
-    document.getElementById('telemetry-temp').textContent = isLocalHA ? '0.00' : ((routing && routing.temperature !== undefined) ? routing.temperature : '0.20');
+      : ((routing && routing.checkpoint) ? routing.checkpoint : 'laya-edge'));
+    safeSetText('telemetry-temp', isLocalHA ? '0.00' : ((routing && routing.temperature !== undefined) ? routing.temperature : '0.20'));
 
     // Step 3 Header & Badges
-    const spanTitle = document.getElementById('span-title');
-    const spanDesc = document.getElementById('span-desc');
     const spanBadge = document.getElementById('span-badge');
-    const decisionModel = document.getElementById('decision-model');
-    const decisionEffort = document.getElementById('decision-effort');
-    const decisionBudget = document.getElementById('decision-budget');
-    const decisionConf = document.getElementById('decision-confidence');
 
     if (isLocalHA) {
       if (isFastPath) {
-        spanTitle.textContent = "Span 2 // Deterministic Fast-Path (0 Internet)";
-        spanDesc.textContent = "Zero-cloud edge execution: local smart home command resolved via deterministic fast-gate in <0.5ms.";
-        spanBadge.textContent = "0 INTERNET // FAST-PATH";
-        spanBadge.className = "px-2 py-0.5 rounded text-[11px] font-label-code-sm font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200";
-        decisionModel.textContent = `HassTurn${domotica.service === 'turn_off' ? 'Off' : 'On'} ➔ ${domotica.target_id}`;
-        decisionEffort.textContent = "< 0.5ms DETERMINISTIC";
+        safeSetText('span-title', "Span 2 // Deterministic Fast-Path (0 Internet)");
+        safeSetText('span-desc', "Zero-cloud edge execution: local smart home command resolved via deterministic fast-gate in <0.5ms.");
+        if (spanBadge) {
+          spanBadge.textContent = "0 INTERNET // FAST-PATH";
+          spanBadge.className = "px-2 py-0.5 rounded text-[11px] font-label-code-sm font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200";
+        }
+        safeSetText('decision-model', `HassTurn${domotica.service === 'turn_off' ? 'Off' : 'On'} ➔ ${domotica.target_id}`);
+        safeSetText('decision-effort', "< 0.5ms DETERMINISTIC");
       } else {
-        spanTitle.textContent = "Span 3 // System 1 Neural Resolver (0 Internet)";
-        spanDesc.textContent = "Resolved via local Intel Arc iGPU cross-encoder: semantic slot extraction directly generates HA tool call JSON.";
-        spanBadge.textContent = "0 INTERNET // LOCAL XPU";
-        spanBadge.className = "px-2 py-0.5 rounded text-[11px] font-label-code-sm font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200";
-        decisionModel.textContent = `System 1 Local ➔ ${domotica.target_id}`;
-        decisionEffort.textContent = "SUB-50ms NEURAL REFLEX";
+        safeSetText('span-title', "Span 3 // System 1 Neural Resolver (0 Internet)");
+        safeSetText('span-desc', "Resolved via local Intel Arc iGPU cross-encoder: semantic slot extraction directly generates HA tool call JSON.");
+        if (spanBadge) {
+          spanBadge.textContent = "0 INTERNET // LOCAL XPU";
+          spanBadge.className = "px-2 py-0.5 rounded text-[11px] font-label-code-sm font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200";
+        }
+        safeSetText('decision-model', `System 1 Local ➔ ${domotica.target_id}`);
+        safeSetText('decision-effort', "SUB-50ms NEURAL REFLEX");
       }
-      decisionBudget.textContent = "0 tokens (Zero-Cloud)";
-      decisionConf.textContent = `${Math.round((domotica.confidence || 0.98) * 100)}% (Verified)`;
+      safeSetText('decision-budget', "0 tokens (Zero-Cloud)");
+      safeSetText('decision-confidence', `${Math.round((domotica.confidence || 0.98) * 100)}% (Verified)`);
     } else {
       const famName = routing ? routing.family.toUpperCase() : 'GENERAL';
-      spanTitle.textContent = `Span 3 // Cloud Router Escalation: ${famName}`;
-      spanDesc.textContent = "Complex multi-domain or reasoning turn requiring upstream cloud intelligence.";
-      spanBadge.textContent = `CLOUD ESCALATION (${famName})`;
-      spanBadge.className = "px-2 py-0.5 rounded text-[11px] font-label-code-sm font-semibold bg-primary-light text-primary border border-primary-border";
+      safeSetText('span-title', `Span 3 // Cloud Router Escalation: ${famName}`);
+      safeSetText('span-desc', "Complex multi-domain or reasoning turn requiring upstream cloud intelligence.");
+      if (spanBadge) {
+        spanBadge.textContent = `CLOUD ESCALATION (${famName})`;
+        spanBadge.className = "px-2 py-0.5 rounded text-[11px] font-label-code-sm font-semibold bg-primary-light text-primary border border-primary-border";
+      }
 
-      decisionModel.textContent = routing ? routing.model : 'gemini-flash-latest';
-      decisionEffort.textContent = routing ? routing.effort.toUpperCase() : 'NORMAL';
-      decisionBudget.textContent = (routing && routing.thinking_budget !== null && routing.thinking_budget !== undefined) ? `${routing.thinking_budget} tokens` : 'Standard Budget';
-      decisionConf.textContent = `${Math.round(((routing ? routing.confidence.family : 0.85) * 100))}% (Neural Margin)`;
+      safeSetText('decision-model', routing ? routing.model : 'gemini-flash-latest');
+      safeSetText('decision-effort', routing ? routing.effort.toUpperCase() : 'NORMAL');
+      safeSetText('decision-budget', (routing && routing.thinking_budget !== null && routing.thinking_budget !== undefined) ? `${routing.thinking_budget} tokens` : 'Standard Budget');
+      safeSetText('decision-confidence', `${Math.round(((routing ? routing.confidence.family : 0.85) * 100))}% (Neural Margin)`);
     }
 
     // Probability Bars (Softmax Matrix) — ALWAYS FILLED WITH SIGNAL!
@@ -1671,37 +1680,45 @@ def render_gui_html() -> str:
     setCheckIcon('icon-chk-safe', chk.not_sensitive !== false);
 
     // Dispatcher / Endpoint preview
-    const ep = document.getElementById('dispatch-endpoint');
-    const speech = document.getElementById('dispatch-speech');
     const dispBadge = document.getElementById('dispatch-type-badge');
     const dispStatus = document.getElementById('dispatcher-status');
-    const btnExecLabel = document.getElementById('btn-execute-label');
 
     if (isLocalHA) {
-      dispBadge.textContent = "HA REST API (0 INTERNET)";
-      dispBadge.className = "px-1.5 py-0.5 text-[10px] font-label-code-sm rounded bg-emerald-50 text-emerald-800 border border-emerald-200 font-semibold";
-      ep.textContent = `POST /api/services/${domotica.domain}/${domotica.service} [target: ${domotica.target_id}]`;
-      speech.textContent = domotica.speech ? `"${domotica.speech}"` : '"Action executed against Home Assistant"';
-      dispStatus.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-emerald-600"></span><span class="text-emerald-700 font-bold">Local Action Ready (0 Internet)</span>';
-      btnExecLabel.textContent = "Execute Live against Home Assistant Core";
+      if (dispBadge) {
+        dispBadge.textContent = "HA REST API (0 INTERNET)";
+        dispBadge.className = "px-1.5 py-0.5 text-[10px] font-label-code-sm rounded bg-emerald-50 text-emerald-800 border border-emerald-200 font-semibold";
+      }
+      safeSetText('dispatch-endpoint', `POST /api/services/${domotica.domain}/${domotica.service} [target: ${domotica.target_id}]`);
+      safeSetText('dispatch-speech', domotica.speech ? `"${domotica.speech}"` : '"Action executed against Home Assistant"');
+      if (dispStatus) {
+        dispStatus.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-emerald-600"></span><span class="text-emerald-700 font-bold">Local Action Ready (0 Internet)</span>';
+      }
+      safeSetText('btn-execute-label', "Execute Live against Home Assistant Core");
     } else {
-      dispBadge.textContent = "UPSTREAM MODEL";
-      dispBadge.className = "px-1.5 py-0.5 text-[10px] font-label-code-sm rounded bg-purple-50 text-purple-800 border border-purple-200 font-semibold";
-      ep.textContent = `${routing ? routing.model : 'Cloud LLM'} via ${routing ? routing.provider : 'Provider'}`;
-      speech.textContent = '"Standard upstream reasoning and response generation."';
-      dispStatus.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-purple-600"></span><span>Routed Upstream</span>';
-      btnExecLabel.textContent = "Dispatch Prompt to Upstream Model";
+      if (dispBadge) {
+        dispBadge.textContent = "UPSTREAM MODEL";
+        dispBadge.className = "px-1.5 py-0.5 text-[10px] font-label-code-sm rounded bg-purple-50 text-purple-800 border border-purple-200 font-semibold";
+      }
+      safeSetText('dispatch-endpoint', `${routing ? routing.model : 'Cloud LLM'} via ${routing ? routing.provider : 'Provider'}`);
+      safeSetText('dispatch-speech', '"Standard upstream reasoning and response generation."');
+      if (dispStatus) {
+        dispStatus.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-purple-600"></span><span>Routed Upstream</span>';
+      }
+      safeSetText('btn-execute-label', "Dispatch Prompt to Upstream Model");
     }
 
     // Timeline rail updates
-    document.getElementById('time-span-1').textContent = '<0.1ms';
-    document.getElementById('time-span-2').textContent = isFastPath ? `${wallMs}ms` : 'Bypassed';
-    document.getElementById('time-span-3').textContent = isLocalHA ? (isFastPath ? '0ms' : `${wallMs}ms`) : `${(routing && routing.latency_ms ? routing.latency_ms.toFixed(1) : wallMs)}ms`;
-    document.getElementById('time-span-4').textContent = isLocalHA ? 'Direct HA' : ((routing && routing.needs_memory === false) ? 'Stripped' : 'Retained');
-    document.getElementById('time-span-5').textContent = isLocalHA ? 'Local JSON' : (routing ? routing.model : 'Cloud');
+    safeSetText('time-span-1', '<0.1ms');
+    safeSetText('time-span-2', isFastPath ? `${wallMs}ms` : 'Bypassed');
+    safeSetText('time-span-3', isLocalHA ? (isFastPath ? '0ms' : `${wallMs}ms`) : `${(routing && routing.latency_ms ? routing.latency_ms.toFixed(1) : wallMs)}ms`);
+    safeSetText('time-span-4', isLocalHA ? 'Direct HA' : ((routing && routing.needs_memory === false) ? 'Stripped' : 'Retained'));
+    safeSetText('time-span-5', isLocalHA ? 'Local JSON' : (routing ? routing.model : 'Cloud'));
 
-    document.getElementById('pipeline-status-badge').textContent = `COMPLETED (${wallMs}ms)`;
-    document.getElementById('pipeline-status-badge').className = "px-2 py-0.5 rounded text-[10px] font-label-code-sm bg-emerald-50 text-emerald-800 border border-emerald-200 font-semibold";
+    const pBadge = document.getElementById('pipeline-status-badge');
+    if (pBadge) {
+      pBadge.textContent = `COMPLETED (${wallMs}ms)`;
+      pBadge.className = "px-1.5 py-0.2 rounded text-[9px] font-label-code-sm bg-emerald-50 text-emerald-800 border border-emerald-200 font-semibold";
+    }
 
     // Raw JSON Telemetry update
     if (isLocalHA && domotica.openai_tool_call) {
@@ -1750,6 +1767,15 @@ def render_gui_html() -> str:
       el.textContent = 'close';
       el.className = 'material-symbols-outlined text-red-500 text-[14px]';
     }
+  }
+
+  function renderRawJson(data) {
+    if (!data) return;
+    const jsonStr = JSON.stringify(data, null, 2);
+    const rawBlock = document.getElementById('raw-json-block');
+    if (rawBlock) rawBlock.innerHTML = syntaxHighlightJson(jsonStr);
+    const traceSize = document.getElementById('json-trace-size');
+    if (traceSize) traceSize.textContent = (jsonStr.length / 1024).toFixed(2) + " KB";
   }
 
   function syntaxHighlightJson(json) {
