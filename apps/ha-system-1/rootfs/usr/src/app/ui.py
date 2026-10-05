@@ -262,20 +262,47 @@ def render_gui_html() -> str:
         </div>
 
         <!-- Elephant Context Drawer (visible only in Elephant mode) -->
-        <div id="elephant-context-drawer" class="hidden mb-3 p-2.5 rounded bg-[#fdfaf5] border border-amber-200 text-xs font-label-code-sm space-y-2">
-          <div class="flex items-center justify-between text-amber-900 font-semibold border-b border-amber-200/60 pb-1">
-            <span class="flex items-center gap-1.5"><span>🐘</span> Conversational Turn Memory (Context Buffer)</span>
-            <span class="text-[10px] text-amber-700">Pronoun &amp; Anaphora binding enabled</span>
+        <div id="elephant-context-drawer" class="hidden mb-3 p-3 rounded-lg bg-[#fdfaf5] border border-amber-300 text-xs font-label-code-sm space-y-2.5 shadow-xs">
+          <div class="flex items-center justify-between text-amber-950 font-semibold border-b border-amber-200/80 pb-1.5">
+            <span class="flex items-center gap-1.5 text-sm"><span>🐘</span> Conversational Turn Memory (Elephant Context)</span>
+            <div class="flex items-center gap-2">
+              <button onclick="toggleAddTurnForm()" class="px-2 py-0.5 rounded bg-amber-200/80 hover:bg-amber-200 text-amber-900 border border-amber-400/80 text-[11px] font-medium cursor-pointer flex items-center gap-1">
+                <span>+</span> <span>Define Custom Turn</span>
+              </button>
+              <button onclick="clearElephantContext()" class="text-[11px] text-amber-800 hover:text-amber-950 underline cursor-pointer">Clear Buffer</button>
+            </div>
           </div>
-          <div id="elephant-context-list" class="space-y-1 text-slate-700">
-            <div class="text-[11px] text-secondary italic">No prior turns yet. Run a command like "zet de spots in de serre aan" to seed memory, then follow up with "zet ze op 50%".</div>
+
+          <!-- Inline Form to Manually Inject a Custom Turn -->
+          <div id="add-turn-form" class="hidden p-2.5 rounded bg-white border border-amber-300 space-y-2">
+            <div class="text-[11px] font-semibold text-amber-900">Define Historical Turn:</div>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <input id="new-turn-prompt" type="text" placeholder="Prompt (e.g. zet spots serre aan)" class="p-1.5 rounded border border-[#e5e5e4] text-xs font-label-code-sm focus:outline-none focus:border-amber-500" />
+              <input id="new-turn-target" type="text" placeholder="Target Entity (e.g. light.serre_spots_dimmer)" class="p-1.5 rounded border border-[#e5e5e4] text-xs font-label-code-sm focus:outline-none focus:border-amber-500" />
+              <div class="flex items-center gap-1.5">
+                <select id="new-turn-domain" class="p-1.5 rounded border border-[#e5e5e4] text-xs font-label-code-sm bg-white focus:outline-none focus:border-amber-500 flex-1">
+                  <option value="light">light</option>
+                  <option value="climate">climate</option>
+                  <option value="cover">cover</option>
+                  <option value="switch">switch</option>
+                </select>
+                <button onclick="saveCustomTurn()" class="px-3 py-1.5 rounded bg-amber-600 hover:bg-amber-700 text-white font-medium text-xs cursor-pointer">Add</button>
+                <button onclick="toggleAddTurnForm()" class="px-2 py-1.5 rounded bg-zinc-100 hover:bg-zinc-200 text-zinc-700 text-xs cursor-pointer">✕</button>
+              </div>
+            </div>
           </div>
-          <div class="flex flex-wrap items-center gap-1.5 pt-1.5 border-t border-amber-200/60">
-            <span class="text-[10px] text-amber-800 font-semibold uppercase">Multi-Turn Benchmarks:</span>
-            <button onclick="runElephantBenchmark(1)" class="px-2 py-0.5 rounded bg-amber-100/80 hover:bg-amber-100 text-amber-900 border border-amber-300 text-[11px] cursor-pointer">
+
+          <!-- Active Turn List -->
+          <div id="elephant-context-list" class="space-y-1.5 text-slate-700">
+            <div class="text-[11px] text-secondary italic">No prior turns yet. Run a command or click "+ Define Custom Turn" above to seed memory.</div>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-1.5 pt-1.5 border-t border-amber-200/80">
+            <span class="text-[10px] text-amber-800 font-semibold uppercase">Multi-Turn Presets:</span>
+            <button onclick="runElephantBenchmark(1)" class="px-2 py-0.5 rounded bg-amber-100/90 hover:bg-amber-200 text-amber-900 border border-amber-300 text-[11px] cursor-pointer">
               Seq 1: Spots serre aan ➔ Zet ze op 50% ➔ Doe hem uit
             </button>
-            <button onclick="runElephantBenchmark(2)" class="px-2 py-0.5 rounded bg-amber-100/80 hover:bg-amber-100 text-amber-900 border border-amber-300 text-[11px] cursor-pointer">
+            <button onclick="runElephantBenchmark(2)" class="px-2 py-0.5 rounded bg-amber-100/90 hover:bg-amber-200 text-amber-900 border border-amber-300 text-[11px] cursor-pointer">
               Seq 2: Woonkamer lampen aan ➔ Dim hem ➔ Uit
             </button>
           </div>
@@ -1252,6 +1279,109 @@ def render_gui_html() -> str:
   let lastModelDecision = null;
   let currentRawJson = null;
   let railExpanded = false;
+  let currentReviewMode = 'goldfish';
+  let elephantHistory = [];
+
+  function setReviewMode(mode) {
+    currentReviewMode = mode;
+    const gfBtn = document.getElementById('mode-goldfish-btn');
+    const elBtn = document.getElementById('mode-elephant-btn');
+    const elPill = document.getElementById('elephant-status-pill');
+    const elDrawer = document.getElementById('elephant-context-drawer');
+
+    if (mode === 'goldfish') {
+      gfBtn.className = 'px-2.5 py-1 rounded font-semibold text-xs transition-all bg-primary text-white shadow-xs flex items-center gap-1 cursor-pointer';
+      elBtn.className = 'px-2.5 py-1 rounded font-medium text-xs transition-all text-secondary hover:text-on-surface flex items-center gap-1 cursor-pointer';
+      if (elPill) elPill.classList.add('hidden');
+      if (elDrawer) elDrawer.classList.add('hidden');
+    } else {
+      gfBtn.className = 'px-2.5 py-1 rounded font-medium text-xs transition-all text-secondary hover:text-on-surface flex items-center gap-1 cursor-pointer';
+      elBtn.className = 'px-2.5 py-1 rounded font-semibold text-xs transition-all bg-amber-600 text-white shadow-xs flex items-center gap-1 cursor-pointer';
+      if (elPill) elPill.classList.remove('hidden');
+      if (elDrawer) elDrawer.classList.remove('hidden');
+      renderElephantHistory();
+    }
+  }
+
+  function clearElephantContext() {
+    elephantHistory = [];
+    renderElephantHistory();
+  }
+
+  function renderElephantHistory() {
+    const countEl = document.getElementById('elephant-turn-count');
+    if (countEl) countEl.textContent = elephantHistory.length;
+    const listEl = document.getElementById('elephant-context-list');
+    if (!listEl) return;
+    if (elephantHistory.length === 0) {
+      listEl.innerHTML = '<div class="text-[11px] text-secondary italic">No prior turns yet. Run a command or click "+ Define Custom Turn" above to seed memory.</div>';
+      return;
+    }
+    listEl.innerHTML = elephantHistory.map((t, i) => `
+      <div class="flex items-center justify-between bg-white px-2.5 py-1.5 rounded border border-amber-300/80 text-[11px] shadow-2xs">
+        <div class="flex items-center gap-2 truncate">
+          <span class="px-1.5 py-0.2 rounded bg-amber-100 text-amber-900 font-bold text-[10px]">T${i+1}</span>
+          <span class="font-medium text-on-surface truncate">"${t.prompt || t.raw_input || ''}"</span>
+          <span class="text-tertiary">➔</span>
+          <code class="text-amber-900 font-semibold px-1 rounded bg-amber-50 border border-amber-200">${t.target_id || t.domain || 'none'}</code>
+        </div>
+        <div class="flex items-center gap-1.5 shrink-0">
+          <span class="text-[10px] text-secondary font-mono">(${t.domain || 'action'})</span>
+          <button onclick="removeElephantTurn(${i})" class="text-zinc-400 hover:text-red-600 text-xs px-1 cursor-pointer" title="Remove this turn">✕</button>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  function removeElephantTurn(index) {
+    elephantHistory.splice(index, 1);
+    renderElephantHistory();
+  }
+
+  function toggleAddTurnForm() {
+    const form = document.getElementById('add-turn-form');
+    if (form) form.classList.toggle('hidden');
+  }
+
+  function saveCustomTurn() {
+    const promptInput = document.getElementById('new-turn-prompt');
+    const targetInput = document.getElementById('new-turn-target');
+    const domainSelect = document.getElementById('new-turn-domain');
+
+    const prompt = (promptInput ? promptInput.value : '').trim();
+    const target_id = (targetInput ? targetInput.value : '').trim();
+    const domain = domainSelect ? domainSelect.value : 'light';
+
+    if (!target_id) {
+      alert("Please provide at least a Target Entity ID (e.g. light.serre_spots_dimmer)");
+      return;
+    }
+
+    elephantHistory.push({
+      prompt: prompt || `Command targeting ${target_id}`,
+      target_id: target_id,
+      target_type: "entity_id",
+      target_name: target_id.replace(/^.*\\./, '').replace(/_/g, ' '),
+      domain: domain,
+      timestamp: new Date().toLocaleTimeString()
+    });
+
+    if (promptInput) promptInput.value = '';
+    if (targetInput) targetInput.value = '';
+    toggleAddTurnForm();
+    renderElephantHistory();
+  }
+
+  async function runElephantBenchmark(seqId) {
+    setReviewMode('elephant');
+    clearElephantContext();
+    const seq1 = ["zet de spots in de serre aan", "zet ze op 50%", "doe hem weer uit"];
+    const seq2 = ["doe de lamp in de woonkamer aan", "dim hem naar 30%", "zet hem uit"];
+    const steps = seqId === 1 ? seq1 : seq2;
+
+    document.getElementById('prompt-input').value = steps[0];
+    await evaluateTurn();
+  }
 
   function togglePipelineRail(forceState) {
     const rail = document.getElementById('pipeline-rail');
@@ -1347,21 +1477,35 @@ def render_gui_html() -> str:
       const controller = new AbortController();
       const abortTimer = setTimeout(() => controller.abort(), 45000);
 
-      // 1. Evaluate Fast-Path Domotica Engine
+      // 1. Evaluate Domotica Engine (Fast-Path or Local System 1 Neural Resolution)
+      const domoticaPayload = {
+        prompt,
+        execute: false,
+        review_mode: currentReviewMode,
+        recent_turns: currentReviewMode === 'elephant' ? elephantHistory : []
+      };
+
       const domoticaData = await fetch('./v1/domotica/route', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, execute: false }),
+        body: JSON.stringify(domoticaPayload),
         signal: controller.signal
       }).then(r => r.ok ? r.json() : null).catch(() => null);
 
-      // 2. Evaluate Model Router Engine ONLY if not already fast-path resolved to HA
+      // 2. Determine if this resolved directly to a Local Home Assistant Action (0 Internet)
+      const isLocalHA = Boolean(domoticaData && domoticaData.is_domotica && domoticaData.target_id);
+
+      // Only query upstream Cloud Model Router if NOT a resolved local HA command
       let routeData = null;
-      if (!domoticaData || !domoticaData.fast_path) {
+      if (!isLocalHA) {
         routeData = await fetch('./v1/route', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt, recent_turns: [], question_set: 'hermes-v1' }),
+          body: JSON.stringify({
+            prompt,
+            recent_turns: currentReviewMode === 'elephant' ? elephantHistory : [],
+            question_set: 'hermes-v1'
+          }),
           signal: controller.signal
         }).then(r => r.ok ? r.json() : null).catch(() => null);
       }
@@ -1374,6 +1518,21 @@ def render_gui_html() -> str:
       lastDomoticaAction = domoticaData;
       lastModelDecision = routeData;
 
+      // In Elephant mode, automatically record the turn so next turn can bind anaphora/pronouns!
+      if (currentReviewMode === 'elephant') {
+        elephantHistory.push({
+          prompt: prompt,
+          target_id: domoticaData ? domoticaData.target_id : null,
+          target_type: domoticaData ? domoticaData.target_type : null,
+          target_name: domoticaData ? domoticaData.target_name : null,
+          domain: domoticaData ? domoticaData.domain : null,
+          model: routeData ? routeData.family : null,
+          timestamp: new Date().toLocaleTimeString()
+        });
+        if (elephantHistory.length > 6) elephantHistory.shift();
+        renderElephantHistory();
+      }
+
       renderPipelineResults(domoticaData, routeData, wallMs);
       timing.textContent = `Evaluation complete in ${wallMs} ms`;
     } catch (e) {
@@ -1385,8 +1544,8 @@ def render_gui_html() -> str:
   }
 
   function renderPipelineResults(domotica, routing, wallMs) {
-    const isDomotica = domotica && domotica.is_domotica;
-    const isFastPath = domotica && domotica.fast_path;
+    const isLocalHA = Boolean(domotica && domotica.is_domotica && domotica.target_id);
+    const isFastPath = Boolean(domotica && domotica.fast_path && domotica.target_id);
     const prompt = document.getElementById('prompt-input').value.trim();
 
     // Top badges
@@ -1398,8 +1557,10 @@ def render_gui_html() -> str:
 
     // Telemetry micro pills
     document.getElementById('telemetry-latency').textContent = `${wallMs} ms`;
-    document.getElementById('telemetry-checkpoint').textContent = (routing && routing.checkpoint) ? routing.checkpoint : 'laya-edge';
-    document.getElementById('telemetry-temp').textContent = (routing && routing.temperature !== undefined) ? routing.temperature : '0.00';
+    document.getElementById('telemetry-checkpoint').textContent = isLocalHA
+      ? (isFastPath ? 'regex-fast-gate' : 'bge-multilingual-xpu')
+      : ((routing && routing.checkpoint) ? routing.checkpoint : 'laya-edge');
+    document.getElementById('telemetry-temp').textContent = isLocalHA ? '0.00' : ((routing && routing.temperature !== undefined) ? routing.temperature : '0.20');
 
     // Step 3 Header & Badges
     const spanTitle = document.getElementById('span-title');
@@ -1410,33 +1571,63 @@ def render_gui_html() -> str:
     const decisionBudget = document.getElementById('decision-budget');
     const decisionConf = document.getElementById('decision-confidence');
 
-    if (isFastPath) {
-      spanTitle.textContent = "Span 2 & 3 // Home Assistant Local Reflex";
-      spanDesc.textContent = "Zero-cloud edge execution: local smart home command resolved without internet latency or token costs.";
-      spanBadge.textContent = "LOCAL HA DIRECT";
-      spanBadge.className = "px-2 py-0.5 rounded text-[11px] font-label-code-sm font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200";
-
-      decisionModel.textContent = "Home Assistant Core API";
-      decisionEffort.textContent = "INSTANT REFLEX";
+    if (isLocalHA) {
+      if (isFastPath) {
+        spanTitle.textContent = "Span 2 // Deterministic Fast-Path (0 Internet)";
+        spanDesc.textContent = "Zero-cloud edge execution: local smart home command resolved via deterministic fast-gate in <0.5ms.";
+        spanBadge.textContent = "0 INTERNET // FAST-PATH";
+        spanBadge.className = "px-2 py-0.5 rounded text-[11px] font-label-code-sm font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200";
+        decisionModel.textContent = `HassTurn${domotica.service === 'turn_off' ? 'Off' : 'On'} ➔ ${domotica.target_id}`;
+        decisionEffort.textContent = "< 0.5ms DETERMINISTIC";
+      } else {
+        spanTitle.textContent = "Span 3 // System 1 Neural Resolver (0 Internet)";
+        spanDesc.textContent = "Resolved via local Intel Arc iGPU cross-encoder: semantic slot extraction directly generates HA tool call JSON.";
+        spanBadge.textContent = "0 INTERNET // LOCAL XPU";
+        spanBadge.className = "px-2 py-0.5 rounded text-[11px] font-label-code-sm font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200";
+        decisionModel.textContent = `System 1 Local ➔ ${domotica.target_id}`;
+        decisionEffort.textContent = "SUB-50ms NEURAL REFLEX";
+      }
       decisionBudget.textContent = "0 tokens (Zero-Cloud)";
-      decisionConf.textContent = `${Math.round((domotica.confidence || 0.99) * 100)}% (Deterministic)`;
+      decisionConf.textContent = `${Math.round((domotica.confidence || 0.98) * 100)}% (Verified)`;
     } else {
       const famName = routing ? routing.family.toUpperCase() : 'GENERAL';
-      spanTitle.textContent = `Span 3 // System 1 Processing (${famName})`;
-      spanDesc.textContent = "High-throughput neural intent classification and model calibration running on Intel Arc XPU.";
-      spanBadge.textContent = famName;
+      spanTitle.textContent = `Span 3 // Cloud Router Escalation: ${famName}`;
+      spanDesc.textContent = "Complex multi-domain or reasoning turn requiring upstream cloud intelligence.";
+      spanBadge.textContent = `CLOUD ESCALATION (${famName})`;
       spanBadge.className = "px-2 py-0.5 rounded text-[11px] font-label-code-sm font-semibold bg-primary-light text-primary border border-primary-border";
 
-      decisionModel.textContent = routing ? routing.model : 'gemini-3.5-flash-lite';
+      decisionModel.textContent = routing ? routing.model : 'gemini-flash-latest';
       decisionEffort.textContent = routing ? routing.effort.toUpperCase() : 'NORMAL';
       decisionBudget.textContent = (routing && routing.thinking_budget !== null && routing.thinking_budget !== undefined) ? `${routing.thinking_budget} tokens` : 'Standard Budget';
       decisionConf.textContent = `${Math.round(((routing ? routing.confidence.family : 0.85) * 100))}% (Neural Margin)`;
     }
 
-    // Probability Bars
+    // Probability Bars (Softmax Matrix) — ALWAYS FILLED WITH SIGNAL!
     const distContainer = document.getElementById('distribution-bars');
     distContainer.innerHTML = '';
-    if (routing && routing.probabilities) {
+
+    if (isLocalHA) {
+      const haPct = Math.round((domotica.confidence || 0.98) * 100);
+      distContainer.innerHTML = `
+        <div>
+          <div class="flex justify-between mb-1">
+            <span class="text-emerald-700 font-bold">SMARTHOME (LOCAL REFLEX) ★</span>
+            <span class="text-emerald-700 font-bold">${haPct}%</span>
+          </div>
+          <div class="w-full bg-[#e8e8e7] h-1.5 rounded-full overflow-hidden">
+            <div class="bg-emerald-600 h-full rounded-full" style="width: ${haPct}%;"></div>
+          </div>
+        </div>
+        <div>
+          <div class="flex justify-between mb-1 text-[11px]">
+            <span class="text-secondary font-medium">CLOUD ROUTING (BYPASSED)</span>
+            <span class="text-secondary font-medium">0%</span>
+          </div>
+          <div class="w-full bg-[#e8e8e7] h-1.5 rounded-full overflow-hidden">
+            <div class="bg-zinc-400 h-full rounded-full" style="width: 0%;"></div>
+          </div>
+        </div>`;
+    } else if (routing && routing.probabilities) {
       for (const [cand, p] of Object.entries(routing.probabilities)) {
         const pct = Math.round(p * 100);
         const isWinner = (cand === routing.family);
@@ -1453,29 +1644,21 @@ def render_gui_html() -> str:
             </div>
           </div>`;
       }
-    } else if (isFastPath) {
-      distContainer.innerHTML = `
-        <div>
-          <div class="flex justify-between mb-1">
-            <span class="text-emerald-700 font-bold">SMARTHOME (LOCAL REFLEX) ★</span>
-            <span class="text-emerald-700 font-bold">100%</span>
-          </div>
-          <div class="w-full bg-[#e8e8e7] h-1.5 rounded-full overflow-hidden">
-            <div class="bg-emerald-600 h-full rounded-full" style="width: 100%;"></div>
-          </div>
-        </div>`;
     }
 
-    // Extracted Semantic Slots
+    // Extracted Semantic Slots / Elephant Context Badges
     const slotsCont = document.getElementById('semantic-slots-container');
     slotsCont.innerHTML = '';
     const slots = (domotica && domotica.semantic_slots) || {};
+    if (domotica && domotica.context_applied) {
+      slotsCont.innerHTML += `<span class="px-2 py-0.5 text-[10px] font-label-code-sm rounded bg-amber-100 text-amber-900 border border-amber-300 font-semibold">🐘 Anaphora Bound: ${domotica.target_id}</span>`;
+    }
     if (slots.room || slots.device_type || slots.scope) {
       if (slots.room) slotsCont.innerHTML += `<span class="px-1.5 py-0.5 text-[10px] font-label-code-sm rounded bg-surface-container-lowest border border-[#e5e5e4] text-on-surface">room: <strong>${slots.room}</strong></span>`;
       if (slots.device_type) slotsCont.innerHTML += `<span class="px-1.5 py-0.5 text-[10px] font-label-code-sm rounded bg-surface-container-lowest border border-[#e5e5e4] text-on-surface">device: <strong>${slots.device_type}</strong></span>`;
       if (slots.scope) slotsCont.innerHTML += `<span class="px-1.5 py-0.5 text-[10px] font-label-code-sm rounded bg-surface-container-lowest border border-[#e5e5e4] text-on-surface">scope: <strong>${slots.scope}</strong></span>`;
-    } else if (isFastPath && domotica.target_id) {
-      slotsCont.innerHTML = `<span class="px-1.5 py-0.5 text-[10px] font-label-code-sm rounded bg-emerald-50 text-emerald-800 border border-emerald-200">target: <strong>${domotica.target_id}</strong> (${domotica.target_type})</span>`;
+    } else if (isLocalHA) {
+      slotsCont.innerHTML += `<span class="px-1.5 py-0.5 text-[10px] font-label-code-sm rounded bg-emerald-50 text-emerald-800 border border-emerald-200">target: <strong>${domotica.target_id}</strong> (${domotica.target_type})</span>`;
     } else {
       slotsCont.innerHTML = '<span class="px-1.5 py-0.5 text-[10px] font-label-code-sm rounded bg-surface-container-lowest border border-[#e5e5e4] text-secondary">None (Abstract Intent)</span>';
     }
@@ -1494,12 +1677,12 @@ def render_gui_html() -> str:
     const dispStatus = document.getElementById('dispatcher-status');
     const btnExecLabel = document.getElementById('btn-execute-label');
 
-    if (isFastPath) {
-      dispBadge.textContent = "HA REST API";
+    if (isLocalHA) {
+      dispBadge.textContent = "HA REST API (0 INTERNET)";
       dispBadge.className = "px-1.5 py-0.5 text-[10px] font-label-code-sm rounded bg-emerald-50 text-emerald-800 border border-emerald-200 font-semibold";
       ep.textContent = `POST /api/services/${domotica.domain}/${domotica.service} [target: ${domotica.target_id}]`;
       speech.textContent = domotica.speech ? `"${domotica.speech}"` : '"Action executed against Home Assistant"';
-      dispStatus.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-emerald-600"></span><span>Qualified (Sub-50ms)</span>';
+      dispStatus.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-emerald-600"></span><span class="text-emerald-700 font-bold">Local Action Ready (0 Internet)</span>';
       btnExecLabel.textContent = "Execute Live against Home Assistant Core";
     } else {
       dispBadge.textContent = "UPSTREAM MODEL";
@@ -1513,49 +1696,48 @@ def render_gui_html() -> str:
     // Timeline rail updates
     document.getElementById('time-span-1').textContent = '<0.1ms';
     document.getElementById('time-span-2').textContent = isFastPath ? `${wallMs}ms` : 'Bypassed';
-    document.getElementById('time-span-3').textContent = isFastPath ? '0ms' : `${(routing && routing.latency_ms ? routing.latency_ms.toFixed(1) : wallMs)}ms`;
-    document.getElementById('time-span-4').textContent = (routing && routing.needs_memory === false) ? 'Stripped' : 'Retained';
-    document.getElementById('time-span-5').textContent = isFastPath ? 'Direct HA' : (routing ? routing.model : 'Cloud');
+    document.getElementById('time-span-3').textContent = isLocalHA ? (isFastPath ? '0ms' : `${wallMs}ms`) : `${(routing && routing.latency_ms ? routing.latency_ms.toFixed(1) : wallMs)}ms`;
+    document.getElementById('time-span-4').textContent = isLocalHA ? 'Direct HA' : ((routing && routing.needs_memory === false) ? 'Stripped' : 'Retained');
+    document.getElementById('time-span-5').textContent = isLocalHA ? 'Local JSON' : (routing ? routing.model : 'Cloud');
 
     document.getElementById('pipeline-status-badge').textContent = `COMPLETED (${wallMs}ms)`;
     document.getElementById('pipeline-status-badge').className = "px-2 py-0.5 rounded text-[10px] font-label-code-sm bg-emerald-50 text-emerald-800 border border-emerald-200 font-semibold";
 
     // Raw JSON Telemetry update
-    currentRawJson = {
-      trace_id: "tr-" + Math.random().toString(36).substring(2, 10),
-      timestamp: new Date().toISOString(),
-      latency_ms: parseFloat(wallMs),
-      spans: {
-        input_normalization: {
-          raw_text: prompt,
-          normalized_text: (routing && routing.normalized_input) || prompt.trim().toLowerCase(),
-          locale: detLang
-        },
-        code_processing: {
-          fast_path_qualified: isFastPath,
-          rejected_reason: domotica ? domotica.rejected_reason : null,
-          target_resolved: domotica ? domotica.target_id : null
-        },
-        system1_processing: routing ? {
-          execution_device: "intel-arc-xpu-drm",
-          checkpoint: routing.checkpoint,
-          latency_ms: routing.latency_ms,
-          winner_family: routing.family,
-          confidence: routing.confidence,
-          distribution: routing.probabilities,
-          slots: domotica ? domotica.semantic_slots : null
-        } : null,
-        tool_dispatch: {
-          target: isFastPath ? `HA Core /services/${domotica.domain}/${domotica.service}` : (routing ? routing.model : "LLM"),
-          speech: domotica ? domotica.speech : null,
-          tool_call: domotica ? domotica.openai_tool_call : null
+    if (isLocalHA && domotica.openai_tool_call) {
+      currentRawJson = {
+        system_1_reflex: {
+          execution_target: "home_assistant_local_api",
+          network_latency: "0ms (0 internet)",
+          openai_tool_call: domotica.openai_tool_call,
+          service_call: {
+            domain: domotica.domain,
+            service: domotica.service,
+            target_type: domotica.target_type,
+            target_id: domotica.target_id,
+            service_data: domotica.service_data
+          },
+          speech_confirmation: domotica.speech,
+          confidence: domotica.confidence,
+          review_mode: domotica.review_mode,
+          context_applied: domotica.context_applied,
+          context_source: domotica.context_source
         }
-      }
-    };
-
-    const jsonStr = JSON.stringify(currentRawJson, null, 2);
-    document.getElementById('raw-json-block').innerHTML = syntaxHighlightJson(jsonStr);
-    document.getElementById('json-trace-size').textContent = (jsonStr.length / 1024).toFixed(2) + " KB";
+      };
+    } else {
+      currentRawJson = {
+        system_1_routing: {
+          family: routing ? routing.family : 'general',
+          effort: routing ? routing.effort : 'normal',
+          model: routing ? routing.model : 'gemini-flash-latest',
+          thinking_budget: routing ? routing.thinking_budget : null,
+          needs_memory: routing ? routing.needs_memory : true,
+          confidence: routing ? routing.confidence : null,
+          probabilities: routing ? routing.probabilities : null
+        }
+      };
+    }
+    renderRawJson(currentRawJson);
   }
 
   function setCheckIcon(id, passed) {

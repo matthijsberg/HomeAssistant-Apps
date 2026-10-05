@@ -127,14 +127,6 @@ class DomoticaEngine:
                 review_mode=review_mode,
             )
 
-        if not self.fast_path_enabled:
-            return DomoticaAction(
-                is_domotica=True,
-                fast_path=False,
-                rejected_reason="fast_path_disabled",
-                review_mode=review_mode,
-            )
-
         clean_p = prompt.strip().lower()
 
         # 1. Detect Domain (FP-01 whole-token matching)
@@ -491,7 +483,7 @@ class DomoticaEngine:
 
         return DomoticaAction(
             is_domotica=True,
-            fast_path=True,
+            fast_path=self.fast_path_enabled,
             domain=detected_domain,
             service=detected_action,
             target_type=target_type,
