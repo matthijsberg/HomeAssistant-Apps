@@ -126,6 +126,28 @@ def render_gui_html() -> str:
     .syn-num { color: #fbbf24; }
     .syn-bool { color: #60a5fa; }
 
+    /* Collapsible Pipeline Rail */
+    #pipeline-rail.rail-collapsed {
+      width: 3.5rem !important; /* 56px */
+      min-width: 3.5rem !important;
+    }
+    #pipeline-rail.rail-collapsed .rail-text {
+      display: none !important;
+    }
+    #pipeline-rail.rail-expanded {
+      width: 19rem !important; /* 304px */
+    }
+    @media (max-width: 1023px) {
+      #pipeline-rail.rail-expanded {
+        position: absolute;
+        right: 0;
+        top: 0;
+        bottom: 0;
+        width: 18.5rem !important;
+        box-shadow: -8px 0 32px rgba(0, 0, 0, 0.22);
+      }
+    }
+
     ::-webkit-scrollbar { width: 6px; height: 6px; }
     ::-webkit-scrollbar-track { background: #f1f1f0; }
     ::-webkit-scrollbar-thumb { background: #d4d4d8; border-radius: 3px; }
@@ -192,10 +214,11 @@ def render_gui_html() -> str:
 <!-- ========================================================================= -->
 <!-- VIEW 1: TRACE & EVALUATION CONSOLE (VERMILION EDITION)                    -->
 <!-- ========================================================================= -->
-<div id="view-eval" class="flex-1 flex flex-col lg:flex-row overflow-y-auto lg:overflow-hidden min-w-0">
+<div id="view-eval" class="flex-1 flex overflow-hidden relative">
+  <div id="rail-backdrop" onclick="togglePipelineRail(false)" class="hidden fixed inset-0 bg-black/25 z-20 lg:hidden transition-opacity"></div>
 
   <!-- LEFT/CENTER WORKSPACE: Main Trace & Evaluation Inspector -->
-  <main class="w-full flex-1 p-3 sm:p-space-md lg:p-space-lg space-y-3 sm:space-y-space-md overflow-y-visible lg:overflow-y-auto min-w-0">
+  <main class="flex-1 overflow-y-auto bg-surface p-3 sm:p-space-md lg:p-space-lg space-y-3 sm:space-y-space-md min-w-0">
 
     <!-- Top Query & Prompt Input Box -->
     <section class="bg-surface-container-lowest border border-[#e5e5e4] rounded-lg shadow-sm overflow-hidden">
@@ -477,28 +500,28 @@ def render_gui_html() -> str:
 
   </main>
 
-  <!-- RIGHT RAIL: Vertical Dotted Timeline Pipeline -->
-  <aside class="w-full lg:w-80 border-t lg:border-t-0 lg:border-l border-surface-container-highest bg-surface-container-lowest flex flex-col shrink-0">
-    <div class="p-space-md border-b border-surface-container-highest flex items-center justify-between">
-      <div>
-        <span class="text-caption font-caption uppercase tracking-wider text-tertiary block font-medium">EXECUTION PIPELINE</span>
-        <span id="pipeline-spans-count" class="text-label-code-md font-semibold text-on-surface mt-0.5 block">5 Spans Defined</span>
+  <!-- RIGHT RAIL: Vertical Dotted Timeline Pipeline (Collapsible) -->
+  <aside id="pipeline-rail" class="rail-collapsed border-l border-surface-container-highest bg-surface-container-lowest flex flex-col shrink-0 transition-all duration-300 ease-in-out z-30 select-none overflow-hidden">
+    <div class="px-2 py-2.5 border-b border-surface-container-highest flex items-center justify-between min-h-[44px]">
+      <div class="rail-text overflow-hidden pl-2">
+        <span class="text-caption font-caption uppercase tracking-wider text-tertiary block font-semibold text-[10px]">EXECUTION PIPELINE</span>
+        <span id="pipeline-spans-count" class="text-label-code-md font-semibold text-on-surface block text-xs">5 Spans Defined</span>
       </div>
-      <span id="pipeline-status-badge" class="px-2 py-0.5 rounded text-[10px] font-label-code-sm bg-surface-container-low text-on-surface border border-surface-container-highest font-medium">
-        STANDBY
-      </span>
+      <button id="rail-toggle-btn" onclick="togglePipelineRail()" class="p-1 rounded hover:bg-surface-container text-secondary hover:text-primary transition-colors cursor-pointer flex items-center justify-center w-8 h-8 shrink-0 mx-auto lg:ml-auto lg:mr-0" title="Toggle Pipeline Rail (Expand / Collapse)">
+        <span id="rail-toggle-icon" class="material-symbols-outlined text-[18px]">chevron_left</span>
+      </button>
     </div>
 
-    <div class="p-space-md flex-1">
-      <nav aria-label="Pipeline Timeline" class="relative flex flex-col">
-        <div class="absolute left-[11px] top-3 bottom-5 w-[2px] timeline-dotted-line pointer-events-none"></div>
+    <div class="p-2 flex-1 overflow-y-auto overflow-x-hidden">
+      <nav aria-label="Pipeline Timeline" class="relative flex flex-col items-start">
+        <div class="absolute left-[19px] top-3 bottom-5 w-[2px] timeline-dotted-line pointer-events-none"></div>
 
         <!-- Overview & Consolidated Trace -->
-        <div class="relative flex items-start gap-3 text-left py-2.5 group w-full">
-          <div class="relative z-10 w-6 flex items-center justify-center shrink-0 pt-0.5">
-            <span id="node-0" class="w-2.5 h-2.5 rounded-full bg-on-surface"></span>
+        <div class="relative flex items-center gap-2.5 text-left py-2 group w-full cursor-pointer hover:bg-surface-container-low/60 rounded px-1" onclick="handleSpanClick(0)" title="Overview & Trace">
+          <div class="relative z-10 w-7 flex items-center justify-center shrink-0 pt-0.5">
+            <span id="node-0" class="w-2.5 h-2.5 rounded-full bg-on-surface ring-4 ring-surface-container-lowest"></span>
           </div>
-          <div class="flex-1 min-w-0 pr-1">
+          <div class="rail-text flex-1 min-w-0 pr-1">
             <div class="flex items-center justify-between">
               <span class="font-label-code-sm font-medium text-on-surface truncate">Overview &amp; Trace</span>
               <span class="text-[10px] font-label-code-sm text-tertiary">All</span>
@@ -508,11 +531,11 @@ def render_gui_html() -> str:
         </div>
 
         <!-- Span 1: Input Normalization -->
-        <div class="relative flex items-start gap-3 text-left py-2.5 group w-full">
-          <div class="relative z-10 w-6 flex items-center justify-center shrink-0 pt-0.5">
-            <span id="node-1" class="w-2.5 h-2.5 rounded-full bg-on-surface"></span>
+        <div class="relative flex items-center gap-2.5 text-left py-2 group w-full cursor-pointer hover:bg-surface-container-low/60 rounded px-1" onclick="handleSpanClick(1)" title="1. Input Normalization">
+          <div class="relative z-10 w-7 flex items-center justify-center shrink-0 pt-0.5">
+            <span id="node-1" class="w-2.5 h-2.5 rounded-full bg-on-surface ring-4 ring-surface-container-lowest"></span>
           </div>
-          <div class="flex-1 min-w-0 pr-1">
+          <div class="rail-text flex-1 min-w-0 pr-1">
             <div class="flex items-center justify-between">
               <span class="font-label-code-sm font-medium text-on-surface truncate">1. Input Normalization</span>
               <span id="time-span-1" class="text-[10px] font-label-code-sm text-tertiary">&lt;0.1ms</span>
@@ -522,11 +545,11 @@ def render_gui_html() -> str:
         </div>
 
         <!-- Span 2: Code Processing (Fast Path) -->
-        <div class="relative flex items-start gap-3 text-left py-2.5 group w-full">
-          <div class="relative z-10 w-6 flex items-center justify-center shrink-0 pt-0.5">
-            <span id="node-2" class="w-2.5 h-2.5 rounded-full bg-on-surface"></span>
+        <div class="relative flex items-center gap-2.5 text-left py-2 group w-full cursor-pointer hover:bg-surface-container-low/60 rounded px-1" onclick="handleSpanClick(2)" title="2. Code Processing (Fast-Path)">
+          <div class="relative z-10 w-7 flex items-center justify-center shrink-0 pt-0.5">
+            <span id="node-2" class="w-2.5 h-2.5 rounded-full bg-on-surface ring-4 ring-surface-container-lowest"></span>
           </div>
-          <div class="flex-1 min-w-0 pr-1">
+          <div class="rail-text flex-1 min-w-0 pr-1">
             <div class="flex items-center justify-between">
               <span class="font-label-code-sm font-medium text-on-surface truncate">2. Code Processing</span>
               <span id="time-span-2" class="text-[10px] font-label-code-sm text-tertiary">&lt;0.5ms</span>
@@ -536,8 +559,8 @@ def render_gui_html() -> str:
         </div>
 
         <!-- Span 3: System 1 Processing (Active Step - Vermilion Concentric Ring) -->
-        <div id="wrapper-span-3" class="relative flex items-start gap-3 text-left py-2.5 w-full bg-[#fdf2f1] -mx-1.5 px-1.5 rounded border border-[#f8c9c5]">
-          <div class="relative z-10 w-6 flex items-center justify-center shrink-0 pt-0.5">
+        <div id="wrapper-span-3" class="relative flex items-center gap-2.5 text-left py-2 w-full bg-[#fdf2f1] rounded border border-[#f8c9c5] px-1 cursor-pointer" onclick="handleSpanClick(3)" title="3. System 1 Processing (Active Step)">
+          <div class="relative z-10 w-7 flex items-center justify-center shrink-0 pt-0.5">
             <span class="relative flex h-4 w-4 items-center justify-center">
               <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary/30 opacity-75"></span>
               <span class="h-3.5 w-3.5 rounded-full border-2 border-primary bg-surface-container-lowest flex items-center justify-center shadow-sm">
@@ -545,7 +568,7 @@ def render_gui_html() -> str:
               </span>
             </span>
           </div>
-          <div class="flex-1 min-w-0 pr-1">
+          <div class="rail-text flex-1 min-w-0 pr-1">
             <div class="flex items-center justify-between">
               <span class="font-label-code-sm font-semibold text-primary truncate">3. System1 Processing</span>
               <span id="time-span-3" class="text-[10px] font-label-code-sm font-semibold text-primary">--ms</span>
@@ -555,11 +578,11 @@ def render_gui_html() -> str:
         </div>
 
         <!-- Span 4: Tool / LLM Dispatch -->
-        <div class="relative flex items-start gap-3 text-left py-2.5 group w-full">
-          <div class="relative z-10 w-6 flex items-center justify-center shrink-0 pt-0.5">
+        <div class="relative flex items-center gap-2.5 text-left py-2 group w-full cursor-pointer hover:bg-surface-container-low/60 rounded px-1" onclick="handleSpanClick(4)" title="4. Tool / LLM Dispatch">
+          <div class="relative z-10 w-7 flex items-center justify-center shrink-0 pt-0.5">
             <span id="node-4" class="w-3 h-3 rounded-full border-[1.5px] border-zinc-400 bg-surface-container-lowest"></span>
           </div>
-          <div class="flex-1 min-w-0 pr-1">
+          <div class="rail-text flex-1 min-w-0 pr-1">
             <div class="flex items-center justify-between">
               <span class="font-label-code-sm font-medium text-secondary truncate">4. Tool / LLM Dispatch</span>
               <span id="time-span-4" class="text-[10px] font-label-code-sm text-tertiary">--ms</span>
@@ -569,11 +592,11 @@ def render_gui_html() -> str:
         </div>
 
         <!-- Span 5: System Response -->
-        <div class="relative flex items-start gap-3 text-left py-2.5 group w-full">
-          <div class="relative z-10 w-6 flex items-center justify-center shrink-0 pt-0.5">
+        <div class="relative flex items-center gap-2.5 text-left py-2 group w-full cursor-pointer hover:bg-surface-container-low/60 rounded px-1" onclick="handleSpanClick(5)" title="5. System Response">
+          <div class="relative z-10 w-7 flex items-center justify-center shrink-0 pt-0.5">
             <span id="node-5" class="w-3 h-3 rounded-full border-[1.5px] border-zinc-400 bg-surface-container-lowest"></span>
           </div>
-          <div class="flex-1 min-w-0 pr-1">
+          <div class="rail-text flex-1 min-w-0 pr-1">
             <div class="flex items-center justify-between">
               <span class="font-label-code-sm font-medium text-secondary truncate">5. System Response</span>
               <span id="time-span-5" class="text-[10px] font-label-code-sm text-tertiary">--ms</span>
@@ -585,7 +608,7 @@ def render_gui_html() -> str:
       </nav>
     </div>
 
-    <div class="p-space-sm border-t border-surface-container-highest bg-[#fafaf9] text-label-code-sm space-y-1">
+    <div class="rail-text p-space-sm border-t border-surface-container-highest bg-[#fafaf9] text-label-code-sm space-y-1">
       <div class="flex justify-between text-tertiary text-[11px]">
         <span>Engine Policy</span>
         <span class="text-on-surface font-label-code-sm">laya-hybrid-p95-strict</span>
@@ -1228,6 +1251,38 @@ def render_gui_html() -> str:
   let lastDomoticaAction = null;
   let lastModelDecision = null;
   let currentRawJson = null;
+  let railExpanded = false;
+
+  function togglePipelineRail(forceState) {
+    const rail = document.getElementById('pipeline-rail');
+    const icon = document.getElementById('rail-toggle-icon');
+    const backdrop = document.getElementById('rail-backdrop');
+    if (!rail) return;
+
+    if (forceState !== undefined) {
+      railExpanded = forceState;
+    } else {
+      railExpanded = !railExpanded;
+    }
+
+    if (railExpanded) {
+      rail.classList.remove('rail-collapsed');
+      rail.classList.add('rail-expanded');
+      if (icon) icon.textContent = 'chevron_right';
+      if (backdrop && window.innerWidth < 1024) backdrop.classList.remove('hidden');
+    } else {
+      rail.classList.remove('rail-expanded');
+      rail.classList.add('rail-collapsed');
+      if (icon) icon.textContent = 'chevron_left';
+      if (backdrop) backdrop.classList.add('hidden');
+    }
+  }
+
+  function handleSpanClick(spanIndex) {
+    if (!railExpanded) {
+      togglePipelineRail(true);
+    }
+  }
 
   const presets = {
     spots: "doe de spots in de serre uit",
