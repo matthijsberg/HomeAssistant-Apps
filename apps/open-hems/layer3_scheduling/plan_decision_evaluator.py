@@ -16,6 +16,7 @@ from models.canonical import StandardizedState
 from layer3_scheduling.plan_store import PlanStore
 from layer3_scheduling.decision_audit import DecisionAuditLogger
 from layer3_scheduling.opportunistic_merger import OpportunisticDHWMerger
+from layer3_scheduling.dhw_specs import DhwTankSpec
 from api.infra_diagnostics import write_hems_annotation
 from integrations.homeassistant.client import get_ha_states_map, call_ha_service
 
@@ -65,6 +66,15 @@ def evaluate_and_apply_dhw_run_merger(
                 is_hard_lockout = True
                 break
 
+    dhw_cl_temp = None
+    try:
+        t_raw = states_map.get("climate.hc_dhw_dhw_setpoint", {}).get("attributes", {}).get("temperature")
+        if t_raw is not None:
+            dhw_cl_temp = float(t_raw)
+    except Exception:
+        pass
+    dhw_spec = DhwTankSpec.from_config(live_setpoint_c=dhw_cl_temp)
+
     merge_res = OpportunisticDHWMerger.evaluate_merge(
         plan=plan,
         is_dhw_actively_heating=is_actively_heating,
@@ -72,7 +82,8 @@ def evaluate_and_apply_dhw_run_merger(
         current_solar_kw=current_solar_kw,
         current_price_eur=current_price_eur,
         is_hard_lockout_now=is_hard_lockout,
-        current_power_kw=round(wp_power / 1000.0, 2)
+        current_power_kw=round(wp_power / 1000.0, 2),
+        spec=dhw_spec
     )
 
     GLOBAL_OPPORTUNISTIC_MERGE = merge_res

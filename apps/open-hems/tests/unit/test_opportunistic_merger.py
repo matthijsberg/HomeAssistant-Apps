@@ -2,9 +2,10 @@ import pytest
 from datetime import datetime, timezone
 from models.canonical import CanonicalDispatchPlan, DispatchPlanSlot, DHWPlanSummary, StandardizedState
 from layer3_scheduling.opportunistic_merger import OpportunisticDHWMerger, OpportunisticMergeResult
+from layer3_scheduling.dhw_specs import DhwTankSpec
 
 
-def _make_dummy_plan(boost_slot_idx: int = 4, boost_price: float = 0.20) -> CanonicalDispatchPlan:
+def _make_dummy_plan(boost_slot_idx: int = 4, boost_price: float = 0.20, boost_solar: float = 2.0) -> CanonicalDispatchPlan:
     slots = []
     for i in range(96):
         is_boost = (i == boost_slot_idx)
@@ -14,8 +15,8 @@ def _make_dummy_plan(boost_slot_idx: int = 4, boost_price: float = 0.20) -> Cano
                 time_label=f"{i//4:02d}:{(i%4)*15:02d}",
                 dt_iso=f"2026-09-12T{i//4:02d}:{(i%4)*15:02d}:00+02:00",
                 price_eur=boost_price if is_boost else 0.22,
-                solar_kw=2.0 if is_boost else 0.5,
-                unallocated_kw=0.4,
+                solar_kw=boost_solar if is_boost else 0.5,
+                unallocated_kw=0.3,
                 heating_kw=0.0,
                 dhw_kw=2.4 if is_boost else 0.0,
                 net_import_kw=-1.0 if is_boost else 0.1,
@@ -98,13 +99,13 @@ def test_no_merge_when_no_boost_in_lookahead():
 
 
 def test_successful_merge_with_solar_surplus():
-    # Boost planned at slot 4 (1 hour away)
-    plan = _make_dummy_plan(boost_slot_idx=4, boost_price=0.18)
+    # Boost planned at slot 4 (1 hour away), current has abundant solar surplus (3.5 kW)
+    plan = _make_dummy_plan(boost_slot_idx=4, boost_price=0.18, boost_solar=3.0)
     res = OpportunisticDHWMerger.evaluate_merge(
         plan=plan,
         is_dhw_actively_heating=True,
         current_tank_temp_c=38.5,
-        current_solar_kw=2.5,
+        current_solar_kw=3.5,
         current_price_eur=0.22
     )
     assert res.should_merge
@@ -116,24 +117,42 @@ def test_successful_merge_with_solar_surplus():
     assert res.savings_estimate_eur > 0.0
 
 
-def test_successful_merge_with_acceptable_price_difference():
-    # Boost planned at slot 3 with price 0.20, current is 0.23 (diff = 0.03 <= tolerance 0.05)
-    plan = _make_dummy_plan(boost_slot_idx=3, boost_price=0.20)
+def test_successful_merge_when_tariffs_equal():
+    # Boost planned at slot 3 with same price 0.20, saved restart overhead wins
+    plan = _make_dummy_plan(boost_slot_idx=3, boost_price=0.20, boost_solar=0.0)
     res = OpportunisticDHWMerger.evaluate_merge(
         plan=plan,
         is_dhw_actively_heating=True,
         current_tank_temp_c=39.2,
-        current_solar_kw=0.2,
-        current_price_eur=0.23
+        current_solar_kw=0.0,
+        current_price_eur=0.20
     )
     assert res.should_merge
     assert res.promoted_mode == "max_on"
     assert res.original_slot_idx == 3
 
 
+def test_reject_merge_when_later_is_solar_and_now_is_grid():
+    # Crucial test: Boost planned at slot 4 on solar surplus (3.5 kW, price 0.18),
+    # but now is on grid power (price 0.32, solar 0.0).
+    # Reheating 10K on grid costs ~€0.60 extra, which vastly exceeds the €0.08 restart overhead!
+    plan = _make_dummy_plan(boost_slot_idx=4, boost_price=0.18, boost_solar=3.5)
+    res = OpportunisticDHWMerger.evaluate_merge(
+        plan=plan,
+        is_dhw_actively_heating=True,
+        current_tank_temp_c=48.0,
+        current_solar_kw=0.0,
+        current_price_eur=0.32
+    )
+    assert not res.should_merge
+    assert res.promoted_mode == "forced_on"  # Remains in comfort run to 50°C, does NOT promote to max_on (60°C)
+    assert res.target_temp_c == 50.0
+    assert "tarief te hoog" in res.reason.lower() or "verlies" in res.reason.lower()
+
+
 def test_reject_merge_when_current_price_excessive():
-    # Boost planned at slot 3 with price 0.15, current price is expensive peak 0.35 (> tolerance) and no solar
-    plan = _make_dummy_plan(boost_slot_idx=3, boost_price=0.15)
+    # Boost planned at slot 3 with price 0.15, current price is expensive peak 0.35 and no solar
+    plan = _make_dummy_plan(boost_slot_idx=3, boost_price=0.15, boost_solar=0.0)
     res = OpportunisticDHWMerger.evaluate_merge(
         plan=plan,
         is_dhw_actively_heating=True,
@@ -142,7 +161,7 @@ def test_reject_merge_when_current_price_excessive():
         current_price_eur=0.35
     )
     assert not res.should_merge
-    assert "te hoog" in res.reason
+    assert "te hoog" in res.reason or "verlies" in res.reason
 
 
 def test_release_to_normal_when_50c_reached():
@@ -157,4 +176,4 @@ def test_release_to_normal_when_50c_reached():
     )
     assert not res.should_merge
     assert res.promoted_mode == "normal"
-    assert "reeds op gewenste temperatuur" in res.decision_explanation
+    assert "reeds op gewenste temperatuur" in res.decision_explanation or "op doeltemperatuur" in res.decision_explanation
