@@ -252,10 +252,22 @@ def fetch_actual_heating_ranges_from_db(
                 if i == cur_end + 1:
                     cur_end = i
                 else:
-                    ranges.append({"start_idx": cur_start, "end_idx": cur_end, "name": "ACTUEEL VERWARMD"})
+                    ranges.append({
+                        "start_idx": cur_start,
+                        "end_idx": cur_end,
+                        "name": "ACTUEEL VERWARMD",
+                        "initiator": "openhems",
+                        "is_autonomous": False
+                    })
                     cur_start = i
                     cur_end = i
-            ranges.append({"start_idx": cur_start, "end_idx": cur_end, "name": "ACTUEEL VERWARMD"})
+            ranges.append({
+                "start_idx": cur_start,
+                "end_idx": cur_end,
+                "name": "ACTUEEL VERWARMD",
+                "initiator": "openhems",
+                "is_autonomous": False
+            })
         return ranges
     except Exception:
         return []

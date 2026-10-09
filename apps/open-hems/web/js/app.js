@@ -70,7 +70,7 @@
                 dhwBg: 'rgba(236, 72, 153, 0.80)',
                 heating: '#6366F1',            // Indigo 500: CV Vloerverwarming
                 heatingBg: 'rgba(99, 102, 241, 0.80)',
-                batteryCharge: '#F59E0B',      // Amber 500: Thuisbatterij Zonneladen
+                batteryCharge: '#8B5CF6',      // Violet 500: Thuisbatterij Laden (voorheen oranje)
                 batteryDischarge: '#10B981',   // Emerald 500: Thuisbatterij Ontladen
                 netto: OpenHEMSModeCatalog.getColor('forced_off'),              // Red 500: Verwacht Netto
                 solarCost: '#EAB308',          // Yellow 500: Zon Kostprijs (€0.06/kWh)
@@ -363,17 +363,38 @@
                     ctx.restore();
                 });
 
-                // 3. Active Heating Ranges (Yellow / Amber)
+                // 3. Active Heating Ranges (Violet: Open HEMS Solid vs Warmtepomp Hatched)
                 const heatRanges = (chart.options && chart.options.heatingRanges) || (chart.data && chart.data.heatingRanges) || [];
                 heatRanges.forEach(r => {
                     const bounds = getRangeBounds(r);
                     if (!bounds) return;
 
-                    // Subtle background tint (0.12) + solid 3px top accent
-                    ctx.fillStyle = 'rgba(245, 158, 11, 0.12)';
-                    ctx.fillRect(bounds.left, chartArea.top, bounds.width, chartArea.height);
-                    ctx.fillStyle = OpenHEMSModeCatalog.getColor('advised_off');
-                    ctx.fillRect(bounds.left, chartArea.top, bounds.width, 3);
+                    const isHeatpumpAutonomous = (r.initiator === 'heatpump' || r.source === 'heatpump' || r.is_autonomous === true);
+
+                    if (isHeatpumpAutonomous) {
+                        // Warmtepomp Hardware / Autonoom: gedempt lavendel met diagonale hatching en gestippelde top accent
+                        const stroke = 'rgba(139, 92, 246, 0.40)';
+                        const fill = 'rgba(139, 92, 246, 0.08)';
+                        const hatch = getHatchPattern(stroke, fill, 8, 1.3);
+                        ctx.fillStyle = hatch;
+                        ctx.fillRect(bounds.left, chartArea.top, bounds.width, chartArea.height);
+
+                        ctx.save();
+                        ctx.strokeStyle = '#8B5CF6';
+                        ctx.lineWidth = 2.0;
+                        ctx.setLineDash([4, 3]); // Dashed top accent line
+                        ctx.beginPath();
+                        ctx.moveTo(bounds.left, chartArea.top + 1);
+                        ctx.lineTo(bounds.left + bounds.width, chartArea.top + 1);
+                        ctx.stroke();
+                        ctx.restore();
+                    } else {
+                        // Open HEMS Georkestreerd: Helder Violet solid tint + strakke volle 3px top accent
+                        ctx.fillStyle = 'rgba(168, 85, 247, 0.16)';
+                        ctx.fillRect(bounds.left, chartArea.top, bounds.width, chartArea.height);
+                        ctx.fillStyle = '#A855F7';
+                        ctx.fillRect(bounds.left, chartArea.top, bounds.width, 3);
+                    }
                 });
 
                 // 4. Planned Heating Ranges (Cyan / Light Blue: Planned Stookvensters)
@@ -389,7 +410,7 @@
                     ctx.fillRect(bounds.left, chartArea.bottom - 3, bounds.width, 3);
                 });
 
-                // 5. Battery Operation Ranges (Green Zonneladen, Blue Netladen, Amber Spits, Cyan Buffer, Purple Hold)
+                // 5. Battery Operation Ranges (Violet Zonneladen, Purple Netladen, Emerald Ontladen, Blue Hold)
                 const batteryRanges = (chart.options && chart.options.batteryOverlayRanges) || (chart.data && chart.data.batteryOverlayRanges) || [];
                 batteryRanges.forEach(r => {
                     const bounds = getRangeBounds(r);
@@ -400,9 +421,9 @@
                     let topColor = '#10B981';
 
                     if (mode === 'CHARGE_SOLAR') {
-                        stroke = 'rgba(245, 158, 11, 0.30)'; // Orange (Solar charge)
-                        fill = 'rgba(245, 158, 11, 0.05)';
-                        topColor = '#F59E0B';
+                        stroke = 'rgba(168, 85, 247, 0.35)'; // Violet instead of orange
+                        fill = 'rgba(168, 85, 247, 0.06)';
+                        topColor = '#A855F7';
                     } else if (mode === 'CHARGE_GRID') {
                         stroke = 'rgba(139, 92, 246, 0.30)'; // Purple (Grid charge)
                         fill = 'rgba(139, 92, 246, 0.05)';

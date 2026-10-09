@@ -344,21 +344,45 @@ def extract_plan_heating_ranges(slots: List[Any], history_count: int = 0, is_15m
             in_block = False
             s_lbl = slots[start_idx * 4 if not is_15m else start_idx].time_label
             e_lbl = slots[(i - 1) * 4 if not is_15m else (i - 1)].time_label
+            block_slots = slots[start_idx:i] if is_15m else [slots[idx_w] for idx_w in range(start_idx * 4, min(len(slots), i * 4))]
+            is_openhems = any(
+                str(getattr(s_item, "mode_code", "")).lower() in [
+                    "forced_on", "max_on", "advised_on",
+                    "forced_standard_50", "forced_night_50", "forced_solar_boost_60",
+                    "standardizedstate.forced_on", "standardizedstate.max_on", "standardizedstate.advised_on"
+                ]
+                or getattr(s_item, "is_orchestrated", False)
+                for s_item in block_slots
+            )
             ranges.append({
                 "start_idx": history_count + start_idx,
                 "end_idx": history_count + i - 1,
                 "start_label": s_lbl,
                 "end_label": e_lbl,
-                "name": "VERWARMT"
+                "name": "VERWARMT",
+                "initiator": "openhems" if is_openhems else "heatpump",
+                "is_autonomous": not is_openhems
             })
     if in_block:
         s_lbl = slots[start_idx * 4 if not is_15m else start_idx].time_label
         e_lbl = slots[-1].time_label
+        block_slots = slots[start_idx:n] if is_15m else [slots[idx_w] for idx_w in range(start_idx * 4, len(slots))]
+        is_openhems = any(
+            str(getattr(s_item, "mode_code", "")).lower() in [
+                "forced_on", "max_on", "advised_on",
+                "forced_standard_50", "forced_night_50", "forced_solar_boost_60",
+                "standardizedstate.forced_on", "standardizedstate.max_on", "standardizedstate.advised_on"
+            ]
+            or getattr(s_item, "is_orchestrated", False)
+            for s_item in block_slots
+        )
         ranges.append({
             "start_idx": history_count + start_idx,
             "end_idx": history_count + n - 1,
             "start_label": s_lbl,
             "end_label": e_lbl,
-            "name": "VERWARMT"
+            "name": "VERWARMT",
+            "initiator": "openhems" if is_openhems else "heatpump",
+            "is_autonomous": not is_openhems
         })
     return ranges

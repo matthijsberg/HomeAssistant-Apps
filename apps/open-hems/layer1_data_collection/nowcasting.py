@@ -140,3 +140,42 @@ class ObservationNowcaster:
             assimilated.append(nudged)
 
         return assimilated
+
+    @classmethod
+    def nudge_radiation_forecast(
+        cls,
+        raw_rad_w_m2: List[float],
+        live_rad_w_m2: Optional[float],
+        slot_hours: float = 0.25,
+        horizon_hours: Optional[float] = None
+    ) -> List[float]:
+        """
+        Nudges Global Horizontal Irradiance (GHI W/m2) forecast based on local Wittboy pyranometer.
+        Anchors slot 0 to live local radiation and granularly transitions to 100% NWP over horizon_hours.
+        Enforces physical night bounds (0.0 W/m2).
+        """
+        if not raw_rad_w_m2:
+            return []
+        if live_rad_w_m2 is None or live_rad_w_m2 < 0.0:
+            return list(raw_rad_w_m2)
+
+        raw_at_zero = raw_rad_w_m2[0] if raw_rad_w_m2 else 0.0
+        if raw_at_zero <= 1.0 and live_rad_w_m2 <= 1.0:
+            return list(raw_rad_w_m2)
+
+        delta_rad = live_rad_w_m2 - raw_at_zero
+        h = horizon_hours or cls.HORIZON_SOLAR_HOURS
+
+        assimilated = []
+        for i, raw_val in enumerate(raw_rad_w_m2):
+            t_hours = i * slot_hours
+            weight = cls._compute_blend_weight(t_hours, h)
+
+            if raw_val <= 0.1 and i > 4:
+                # Strictly enforce night physical limit
+                assimilated.append(0.0)
+            else:
+                nudged = round(max(0.0, raw_val + (delta_rad * weight)), 1)
+                assimilated.append(nudged)
+
+        return assimilated

@@ -405,7 +405,7 @@ SELECT sum(power_w)/60000.0 as pv_kwh FROM "energy_telemetry" WHERE "device_id" 
                         if 180.0 <= calibrated_ua_3d <= 450.0:
                             calibrated_ua = calibrated_ua_3d
                             calibrated_c_wind = round(max(0.05, min(0.35, beta[1] * 1000.0 / 24.0)), 3)
-                            calibrated_c_solar = round(max(0.02, min(0.20, beta[2])), 3)
+                            calibrated_c_solar = round(max(0.02, min(2.50, beta[2])), 3)
                             has_3d = True
 
                 if not has_3d:

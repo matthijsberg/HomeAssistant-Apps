@@ -116,15 +116,16 @@ def test_daikin_reader_dhw_circuit_detection():
 
     # Case 1: DHW on
     states_on = {
-        "climate.hc_dhw_dhw_setpoint": {"state": "heat"}
+        "climate.hc_dhw_dhw_setpoint": {"state": "heat", "attributes": {"temperature": 50.0}}
     }
     assert DaikinReader.is_dhw_circuit_enabled(states_on) is True
 
-    # Case 2: DHW off (e.g. vacation)
-    states_off = {
-        "climate.hc_dhw_dhw_setpoint": {"state": "off"}
+    # Case 2: DHW off via vacation mode
+    states_vacation = {
+        "climate.hc_dhw_dhw_setpoint": {"state": "off", "attributes": {"temperature": 50.0}},
+        "input_boolean.vacation_mode": {"state": "on"}
     }
-    assert DaikinReader.is_dhw_circuit_enabled(states_off) is False
+    assert DaikinReader.is_dhw_circuit_enabled(states_vacation) is False
 
     # Case 3: Empty states map defaults to True
     assert DaikinReader.is_dhw_circuit_enabled({}) is True
@@ -195,10 +196,10 @@ def test_daikin_actuator_implements_iactuator_controller_contract():
     assert actuator.last_actuation_result.effective_mode == "forced_on"
     assert executed_climates.get("dhw") is None
 
-    # Anomalous target temperature (deviating from standard 50/60): invokes climate_caller
+    # Strict Relay-Only Policy: Even with custom target temperature, DHW climate is NEVER invoked.
     ok_sg4_custom = actuator.apply_smart_grid_mode("SG4", target_temp=52.5)
     assert ok_sg4_custom is True
-    assert executed_climates.get("dhw") == 52.5
+    assert executed_climates.get("dhw") is None
 
     # 3. Test execute_command via canonical DeviceCommand
     cmd = DeviceCommand(

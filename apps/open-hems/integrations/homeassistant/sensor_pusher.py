@@ -271,7 +271,7 @@ class HomeAssistantSensorPusher:
         q = """
         SELECT mean(solar_w)/1000.0 as solar_kwh FROM energy_telemetry WHERE time > now() - 7d GROUP BY time(1h) fill(0);
         SELECT mean(power_w)/1000.0 as dhw_el_kwh FROM energy_telemetry WHERE mode = 'dhw' AND time > now() - 7d GROUP BY time(1h) fill(0);
-        SELECT mean(power_w)/1000.0 as cv_el_kwh FROM energy_telemetry WHERE mode = 'cv' AND time > now() - 7d GROUP BY time(1h) fill(0);
+        SELECT mean(power_w)/1000.0 as cv_el_kwh FROM energy_telemetry WHERE (mode = 'heating' OR mode = 'cv') AND time > now() - 7d GROUP BY time(1h) fill(0);
         """
         url = f"http://a0d7b954-influxdb:8086/query?u=openhems&p={pwd}&db=openhems&q={urllib.parse.quote(q)}"
         with urllib.request.urlopen(url, timeout=4) as r:
@@ -285,8 +285,8 @@ class HomeAssistantSensorPusher:
         dhw_th_7d = dhw_el_7d * dhw_cop
         est_dhw_cost = dhw_el_7d * 0.22
 
-        if cv_el_7d > 5.0:
-            cv_cop = 4.80
+        if cv_el_7d > 0.1:
+            cv_cop = 4.50
             cv_th_7d = cv_el_7d * cv_cop
             cv_cop_state = f"{cv_cop:.2f}"
             cv_status = "actief"

@@ -301,6 +301,25 @@ def test_reusable_ui_and_chart_contracts():
     assert "gridCharge: '#8B5CF6'" in app_js
 
 
+def test_heating_ranges_initiator_and_color_tokens():
+    """Verify that heating ranges carry initiator metadata and charts encode Open HEMS vs autonomous heat pump."""
+    plan = ensure_active_canonical_plan()
+    assert plan and plan.slots, "Canonical plan must be active"
+
+    heats = extract_plan_heating_ranges(plan.slots, is_15m=True, domain="both")
+    for h in heats:
+        assert "initiator" in h, f"Heating range missing initiator: {h}"
+        assert h["initiator"] in ["openhems", "heatpump"], f"Invalid initiator in range: {h}"
+        assert "is_autonomous" in h, f"Heating range missing is_autonomous: {h}"
+
+    app_js = (REPO_ROOT / "web" / "js" / "app.js").read_text(encoding="utf-8")
+    assert "batteryCharge: '#8B5CF6'" in app_js, "Battery charge must use Violet #8B5CF6 token"
+    assert "isHeatpumpAutonomous" in app_js, "App.js must distinguish heat pump autonomous vs Open HEMS"
+
+    charts_thermal_js = (REPO_ROOT / "web" / "js" / "modules" / "charts_thermal.js").read_text(encoding="utf-8")
+    assert "primaryColor: '#8B5CF6'" in charts_thermal_js, "Thermal trajectory charts must default to Violet #8B5CF6"
+
+
 def test_battery_status_bandwidth_autonomy_and_deficit():
     """Verify that battery status delivers P05/P95 bandwidths, deficit tracking, autonomy, and rich explanation."""
     from api.routes_forecast import handle_get

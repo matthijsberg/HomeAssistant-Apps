@@ -443,11 +443,6 @@ class CentralPlanner:
                 state = StandardizedState.ADVISED_ON
                 mode_lbl = "Geadviseerd aan (Vloerbuffer Pre-Heat SG3)"
                 desc = f"Geadviseerd aan ({s.label}): Voordelig daltarief (€{p_val:.3f}/kWh). Betondekvloer wordt preventief voorverwarmd ({heating_kw} kW) om spitsblokkades comfortabel te overbruggen."
-            elif (sol_val >= 1.5 or p_val <= min_timeline_price + 0.030) and (10 <= s.dt.hour <= 16):
-                # 4. Geadviseerd aan (Zonne-overschot)
-                state = StandardizedState.ADVISED_ON
-                mode_lbl = "Geadviseerd aan (Zonne-overschot)"
-                desc = f"Geadviseerd aan ({s.label}): Voordelig venster (€{p_val:.3f}/kWh). Warmtepomp mag hoger doorverwarmen voor zonnebuffer."
             else:
                 # 3. Normaal
                 state = StandardizedState.NORMAL

@@ -18,6 +18,9 @@ Before presenting any code changes or committing:
   - **Tijdsuitlijning:** Verifieer ALTIJD dat pieken, spitsblokken, adviesbanden en actuaties op exact dezelfde kalenderuren blijven staan bij het schakelen tussen 15m en 1h.
   - **Auto-Downsampling:** Deel NOOIT blindelings door 4 (`// 4`). Controleer altijd of de invoerreeks al uursgewijs is (`len <= 48` bij een 24/48h venster).
   - **Dual-Resolution QA:** Voer vóór afronding altijd een visuele verificatie uit in de headless browser met screenshots op ZOWEL 15m ALS 1h resolutie.
+- [ ] **9. Open Knowledge Format (OKF v0.2) Conformance:** Elk nieuw domeinconcept, fysieke/financiële metric, of architectuurinvariant moet worden vastgelegd in `knowledge/` (`knowledge/metrics/`, `knowledge/architecture/`, `knowledge/computations/`) en 100% slagen voor `scripts/validate.sh` en `tests/architecture/test_okf_conformance.py`.
+- [ ] **10. Elephant & Goldfish Besturingsdiscipline:** Tapwater- en warmtepompbesturing moet te allen tijde de Elephant baseline respecteren (SG2 normaal, setpoint 50,0 °C, boiler aan/`heat`; boiler NOOIT softwarematig `off` zetten). Goldfish stateloze executie per tick zorgt ervoor dat tussen geplande runs door nooit een residu van 60 °C of een verhoogde doeltemperatuur blijft plakken.
+- [ ] **11. 5-Traps Pre-Commit Pijplijn:** Elke commit moet foutloos door `.git/hooks/pre-commit` komen (1: Secrets, 2: Bandit AST security, 3: Ruff, 4: Mypy, 5: Node.js frontend syntax).
 
 ---
 

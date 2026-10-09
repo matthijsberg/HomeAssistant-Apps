@@ -30,29 +30,32 @@ ls -1td v* 2>/dev/null | tail -n +$((MAX_BACKUPS + 1)) | xargs -r rm -rf
 
 echo "✓ Snapshot saved at: ${SNAPSHOT_DIR}"
 
+PYTHON_BIN="/config/.hermes_influx_venv/bin/python3"
+PYTEST_BIN="/config/.hermes_influx_venv/bin/pytest"
+
 # 1. Bump Version
 echo "Step 1: Bumping version (${BUMP_TYPE})..."
 
 # Pre-flight: Mandatory Bytecode Compilation & Syntax Check
 echo "Pre-flight: Verifying Python bytecode and syntax..."
-python3 -m py_compile "${ADDON_DIR}/daemon.py"
+${PYTHON_BIN} -m py_compile "${ADDON_DIR}/daemon.py"
 echo "✓ Python bytecode compilation passed!"
 
 # Pre-flight: Mandatory Data & API Integrity Verification Gate
 echo "Pre-flight: Running Automated Data & API Integrity Verification Gate..."
-python3 "${ADDON_DIR}/scripts/verify_data_integrity.py"
+${PYTHON_BIN} "${ADDON_DIR}/scripts/verify_data_integrity.py"
 echo "✓ All data integrity invariants passed!"
 
 # Pre-flight: Mandatory Full Regression Test Suite
 echo "Pre-flight: Running regression tests..."
-PYTHONPATH="${ADDON_DIR}" pytest "${ADDON_DIR}/tests/"
+(cd "${ADDON_DIR}" && PYTHONPATH="${ADDON_DIR}" ${PYTEST_BIN} tests/)
 echo "✓ All pytest regression tests passed!"
 
-NEW_VER=$(python3 "${ADDON_DIR}/scripts/version_manager.py" bump "${BUMP_TYPE}")
+NEW_VER=$(${PYTHON_BIN} "${ADDON_DIR}/scripts/version_manager.py" bump "${BUMP_TYPE}")
 
 # 2. Run Pre-Commit Security & Secret Scanner
 echo "Step 2: Scanning for secrets and credentials..."
-python3 "${ADDON_DIR}/scripts/secret_scanner.py"
+${PYTHON_BIN} "${ADDON_DIR}/scripts/secret_scanner.py"
 
 # 3. Commit, Tag, and Push to GitHub
 echo "Step 3: Committing, tagging, and pushing to GitHub..."
@@ -82,7 +85,12 @@ fi
 # 6. Post-Deploy Live Data & API Smoke Test
 echo "Step 6: Running Post-Deploy Live Data & API Smoke Test..."
 sleep 4
-if ! python3 "${ADDON_DIR}/scripts/verify_data_integrity.py" --live --url "http://172.30.33.10:8099"; then
+CONTAINER_IP=$(ssh -i /config/.ssh/id_ed25519 -p 2222 -o StrictHostKeyChecking=no root@172.30.32.1 "ha apps info local_open_hems | grep ip_address | awk '{print \$2}'" 2>/dev/null || true)
+if [ -z "$CONTAINER_IP" ]; then
+  CONTAINER_IP="172.30.33.6"
+fi
+
+if ! ${PYTHON_BIN} "${ADDON_DIR}/scripts/verify_data_integrity.py" --live --url "http://${CONTAINER_IP}:8099"; then
     echo "❌ Post-deploy data integrity smoke test failed!"
     echo "⚠️ Diagnostic details reported above. Code preserved for developer / AI agent forward-fixing (no rollback)."
     exit 1

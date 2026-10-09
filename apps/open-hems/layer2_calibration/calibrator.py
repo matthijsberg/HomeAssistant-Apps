@@ -231,7 +231,7 @@ class ModelCalibrationEngine:
         # Physical constraints check (UA must be positive, wind positive, solar gain positive/negative)
         ua = max(4.0, min(12.0, M[0][3]))
         c_wind = max(0.001, min(0.15, M[1][3]))
-        c_solar = max(0.001, min(0.20, M[2][3]))
+        c_solar = max(0.01, min(2.50, M[2][3]))
 
         return [round(ua, 5), round(c_wind, 5), round(c_solar, 5)]
 

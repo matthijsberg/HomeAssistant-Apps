@@ -1,32 +1,38 @@
 # Open HEMS — Product Requirements Document (PRD)
 # Generic Residential Home Energy Management System
 
-**Document Version:** 2.1.0  
+**Document Version:** 3.0.0  
 **Status:** Approved Master Architecture  
-**Scope:** Core Engine, Device-Agnostic Contracts & Execution Loops  
+**Scope:** Core Engine, Optimization Solvers, Hardware Invariants, OKF Knowledge Contracts & Presentation Architecture  
 **Target License:** Open Source (MIT)  
 
 ---
 
 ## 1. Vision & Core Invariants
 
-Open HEMS is a modular, device-agnostic, open-source Home Energy Management System. It coordinates thermal storage, space heating, solar production, dynamic electricity tariffs, battery storage, and EV charging to minimize operational energy cost and carbon footprint while guaranteeing occupant comfort and equipment longevity.
+Open HEMS is a modular, device-agnostic, open-source Home Energy Management System (HEMS). It mathematically coordinates electrochemical battery storage, domestic hot water (DHW) thermal storage, underfloor space heating, rooftop solar photovoltaics (PV), dynamic electricity tariffs (EPEX Spot / day-ahead), and residential baseline loads to minimize net operational energy cost and carbon footprint while strictly guaranteeing occupant comfort and equipment longevity.
 
-### 1.1 The Four Invariant Principles
+### 1.1 The Core Invariant Principles
 1. **Core Autonomy (Host & Ecosystem Independent):**  
    Open HEMS is a standalone daemon. It runs natively on Linux, in Docker, or as a Home Assistant Add-on. Home Assistant is **strictly an adapter plugin** (one of many possible telemetry providers and actuation targets). If Home Assistant is restarted, upgraded, or absent, Open HEMS continues unhindered via native Modbus TCP, P1/DSMR, or MQTT connections.
 2. **Device-Agnostic Dispatch Contract (Single Source of Truth):**  
-   The planning engine computes a single, canonical, versioned dispatch plan (`CanonicalDispatchPlan`). Every dashboard, Lovelace card, actuator, and notification consumer reads from this central plan. View layers are **strictly presentation-only** (dumb views): they never calculate power, aggregate wattages, or invent state colors.
+   The planning engine computes a single, canonical, versioned dispatch plan (`CanonicalDispatchPlan`). Every dashboard, Lovelace card, actuator, sensor pusher, and notification consumer reads from this central plan. View layers are **strictly presentation-only** (dumb views): they never calculate power, aggregate wattages, or invent state colors.
 3. **Strict Data Integrity (Zero Mock Data in Production):**  
    Production decisions, analytics, and commands are backed by real, verified telemetry. If data is stale, missing, or corrupt, the system flags it explicitly (`Quality.STALE`, `Quality.INTERPOLATED`) and falls back to deterministic safety profiles. Fabricated or simulated data is forbidden in production runtime. Development and CI rely strictly on a **Replay Harness with Golden Plan Snapshots**.
 4. **Separation of Core Logic from Site Profile:**  
-   The core engine contains **zero hardware-specific entity IDs, geographic coordinates, brand names, or tariff constants**. All site-specific parameters are loaded declaratively from a validated `site_config.yaml` / `site_config.json`.
+   The core engine contains **zero hardware-specific entity IDs, geographic coordinates, brand names, or tariff constants**. All site-specific parameters are loaded declaratively from a validated `site_config.yaml` / `site_config.json` and JSONSchema-governed device profiles.
+5. **Open Knowledge Format (OKF v0.2) as Executable Domain Contract:**  
+   Domain formulas, mathematical invariants, and architectural guidelines are formalized in machine-verifiable Markdown files under `knowledge/`, validated in CI via `validate.sh` and architectural guard tests (`test_okf_conformance.py`).
+6. **Elephant & Goldfish Control Discipline:**  
+   Hardware control adheres to strict Elephant baseline persistence (permanent recovery to normal 50.0°C setpoint, `heat` mode, and SG2 relays) coupled with Goldfish stateless per-tick evaluation (zero leaking dirty states or sticky boost temperatures between runs).
+7. **Presentation Parity Invariant:**  
+   All summary cards and detailed breakdown popups must exhibit 1:1 mathematical and textual parity across metrics, temporal windows, units, and signs.
 
 ---
 
 ## 2. System Architecture & Execution Loops
 
-Open HEMS operates on a **Dual-Loop Architecture** with explicit feedback:
+Open HEMS operates on a **Dual-Loop Architecture** with explicit telemetry feedback:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
@@ -46,6 +52,7 @@ Open HEMS operates on a **Dual-Loop Architecture** with explicit feedback:
 │ - Freshness watchdog (< 15 min TTL)                                    │
 │ - Universal 15-minute grid alignment from 'Now'                        │
 │ - Physical boundary clamping (rejection of impossible readings)        │
+│ - Observation Nowcasting: Blends local pyranometer (Wittboy) irradiance│
 │ - Emits a validated, contractual CleanTelemetryFrame                   │
 └───────────────────────────────────┬────────────────────────────────────┘
                                     │
@@ -54,232 +61,278 @@ Open HEMS operates on a **Dual-Loop Architecture** with explicit feedback:
 │ LAYER 2: SELF-LEARNING & BEHAVIORAL CALIBRATION (layer2_calibration)   │
 │ - 7×96 baseline quarterly load profiles (unallocated household demand) │
 │ - EWMA residual tracking for adaptive drift correction                 │
-│ - Local microclimate sensor assimilation (e.g. POA irradiance nudging) │
+│ - Thermal building parameters calibration (2R1C & Tank UA decay)       │
 │ - Learns from REALIZED EFFECTIVE MODES (not unverified plan requests)  │
 └───────────────────────────────────┬────────────────────────────────────┘
                                     │
                                     ▼
 ┌────────────────────────────────────────────────────────────────────────┐
-│ LAYER 3: POLICY-BASED OPTIMIZATION & SOLVER (layer3_scheduling)        │
-│ - Planner.plan(frame, tariffs, devices, constraints) -> DispatchPlan   │
-│ - Peak shaving & dynamic lockout detector (with winter comfort cap)    │
-│ - Multi-device capability waterfall (Shiftable, Thermal, Battery, EV)  │
+│ LAYER 3: POLICY-BASED OPTIMIZATION & SOLVERS (layer3_scheduling)       │
+│ - HiGHS LP Solver: Optimal battery storage charge/discharge scheduling │
+│ - Exact 2D Dynamic Programming (DP): Optimal DHW boiler buffering     │
+│ - 2R1C Deficit MPC: Concrete floor space heating preheat & peak coast  │
+│ - Storage Valuation Engine: Buying vs live EPEX market replacement val │
+│ - Dynamic Spits Detector: Winter-capped peak lockout & soft advice     │
 │ - Produces a frozen, immutable CanonicalDispatchPlan                   │
 └───────────────────────────────────┬────────────────────────────────────┘
                                     │
                                     ▼
 ┌────────────────────────────────────────────────────────────────────────┐
 │ LAYER 3B: PLAN STORE (plan_store.py)                                   │
-│ - Passed as injected dependency (thread-safe, testable, non-singleton) │
+│ - Injected dependency (thread-safe, testable, non-singleton)           │
 │ - In-memory plan cache + atomic disk snapshot + InfluxDB audit log     │
+│ - In-flight run continuity guard tracking active thermal cycles        │
 └───────────────────────────────────┬────────────────────────────────────┘
                                     │
          ┌──────────────────────────┴──────────────────────────┐
          ▼                                                     ▼
 ┌────────────────────────────────┐   ┌───────────────────────────────────┐
-│ LAYER 4: ACTUATION & FEEDBACK  │   │ LAYER 5: DUMB PRESENTATION        │
+│ LAYER 4: ACTUATION & FEEDBACK  │   │ LAYER 5: PRESENTATION COCKPIT     │
 │ (integrations/<protocol>/)     │   │ (HTTP API, Web Cockpit, Lovelace) │
-│ - Translates dispatch plan to  │   │ - Renders plan tokens and series  │
-│   device-specific commands     │   │ - Zero math, zero color logic     │
-│ - Enforces device invariants   │   │ - Styling & labels loaded from    │
-│   (e.g. hydraulic interlocks)  │   │   static mode_catalog.json        │
-│ - REPORTS BACK EFFECTIVE MODE  │   └───────────────────────────────────┘
-│   & downgrade reason           │
-└────────────────────────────────┘
+│ - Goldfish / Elephant control  │   │ - 3-Tier Forecast: Finance, Energy│
+│ - Physical Smart Grid relays   │   │   and Energy Storage              │
+│ - Hydraulic safety interlocks  │   │ - Presentation Parity Invariant   │
+│ - Reports back effective_mode  │   │ - Glassmorphic custom tooltips    │
+│   and downgrade reasons        │   │ - OpenAPI & MCP Tool lockstep     │
+└────────────────────────────────┘   └───────────────────────────────────┘
 ```
 
-### 2.1 The Dual-Loop Strategy (Macro Planner vs Micro Follower)
-1. **Macro Loop (15-minute resolution):**
-   The global economic and thermal dispatcher. Evaluates day-ahead wholesale prices, solar production curves, and thermal storage trajectories. Computes the contractual `CanonicalDispatchPlan` spanning 24–48 hours and establishes authorized operational mode windows (e.g. `CHARGE_SOLAR`, `FORCED_OFF`).
-2. **Micro Loop (Real-time fast follower — Roadmap):**
-   A secondary, high-frequency (5–10 second) control loop designed for instantaneous surplus tracking (e.g., modulating dynamic EV charging from 6A to 16A or fast inverter throttling based on live P1 telegrams).  
-   *Current phase operational status:* Devices that require real-time modulation operate in `NORMAL` (autonomous hardware inverter tracking / internal BMS balancing) within the operational mode windows authorized by the 15-minute Macro Plan.
+### 2.1 Macro Planning vs Micro Real-Time Control
+1. **Macro Loop (15-minute resolution):**  
+   Computes the global economic and thermal schedule across a rolling 24- to 48-hour horizon ($N = 96 \dots 192$ slots). Solves linear and dynamic programs, establishes authorized operational mode windows (e.g., `CHARGE_GRID`, `SPITSBLOK`, `MAX_ON`), and updates the published `CanonicalDispatchPlan`.
+2. **Micro Loop (1-minute dispatch execution):**  
+   Executes dispatch decisions every 60 seconds (`daemon.py`). Enforces in-flight continuity, checks real-time tank and room temperatures against shutoff thresholds, manages relay states (SG1..SG4), and asserts the Elephant baseline when idle.
 
-### 2.2 The Explicit Actuation Feedback Loop (`effective_mode`)
-Actuation is physically imperfect and often lossy:
-* Certain hardware interfaces have restricted states (e.g. Daikin Smart Grid contacts provide only 4 physical relay combinations: SG1 to SG4).
-* In such cases, `ADVISED_OFF` cannot be mapped to an SG pin state and is downgraded to Stand 2 (`NORMAL`) with a software setpoint decrease or alert; `MAX_ON` is achieved by combining Stand 4 with a 60°C target temperature command.
-* **Architecture Rule:** Hardware actuators in Layer 4 **must report back** `effective_mode`, `realized_power_kw`, and optional `downgrade_reason` into the telemetry stream. Layer 2 (Calibration & Residual Learning) trains **strictly on realized effective modes**, never on unverified plan desires.
-
-### 2.3 Unified Integration Packages (`integrations/<protocol_or_device>/`)
-Instead of separating a single device into disconnected Layer 1 providers and Layer 4 actuators, all hardware-specific code for a given device or protocol is co-located in `integrations/<protocol_or_device>/`:
-```
-integrations/daikin_altherma/
-├── __init__.py
-├── reader.py        # Telemetry ingestion (temperatures, power, states)
-├── actuator.py      # Relay/service actuation (SG contacts, setpoints)
-├── interlocks.py    # Device-level invariants (e.g., CV master OFF during SG4)
-└── tests/           # Device-level invariant unit tests
-```
-* **Hardware Invariant Enforcement:** Specific physical safety rules (such as disabling the central heating master switch during domestic hot water runs to prevent backup heater activation) belong **inside the device integration package as a verified device invariant**, never hardcoded inside the general planning engine!
-
-### 2.4 Layer 5 Presentation Specification (Dumb Views, Charting & Tokens)
-Detailed in authoritative companion document `docs/PRD_CHARTING_AND_VISUALIZATION.md`:
-* **Single Source of Truth:** Views perform ZERO math and zero separate interpolations. All data series stream from `plan.slots` (`CanonicalDispatchPlan`).
-* **Central State & Sticky Filters:** Global toolbar controls (`OpenHEMSChartEngine`) synchronize all charts simultaneously (Staven vs. Lijn, 15m vs. 1h) and persist state across sessions via `localStorage`.
-* **Standardized Tokens (`OpenHEMSTokens`):** Strict shared color palette: Solar (`#F59E0B`), Unallocated (`#3B82F6`), DHW (`#EC4899`), Space Heating (`#6366F1`), Battery Charge (`#10B981`), Netto (`#EF4444`), Price Line (`#38BDF8`).
-* **Uniform Time Contract:** Slot labels always anchor to `Nu (HH:MM)` for current slot, `Za 00:00`/`Zo 00:00` for midnight boundaries, and enforce $0.00\text{ kW}$ solar production at night.
-
-### 2.5 Domestic Hot Water (DHW) Exact Dynamic Programming Optimization
-Detailed in ADR-004:
-* **Mathematical Optimization:** Replaces heuristic rule arbitration and fixed temperature anchors with exact 2D Dynamic Programming over water tank temperature ($T \in [40.0^\circ\text{C}, 60.0^\circ\text{C}]$ in $0.25^\circ\text{C}$ steps) and compressor operational state $r \in \{\text{OFF\_FREE}, \text{OFF\_DWELL}(d), \text{ON\_MANDATORY}(l), \text{ON\_FREE}\}$.
-* **Cost Function ($J$):** Minimizes total electricity cost + ignition penalty ($c_{\text{start}} = €0.05$) minus terminal heat salvage value ($C \cdot (T_N - T_{\text{comf}}) \cdot \frac{\hat{p}}{\widehat{\text{COP}}}$) across a rolling 48-hour horizon ($N=192$ slots).
-* **Comfort & Safety Invariants:** Enforces $T_k \ge T_{\text{comf}} + m_k$ across all slots with P95 stochastic tap risk buffer ($m_k$), minimum run length ($L_{\min}=3$ slots), minimum dwell time ($D_{\min}=4$ slots), and hard peak lockout compliance ($u_k = 0$).
-* **Deterministic Explainability:** All presentation explanations and financial bullets are derived strictly from formal counterfactuals ($J_{\text{none}}$ unheated curve, $J_{\text{cap50}}$ capping difference, $J_{\text{delay}}$ commitment difference) with exactly one explanatory sentence per scheduled run.
-
-### 2.6 Opportunistic In-Flight Run Merger (Smart Grid 60°C Promotion)
-When an unscheduled draw-off (e.g. an afternoon shower) causes the DHW tank to dip below reheat threshold and triggers autonomous heat pump operation:
-* Open HEMS evaluates whether an upcoming 60°C thermal storage / solar boost run (`max_on`) is already scheduled within the lookahead window ($\le 2\text{ hours}$).
-* If cost-effective (current wholesale price is within $+€0.05/\text{kWh}$ or active solar surplus $\ge 1.0\text{ kW}$ is present, and no hard peak lockout is active):
-  1. The running cycle is immediately promoted to `max_on` (target 60°C, SG4 boost).
-  2. Hydraulic interlock is enforced (CV master switch turned OFF).
-  3. The upcoming planned run in `PlanStore` is cancelled and reverted to `normal` (50°C).
-  4. Benefit: Eliminates 1 compressor start/stop cycle, saves ~0.25 kWh compressor ramp-up overhead, and achieves full 24-hour thermal coverage without a second run.
-
-### 2.6 Space Heating & Concrete Floor Thermal Buffer Optimization (2R1C)
-During the heating season (mean outdoor temperature < 16.0°C), Open HEMS optimizes the underfloor heating circuit via a physical 2R1C thermal model:
-* **Thermal Floor Capacity:** Exploits the concrete screed (~14.5 kWh/K thermal capacity, 3–4 hour lag) as a high-efficiency thermal battery.
-* **Pre-Heat Valley Boost (SG3 / advised_on):** Charges the floor screed during cheap night valleys (02:00–06:00) or solar surplus hours with elevated heat pump output (SG3 boost, +1°C setpoint), raising room temperature within comfort limits (max 21.2°C).
-* **Peak Price Lockouts (SG1 / forced_off):** Disables space heating or clamps to modulation floor (950W) during morning (07:00–09:30) and evening (17:00–21:00) price spikes. The building passive thermal mass coasts through peaks with < 0.5°C indoor temperature drop (enforcing >= 19.5°C comfort minimum).
-* **Hydraulic Isolation:** CV heating is strictly paused during domestic hot water runs to protect compressor COP and prevent backup heater firing.
+### 2.2 Explicit Actuation Feedback (`effective_mode`)
+Hardware actuation is physically constrained:
+* Daikin Smart Grid contacts provide 4 discrete relay states: SG1 (Spitsblok / Forced Off), SG2 (Normal), SG3 (Advised On / Pre-heat), SG4 (Forced On / Boost).
+* Continuous modulating commands or soft advice (`ADVISED_OFF`) must map gracefully to hardware capabilities with reported downgrade reasons.
+* Actuators in Layer 4 report back `effective_mode`, `realized_power_kw`, and `downgrade_reason`. Layer 2 calibrates strictly against realized telemetry.
 
 ---
 
-## 3. Generic Data Model & Schema Contracts
+## 3. Mathematical Optimization & Physical Solvers
 
-### 3.1 Device Modeling via Capability Sets
-Rather than forcing devices into rigid archetypes, devices are modeled as a set of orthogonal **capabilities**:
+### 3.1 Electrochemical Battery Storage Dispatch (SciPy HiGHS LP Solver)
+Battery scheduling is formulated as a Linear Program (LP) solved via `scipy.optimize.linprog(method='highs')`:
 
-```python
-class DeviceCapability(str, Enum):
-    CAN_DELAY = "can_delay"          # Appliance run can be shifted in time
-    CAN_MODULATE = "can_modulate"    # Power can be continuously adjusted (kW / Amps)
-    CAN_STORE = "can_store"          # Buffers energy (thermal kWh or battery kWh)
-    CAN_EXPORT = "can_export"        # Can feed energy back into the house/grid
-    HAS_DEADLINE = "has_deadline"    # Must finish energy delivery before time T (e.g. EV departure)
-    IS_THERMAL = "is_thermal"        # Stores heat/cold; irreversible to electricity
-```
+$$\min \sum_{k=0}^{N-1} \left( p_{\text{buy},k} \cdot P_{\text{ch\_grid},k} - p_{\text{sell},k} \cdot P_{\text{dis},k} + c_{\text{deg}} \cdot (P_{\text{ch},k} + P_{\text{dis},k}) \right) \Delta t$$
 
-Devices declare their capabilities and bounds in `site_config.json`:
-* **Domestic Hot Water Cylinder (350L):** `["can_delay", "can_store", "is_thermal"]`
-* **Modulating Floor Heating (Heat Pump CV):** `["can_modulate", "can_store", "is_thermal"]`
-* **Home Battery (10 kWh LFP):** `["can_modulate", "can_store", "can_export"]`
-* **EV Charger (Smart Wallbox):** `["can_delay", "can_modulate", "has_deadline"]`
-* **Shiftable Appliance (Dishwasher):** `["can_delay", "has_deadline"]`
+**Subject to physical constraints:**
+1. **SoC Dynamics:**
+   $$\text{SoC}_{k+1} = \text{SoC}_k + \frac{(\eta_{\text{ch}} P_{\text{ch},k} - P_{\text{dis},k} / \eta_{\text{dis}}) \Delta t}{E_{\text{nom}}}$$
+2. **SoC Bounds:**
+   $$\text{SoC}_{\min} \le \text{SoC}_k \le \text{SoC}_{\max} \quad (\text{default } 10\% \le \text{SoC} \le 100\%)$$
+3. **Power Inverter Limits:**
+   $$0 \le P_{\text{ch},k} \le P_{\text{ch\_max}}, \quad 0 \le P_{\text{dis},k} \le P_{\text{dis\_max}}$$
+4. **Waterfall Residual Priority:**
+   The battery operates strictly on residual household power:
+   $$P_{\text{residual},k} = P_{\text{baseload},k} + P_{\text{dhw},k} + P_{\text{heating},k} - P_{\text{solar},k}$$
+   The battery is forbidden from competing with or stealing solar power allocated to DHW or space heating.
+5. **Economic Discharge Threshold & Trickle Protection:**
+   - **Minimum Discharge Threshold (`min_discharge_threshold_w`, default 400 W):** The battery will not discharge if residual load is below 400 W to protect inverter round-trip efficiency from baseload trickling.
+   - **Dynamic Economic Boost:** Direct grid arbitrage charging is triggered only when the forward price spread exceeds $€0.30/\text{kWh}$.
 
-The planning engine discovers devices dynamically from configuration by querying capabilities.
+### 3.2 Domestic Hot Water (DHW / SWW) Exact Dynamic Programming (DP)
+Detailed in ADR-004 & `layer3_scheduling/dhw_optimizer.py`:
+* **State Space:** Tank temperature $T_k \in [40.0^\circ\text{C}, 60.0^\circ\text{C}]$ discretized at $\Delta T = 0.25^\circ\text{C}$, compressor status $r \in \{\text{OFF\_FREE}, \text{OFF\_DWELL}(d), \text{ON\_MANDATORY}(l), \text{ON\_FREE}\}$.
+* **Objective Function:**
+  $$J = \min_{u} \sum_{k=0}^{N-1} \left[ u_k P_{\text{el}}(T_k) \Delta t \cdot p_{\text{eff},k} + c_{\text{start}} \max(0, u_k - u_{k-1}) \right] - C \cdot (T_N - T_{\text{comf}}) \cdot \frac{\hat{p}}{\widehat{\text{COP}}}$$
+  where $c_{\text{start}} = €0.05$, $C = 0.407\text{ kWh/K}$ (for 350L), and $T_{\text{comf}} = 40.0^\circ\text{C}$.
+* **Comfort Boundary:** $T_k \ge 40.0^\circ\text{C} + m_k$, where $m_k$ is a stochastic P95 tap water deficit buffer across an 8-hour lookahead window.
+* **Minimum Dwell & Run Times:** $L_{\min} = 3\text{ slots}$ (45 min), $D_{\min} = 4\text{ slots}$ (60 min).
+* **Terminal Salvage Valuation:** Restwärme at horizon end is valued against the cheapest 20% future tariff window to eliminate artificial end-of-horizon depletion.
 
-### 3.2 Energy Vector Scope
-While the canonical domain primitives (`models/canonical.py`) mathematically support multiple energy vectors (`ELECTRICITY`, `HEAT`, `GAS`, `WATER`), the active operational scope of Open HEMS is focused on **Electricity and Heat** flows.
+### 3.3 Space Heating & Floor Thermal Buffer Optimization (2R1C Model)
+* **Thermal Model:** Second-order thermal network modeling indoor air temperature ($T_{\text{in}}$) and concrete floor mass temperature ($T_{\text{floor}}$) with floor thermal capacity $C_{\text{floor}} \approx 14.5\text{ kWh/K}$ and 3–4 hour thermal lag.
+* **Deficit MPC Conditioning:** Pre-heating (`advised_on` / SG3 / +1.0°C boost) is scheduled **only if** passive building coasting without heating through the upcoming peak would drop $T_{\text{in}} < 19.9^\circ\text{C}$.
+* **Microclimate GHI & Nowcasting Assimilation:** Passive solar gain ($Q_{\text{solar}} = A_{\text{effective\_glass}} \cdot \text{GHI}$) uses Global Horizontal Irradiance directly from local Ecowitt Wittboy WS90 pyranometer observations, blended into Open-Meteo NWP forecasts via continuous cosine-eased nowcasting (`ObservationNowcaster`).
+* **Spits Peaking Elimination:** Space heating is locked out (SG1) during high-cost morning (07:00–09:30) and evening (17:30–21:00) spikes, coasting on concrete inertia with $< 0.5^\circ\text{C}$ temperature drop.
 
----
-
-### 3.3 Decoupling Presentation from the Dispatch Plan (`mode_catalog.json`)
-
-To preserve clean separation of concerns, the central dispatch plan (`CanonicalDispatchPlan`) carries **strictly language-neutral, programmatic mode codes** (`mode: "forced_off"`), target setpoints, and power allocations.
-
-* All human-readable display labels (`Geforceerd uit (blok)`), local language descriptions, and UI presentation tokens (`#EF4444`, `text-red-400`) are stripped from the core planner.
-* Presentation metadata resides in a static catalog: `static/mode_catalog.json` (or `models/mode_catalog.py`).
-* View layers (Web console, Home Assistant Lovelace cards) join the plan tokens against `mode_catalog.json`. Changing a display color or fixing a translation never modifies or invalidates the planning engine.
-
-#### Canonical Mode Codes
-* **Thermal Buffers / Heat Pumps:** `forced_off`, `advised_off`, `normal`, `advised_on`, `forced_on`, `max_on`.
-* **Battery Inverters:** `idle`, `charge_solar`, `charge_grid`, `discharge_self_consumption`, `discharge_arbitrage`, `lockout_hold`.
-* **EV Chargers:** `disconnected`, `paused`, `solar_only`, `scheduled_charge`.
-
----
-
-### 3.4 Tariff & Feed-In Model (`TariffProvider`)
-Tariff calculation is encapsulated in a dedicated, declarative `TariffProvider` configured via `site_config.json`:
-
-$$\text{Price}_{\text{all\_in}} = (\text{Price}_{\text{spot}} + \text{Markup}_{\text{supplier}} + \text{Tax}_{\text{energy}}) \times (1 + \text{VAT})$$
-
-$$\text{Compensation}_{\text{export}} = f(\text{Price}_{\text{spot}}, \text{NetMeteringActive}, \text{FeedInMarkup})$$
-
-The `TariffProvider` computes both the gross import tariff vector and the net export value vector, enabling correct economic arbitrage decisions as net-metering (*salderingsregeling*) phases out.
-
----
-
-### 3.5 Core Planning Contract Signature
-The central optimization interface is completely standardized:
-
-```python
-class ICentralPlanner(ABC):
-    @abstractmethod
-    def plan(
-        self,
-        frame: CleanTelemetryFrame,
-        tariffs: TariffProvider,
-        devices: List[DeviceConfig],
-        constraints: Dict[str, Any]
-    ) -> CanonicalDispatchPlan:
-        """
-        Computes the multi-device canonical dispatch plan.
-        Enables seamless replacement of the rule-waterfall solver with a
-        Mixed-Integer Linear Programming (MILP) solver in future releases.
-        """
-        pass
-```
+### 3.4 Storage Energy Valuation Engine
+Computes real-time economic worth of energy stored in household buffers (`layer3_scheduling/storage_valuation.py`):
+1. **DHW Boilervat (350L SWW):**
+   - Minimum usable boundary: $T_{\text{min}} = \text{setpoint} - 10.0^\circ\text{C} = 40.0^\circ\text{C}$.
+   - Stored thermal energy: $E_{\text{th}} = \frac{350 \cdot 1.163 \cdot \max(0, T_{\text{tank}} - 40.0)}{1000}\text{ kWh}_{\text{th}}$.
+   - Electrical equivalent: $E_{\text{el}} = E_{\text{th}} / \text{COP}_{\text{dhw}} \quad (\text{COP} \approx 3.1)$.
+   - Buying value: $E_{\text{el}} \cdot p_{\text{charge, dhw}}$.
+   - Actual replacement value: $E_{\text{el}} \cdot p_{\text{epex, live}}$.
+   - Arbitrage benefit: $\text{Value}_{\text{actual}} - \text{Value}_{\text{buy}}$.
+2. **Home Battery (15 kWh LFP):**
+   - Minimum usable boundary: $\text{SoC}_{\min} = 10\%$ ($1.5\text{ kWh}$).
+   - Usable stored energy: $E_{\text{usable}} = 15.0 \cdot \max(0, \text{SoC} - 0.10)\text{ kWh}$.
+   - Buying value: $E_{\text{usable}} \cdot p_{\text{charge, bat}}$.
+   - Actual replacement value: $E_{\text{usable}} \cdot 0.90 \cdot p_{\text{epex, live}}$ (accounting for 90% discharge efficiency).
+   - Arbitrage benefit: $\text{Value}_{\text{actual}} - \text{Value}_{\text{buy}}$.
 
 ---
 
-## 4. Replay Harness & Development Governance
+## 4. Hardware Control & Hydraulic Invariants (Layer 4)
 
-### 4.1 Zero Mock Data & Golden Replay Harness
-"Zero mock data in production" requires an airtight local testing workflow for developers and AI agents:
-* **The Replay Harness (`tests/fixtures/golden/` & `test_replay_harness.py`):**  
-  A recorded 24-hour production dataset (real EPEX prices, real weather radiation/temperature, real InfluxDB 7x96 profile, real tank starting temperature) is captured as a regression baseline.
-* Any code change, refactoring, or solver upgrade is verified by executing `pytest tests/unit/test_replay_harness.py` against the golden plan snapshot. If an architectural drift or calculation error is introduced, the test fails with an exact diff.
+### 4.1 Elephant & Goldfish Control Discipline
+Hardware control of the heat pump and hot water tank adheres strictly to:
+* **🐘 Elephant Invariants (Immutable Baseline State):**
+  - **Relay Baseline:** SG2 (Normal / Automatic: S10S = `off`, S11S = `off`).
+  - **DHW Setpoint Baseline:** Exactly **`50.0 °C`**.
+  - **DHW HVAC Mode Baseline:** Strictly **`heat` (AAN)**. Software is **strictly prohibited from turning the boiler `off`**.
+  - **Peak Lockouts (Spits):** Enforced **strictly via hardware relays** (SG1: S10S = `off`, S11S = `on`). Thermostat entities remain in `heat` (50°C); relays break the contact at hardware level.
+  - **Post-Run Restoration:** The moment a boost run ends or tank reaches target ($T_{\text{tank}} \ge T_{\text{target}} - 0.2^\circ\text{C}$), the system unconditionally returns to the Elephant baseline (SG2, 50.0°C, `heat`).
+* **🐠 Goldfish Execution (Stateless Dispatch per 60s Tick):**
+  - Every dispatch cycle evaluates the operational state from scratch without leaking previous dirty states.
+  - If no active boost is scheduled: enforce 50.0°C setpoint and SG2 relays.
+  - Inactive slots never inherit future boost temperatures (eliminates accidental autonomous night runs).
 
-### 4.2 Injected Dependency: `PlanStore`
-* `PlanStore` is implemented as an instantiable, injectable class (`PlanStore(persistence_path=...)`).
-* It supports passing mock or isolated storage instances into tests to allow concurrent scenario testing and deterministic verification without global state side-effects. A default shared instance is provided for the production daemon runtime.
-
----
-
-## 5. Non-Functional Requirements (NFRs)
-
-1. **Cold Boot & Graceful Recovery:** Daemon boots, loads fallback baselines, fetches live EPEX/weather, and publishes an initial plan within 5 seconds. Actuators remain in `NORMAL` failsafe until the first plan publishes.
-2. **Dual-Tier Persistence:** In-memory plan serving (< 1 ms latency) + atomic local disk snapshot (`/config/open_hems_plan_snapshot.json`) + InfluxDB audit log (`hems_recommendations`).
-3. **Daylight Saving Time (DST) Compliance:** Quarter-hour indexing handles 92 (spring), 96 (standard), and 100 (autumn) slots using timezone-aware `ZoneInfo` timestamps.
-4. **Manual Operational Overrides:** Supported via API (`BOOST_NOW`, `VACATION_MODE`, `PAUSE_HEMS`).
-5. **Security & Authentication:** Private network bind, Bearer token header check, reverse-proxy ingress header authentication. Zero cleartext secrets in git.
+### 4.2 Hydraulic Interlocks
+* **CV Master Isolation During DHW:** Whenever the heat pump runs domestic hot water heating (SG4), the central heating master switch (`switch.hc_mode_altherma_on`) is forced `off`. This prevents the 9 kW backup electric heater (BUH) from engaging simultaneously on the space heating circuit.
+* **Opportunistic Run Merger:** If autonomous showering triggers heating within 2 hours of a scheduled solar boost, Open HEMS dynamically promotes the cycle to SG4 (60°C), enforces hydraulic isolation, and cancels the future planned run to save 1 compressor start cycle.
 
 ---
 
-## 6. Delivery Structure & File Governance
+## 5. Generic Data Model & Schema Contracts
+
+### 5.1 Device Modeling via Capability Sets
+Devices declare orthogonal capabilities in `site_config.json`:
+* `can_delay`: Appliance run can be shifted in time (e.g. Dishwasher, EV).
+* `can_modulate`: Power can be continuously adjusted (e.g. Inverter, Heat Pump CV).
+* `can_store`: Buffers energy (thermal kWh or electrochemical battery kWh).
+* `can_export`: Can feed energy back into the house/grid (e.g. Battery).
+* `has_deadline`: Must complete energy delivery before time $T$ (e.g. EV).
+* `is_thermal`: Stores heat or cold; non-reversible to electricity.
+
+### 5.2 Decoupling Presentation from Planning (`mode_catalog.json`)
+The central dispatch plan (`CanonicalDispatchPlan`) carries **strictly language-neutral programmatic mode codes**:
+* Thermal / Heat Pump: `forced_off`, `advised_off`, `normal`, `advised_on`, `forced_on`, `max_on`.
+* Battery Inverter: `idle`, `charge_solar`, `charge_grid`, `discharge_self_consumption`, `discharge_arbitrage`, `lockout_hold`.
+* EV Charger: `disconnected`, `paused`, `solar_only`, `scheduled_charge`.
+Presentation text, badges, and colors are defined in `config/mode_catalog.json` and joined client-side.
+
+### 5.3 Open Knowledge Format (OKF v0.2) Specification
+All domain metrics, architectural invariants, and attested computations are stored in `knowledge/` following Google Cloud Open Knowledge Format v0.2:
+* `knowledge/metrics/`: `net-costs.md`, `solar-allocation.md`, `heatpump-cop.md`, `storage-valuation.md`.
+* `knowledge/architecture/`: `presentation-parity.md`, `resolution-alignment.md`, `forecast-segmentation.md`, `dhw-goldfish-elephant-control.md`, `solar-microclimate-nowcasting.md`.
+* `knowledge/computations/`: `kpi-digest.md`.
+* CI Enforced: `scripts/validate.sh` and `tests/architecture/test_okf_conformance.py` validate every file in build and pre-commit pipelines.
+
+---
+
+## 6. Frontend Presentation Architecture (Layer 5)
+
+Detailed in `docs/PRD_CHARTING_AND_VISUALIZATION.md`:
+
+### 6.1 Three-Tier Forecast Page Segmentation (`view-prediction`)
+1. **💶 Financiën & Markttarieven (Finance):**
+   - 24h/48h Cost forecast chart (`costForecastChart`).
+   - Dynamic EPEX wholesale import and export tariffs (`electricityPricesChart`).
+   - 4 Tariff KPIs: Lowest import, highest import, solar peak, highest export.
+2. **⚡ Energie & Vermogensbalans (Energy):**
+   - Optimizer dispatch advice banners (solar surplus, battery mode).
+   - 24h/48h Dual-polarity stacked power waterfall (`hemsChartAnalytics`): Baseload, Solar PV, DHW, CV space heating, Battery, Net grid line.
+   - 6-Box Energy metric summary (Solar, Export, Import, Produced, Consumed, Net).
+3. **🔋 Energie-opslag & Thermische Buffers (Storage):**
+   - Storage Valuation Top Cards (Boilervat 350L & Thuisbatterij 15 kWh): Buying value, actual EPEX replacement value, and arbitrage delta.
+   - Heat pump & boiler 24h operating envelope timeline.
+   - DHW boiler temperature trajectory (P05, P50, P95 bounds) and heat demand.
+   - Underfloor heating 2R1C room trajectory and concrete floor buffer.
+   - Home battery state-of-charge trajectory and power envelope.
+
+### 6.2 Presentation Parity Invariant
+Summary overview cards and modal detail popups must be 1:1 identical:
+* Every KPI card has an associated detail modal backed by the exact same JSON payload.
+* Near-zero values ($|v| < 0.05$) are sanitized to `0.0 kWh` / `€0.00` to prevent negative zero rendering (`-0.0`).
+
+### 6.3 Universal Glassmorphic Tooltips
+All charts render tooltips through `window.renderCustomTooltip`, providing rich HTML tooltips with category pills, live values, and context badges.
+
+---
+
+## 7. Security, Tooling & CI Governance
+
+### 7.1 5-Stage Pre-Commit Pipeline
+Every commit must pass `.git/hooks/pre-commit`:
+1. **[1/5] Secret & Credential Scanner (`scripts/secret_scanner.py`):** High-entropy regex checks for API keys, bearer tokens, private keys, and passwords.
+2. **[2/5] Bandit AST Security Scanner:** Static AST vulnerability analysis (`bandit -r api layer3_scheduling models -s B104,B310,B608 -ll`).
+3. **[3/5] Ruff Linter & Syntax Guard:** Python code formatting and syntax verification.
+4. **[4/5] Mypy Static Type Checker:** Strict type checking across API and scheduling packages.
+5. **[5/5] Node.js JavaScript Syntax Guard:** AST syntax compilation of frontend modules.
+
+### 7.2 Security Hardening & Network Hygeine
+* **Safe HTTP Client (`api/http_client.py`):** Scheme whitelisting (`http`/`https` only, blocks `file://`, `gopher://`, `ftp://`). Enforces strict TLS certificate validation on WAN endpoints, while permitting LAN bridge connections for local Home Assistant instances.
+* **Frontend Prototype Pollution Guards (`web/js/i18n.js`):** Recursive object mergers strictly filter out `__proto__`, `constructor`, and `prototype` keys using `Object.prototype.hasOwnProperty.call`.
+* **CDN Subresource Security:** External script tags in `web/index.html` include `crossorigin="anonymous"`.
+* **Container Isolation:** Explicit architectural documentation of HAOS root container privilege requirements (`Dockerfile`) to access `/data/options.json` (0600 root:root).
+
+### 7.3 REST & MCP Lockstep Parity
+Every operational capability is exposed identically across:
+1. **REST API (`api/`):** `/api/model/plan`, `/api/model/storage-valuation`, `/api/schedule/chart-data`, `/api/system/status`.
+2. **OpenAPI Specification (`docs/openapi.json`):** Formally typed schemas for all requests and responses.
+3. **Model Context Protocol (`mcp_server.py`):** Dedicated tools (`openhems_get_plan`, `openhems_get_storage_valuation`, etc.).
+4. **Architectural Guard (`tests/architecture/test_api_mcp_lockstep.py`):** Enforces 100% lockstep parity in CI.
+
+---
+
+## 8. Directory & File Governance
 
 ```
 open-hems/
-├── PRD.md                                 # Generic Product Requirements (This document)
-├── AGENTS.md                              # AI Agent & Developer Playbook
+├── PRD.md                                 # Master Product Requirements Document (This document)
+├── AGENTS.md                              # AI Agent & Developer Execution Rules
+├── config.yaml                            # Home Assistant Add-on Metadata & Configuration
+├── Dockerfile                             # Hardened Alpine/Python Container Image
+├── run.sh                                 # Container entrypoint & daemon runner
+├── mcp_server.py                          # Model Context Protocol Tool Server
+├── api/
+│   ├── context.py                         # Telemetry ingestion context builder
+│   ├── energy_feed.py                     # EPEX & weather forecast client
+│   ├── http_client.py                     # Hardened safe_urlopen with TLS enforcement
+│   ├── routes_analytics.py                # History & KPI breakdown endpoints
+│   ├── routes_forecast.py                 # Valuation & model endpoints
+│   ├── routes_schedule.py                 # Live chart-data & dispatch endpoints
+│   └── routes_system.py                   # Healthz, config & diagnostics endpoints
 ├── config/
-│   ├── site_config.json                   # Declarative site configuration & devices
-│   ├── site_example.yaml                  # Documented generic site template
-│   └── mode_catalog.json                  # UI display labels, translations & HEX colors
-├── docs/
-│   ├── REFERENCE_SITE_CULEMBORG.md        # Matthijs's physical installation profile
-│   └── adr/                               # Architecture Decision Records
-├── integrations/                          # Co-located hardware read/write packages
-│   ├── daikin_altherma/                   # Daikin P1P2 / SG integration & interlocks
-│   ├── deye_inverter/                     # Modbus TCP battery & inverter integration
-│   ├── p1_dsmr/                           # P1 serial/MQTT grid meter integration
-│   └── homeassistant/                     # Optional HA Provider & Actuator plugin
+│   ├── device_library/                    # JSONSchema-validated hardware profiles
+│   ├── mode_catalog.json                  # Programmatic tokens, labels & HEX colors
+│   └── site_config.json                   # Site device declarations & bounds
+├── integrations/
+│   ├── daikin_altherma/                   # Daikin Altherma P1P2 reader, actuator & interlocks
+│   ├── deye_inverter/                     # Modbus TCP battery inverter integration
+│   ├── homeassistant/                     # Sensor pusher & client bridge
+│   └── p1_dsmr/                           # P1 telegram reader
+├── knowledge/                             # Open Knowledge Format (OKF v0.2) Bundle
+│   ├── index.md & log.md                  # Master index and revision history
+│   ├── architecture/                      # Architectural invariants
+│   ├── computations/                      # Attested computations
+│   └── metrics/                           # Physical and financial metrics
 ├── layer1_data_collection/
 │   ├── collector.py                       # Ingestion aggregator
+│   ├── nowcasting.py                      # Local pyranometer microclimate assimilation
 │   └── sanitizer.py                       # TelemetrySanitizer (freshness, bounds)
 ├── layer2_calibration/
-│   ├── learned_forecaster.py              # 7x96 EWMA matrix engine
-│   └── dhw_thermal_model.py               # Thermal physics model
+│   ├── learned_forecaster.py              # 7x96 EWMA baseline profile engine
+│   └── dhw_thermal_model.py               # Thermal tank UA decay model
 ├── layer3_scheduling/
-│   ├── central_planner.py                 # Multi-device policy solver
-│   ├── tariff_provider.py                 # Dynamic tariff & export formula engine
-│   └── plan_store.py                      # Injectable, thread-safe PlanStore
+│   ├── battery_policy.py                  # SciPy HiGHS LP Battery Optimizer
+│   ├── central_planner.py                 # Master multi-device coordinator
+│   ├── dhw_optimizer.py                   # Exact 2D Dynamic Programming DHW Solver
+│   ├── plan_store.py                      # Thread-safe PlanStore with in-flight tracking
+│   ├── space_heating_policy.py            # 2R1C Deficit MPC Space Heating Solver
+│   ├── storage_valuation.py               # Buying vs live EPEX replacement value engine
+│   └── tariff_provider.py                 # Dynamic tariff & net-metering formulas
 ├── models/
-│   └── canonical.py                       # Canonical dataclasses & schemas
+│   ├── canonical.py                       # Canonical dispatch dataclasses
+│   └── physics.py                         # Physical thermodynamic equations
+├── schema/
+│   └── device_profile.schema.json         # JSON Schema for hardware library validation
+├── scripts/
+│   ├── secret_scanner.py                  # Pre-commit secret detector
+│   └── validate.sh                        # OKF v0.2 conformance validator
 ├── tests/
-│   ├── fixtures/golden/                   # Real recorded telemetry & golden snapshots
-│   ├── unit/                              # Pure mathematical unit tests
-│   └── architecture/                      # AST & Anti-drift guardrail tests
-└── daemon.py                              # Dumb HTTP server & Ingress UI provider
+│   ├── architecture/                      # AST purity, lockstep, OKF & contract tests
+│   ├── fixtures/golden/                   # Golden replay datasets & plan snapshots
+│   └── unit/                              # Solvers, interlocks, security & physical tests
+└── web/                                   # Frontend Cockpit (HTML5, Tailwind, Chart.js)
+    ├── index.html                         # 3-Tier dashboard layout
+    └── js/
+        ├── app.js                         # State coordinator & chart manager
+        ├── i18n.js                        # Hardened locale manager (prototype pollution safe)
+        └── modules/                       # Detail modals & visualizers
 ```

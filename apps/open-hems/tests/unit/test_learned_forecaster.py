@@ -239,4 +239,4 @@ def test_multivariable_building_loss_calibration():
         assert "c_solar" in recs
         assert 180.0 <= recs["building_ua"]["proposed_value"] <= 450.0
         assert 0.05 <= recs["c_wind"]["proposed_value"] <= 0.35
-        assert 0.02 <= recs["c_solar"]["proposed_value"] <= 0.25
+        assert 0.02 <= recs["c_solar"]["proposed_value"] <= 2.50

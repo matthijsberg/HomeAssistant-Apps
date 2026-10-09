@@ -201,4 +201,31 @@ def test_dockerfile_and_requirements_dependency_parity():
         assert pkg.lower() in req_pkgs or (pkg.lower() == "yaml" and "pyyaml" in req_pkgs), f"Third-party import '{pkg}' is missing from requirements.txt"
 
 
+def test_never_write_dhw_climate_setpoint():
+    """
+    Architectural Mandate: Strict Relay-Only Policy for DHW.
+    Open HEMS must NEVER write to or call set_temperature on climate.hc_dhw_dhw_setpoint.
+    DHW 60°C boost is handled 100% natively via SG4 physical relay contact.
+    """
+    repo_root = Path(__file__).parent.parent.parent
+    runtime_dirs = ["api", "models", "layer1_data_collection", "layer2_calibration", "layer3_scheduling", "integrations", "site_adapters"]
+    runtime_files = [repo_root / "daemon.py"]
+    for d in runtime_dirs:
+        dir_path = repo_root / d
+        if dir_path.exists():
+            runtime_files.extend(dir_path.rglob("*.py"))
+
+    violations = []
+    for py_file in runtime_files:
+        if any(part in py_file.parts for part in ["tests", ".git", "__pycache__"]):
+            continue
+        text = py_file.read_text(encoding="utf-8")
+        if "climate.hc_dhw_dhw_setpoint" in text and "set_temperature" in text:
+            # Check if set_temperature is called targeting hc_dhw_dhw_setpoint
+            if re.search(r'set_temperature[\s\S]{1,100}climate\.hc_dhw_dhw_setpoint', text) or re.search(r'climate\.hc_dhw_dhw_setpoint[\s\S]{1,100}set_temperature', text):
+                violations.append(f"{py_file.name} attempts to call set_temperature on climate.hc_dhw_dhw_setpoint")
+
+    assert not violations, "Violations of Strict Relay-Only DHW mandate found:\n" + "\n".join(violations)
+
+
 

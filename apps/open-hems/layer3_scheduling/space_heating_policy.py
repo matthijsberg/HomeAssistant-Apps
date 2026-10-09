@@ -33,7 +33,7 @@ class SpaceHeatingPolicy:
     C_AIR_KWH_PER_K = 3.2
     C_FLOOR_KWH_PER_K = 14.5
     R_FLOOR_AIR_K_PER_KW = 0.08
-    SOLAR_GAIN_COEFFICIENT = 0.18  # Fraction of PV-equivalent solar radiation entering as thermal gain
+    SOLAR_GAIN_COEFFICIENT = 1.15  # Ratio of passive window solar thermal gain to PV kW generation (calibrated from low-angle autumn/winter solar gain)
     WIND_INFILTRATION_COEFF_KW_PER_K_PER_MS = 0.015  # 15 W/K per m/s wind above 2 m/s
 
     # Temperatures & Comfort bounds
@@ -346,15 +346,12 @@ class SpaceHeatingPolicy:
                         comfort_trigger = (t_room <= target_room - 0.35)
 
                     # Model Predictive Control (MPC) Pre-heat condition:
-                    # 1. Deficit buffer: unheated coasting would violate comfort during upcoming peak
-                    # 2. Solar buffer: free solar surplus (>=1.5 kW)
-                    # 3. Valley buffer: cheap night valley only if room is below target setpoint
+                    # Pure physical deficit buffer: unheated coasting would violate comfort during upcoming peak
                     needs_deficit_buffer = cls._is_buffer_needed_for_peak(
                         i, t_room, t_floor, outdoor_temps_c, solar_kw, dynamic_peaks, min_comfort_room, step_hours, wind_speeds_ms
                     )
-                    is_solar_surplus = (solar_kw[i] >= 1.5)
 
-                    if (is_solar_surplus or needs_deficit_buffer) and not is_soft_advice:
+                    if needs_deficit_buffer and not is_soft_advice:
                         preheat_allowed = (t_room < max_preheat_room)
                     else:
                         preheat_allowed = False

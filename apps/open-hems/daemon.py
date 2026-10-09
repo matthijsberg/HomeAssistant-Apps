@@ -2,7 +2,7 @@
 """
 Open HEMS Framework & Management Console
 ========================================
-Version: 0.103.56
+Version: 0.104.39
 Generic Energy Management Platform:
   - Multi-Vector Telemetry & Optimization Daemon
   - Domain Router Dispatch to api/routes_*.py
@@ -422,6 +422,8 @@ class HemsBackgroundCollector(threading.Thread):
                 else:
                     PlanStore.get_instance().clear_in_flight_run()
                     in_flight = None
+                    # Run target reached: hardware relays return to SG2 (Normal 50°C natively).
+                    # Strictly NEVER touch climate.hc_dhw_dhw_setpoint via software.
 
             # Space Heating: Floor buffer preheat via Room Thermostat (+1.0°C) with rate limiter
             now_utc = datetime.now(timezone.utc)
@@ -472,15 +474,47 @@ class HemsBackgroundCollector(threading.Thread):
                     "target_temp_high": wd_room + 3.0
                 })
 
-            # Watchdog 2: DHW Thermostat Setpoint Failsafe (ensure standard 50°C baseline)
+            # Watchdog 2: DHW Elephant Baseline Invariant (ensure standard 50°C baseline and 'heat' state)
+            dhw_cl_state = states_map.get("climate.hc_dhw_dhw_setpoint", {}).get("state")
             dhw_cl_temp = states_map.get("climate.hc_dhw_dhw_setpoint", {}).get("attributes", {}).get("temperature")
+            
+            # P1P2 Bridge Write Budget Watchdog: respect hardware EEPROM protection.
+            # Escalate instead of automatically refilling tokens (user preference).
+            bridge_budget = states_map.get("number.hc_bridge_write_budget", {}).get("state")
+            if bridge_budget is not None:
+                try:
+                    if float(bridge_budget) <= 1.0:
+                        log_technical_error(
+                            domain="hardware",
+                            event_type="p1p2_write_budget_depleted",
+                            reason="⚠️ P1P2 Write Budget Bijna Leeg",
+                            explanation=f"P1P2 bridge tokensaldo is {bridge_budget}. Schrijfacties naar Daikin worden geweigerd ter bescherming van EEPROM. Escalatie naar gebruiker vereist.",
+                            inputs={"budget": bridge_budget},
+                            category="WARNING"
+                        )
+                except (ValueError, TypeError):
+                    pass
+
+            # If boiler climate was forced 'off' in HA, immediately restore to 'heat'
+            if dhw_cl_state == "off":
+                call_ha_service("climate", "set_hvac_mode", {
+                    "entity_id": "climate.hc_dhw_dhw_setpoint",
+                    "hvac_mode": "heat"
+                })
+
+            # User Mandate: Strict Relay-Only Policy for DHW. Open HEMS NEVER writes to climate.hc_dhw_dhw_setpoint.
+            # Stoken naar 60°C gebeurt zuiver via relais SG4; normaal bedrijf is 50°C via SG2.
             if dhw_cl_temp is not None:
                 try:
-                    if abs(float(dhw_cl_temp) - 50.0) > 0.2 and not in_flight:
-                        call_ha_service("climate", "set_temperature", {
-                            "entity_id": "climate.hc_dhw_dhw_setpoint",
-                            "temperature": 50.0
-                        })
+                    if abs(float(dhw_cl_temp) - 50.0) > 0.5:
+                        log_technical_error(
+                            domain="hardware",
+                            event_type="dhw_setpoint_anomaly",
+                            reason="⚠️ Boilervat Thermostaat Setpoint Afwijking",
+                            explanation=f"Boilervat thermostaat staat op {dhw_cl_temp}°C i.p.v. 50.0°C. Open HEMS raakt dit setpoint niet softwarematig aan (relais-only beleid).",
+                            inputs={"setpoint": dhw_cl_temp},
+                            category="WARNING"
+                        )
                 except (ValueError, TypeError):
                     pass
 
@@ -503,10 +537,19 @@ class HemsBackgroundCollector(threading.Thread):
             actuator = make_daikin_ha_actuator()
             if in_flight:
                 target_t = float(in_flight.get("target_temp_c", 50.0))
-            elif getattr(cur_slot, "target_temp_c", None) is not None:
-                target_t = float(cur_slot.target_temp_c)
+            elif mode_to_execute in ["max_on", "forced_on", "forced_solar_boost_60", "forced_night_50"]:
+                if getattr(cur_slot, "target_temp_c", None) is not None:
+                    target_t = float(cur_slot.target_temp_c)
+                elif plan.dhw_summary and getattr(plan.dhw_summary, "target_temp_c", None) is not None:
+                    target_t = float(plan.dhw_summary.target_temp_c)
+                else:
+                    target_t = 60.0 if mode_to_execute in ["max_on", "forced_solar_boost_60"] else 50.0
             else:
-                target_t = 60.0 if mode_to_execute in ["max_on", "forced_solar_boost_60"] else (50.0 if mode_to_execute in ["forced_on", "forced_night_50"] else None)
+                # Elephant baseline: normal mode strictly targets standard 50.0°C
+                target_t = 50.0
+
+            if plan.dhw_summary and plan.dhw_summary.planned_mode == "max_on" and mode_to_execute == "forced_on":
+                mode_to_execute = "max_on"
             res = actuator.execute_mode(
                 requested_mode=mode_to_execute,
                 current_cv_switch_state=cv_active,

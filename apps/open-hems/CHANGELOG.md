@@ -10,6 +10,64 @@ and this project adheres to our **4-Tier Semantic Versioning Specification**:
 
 ---
 
+## [0.105.0] — 2026-10-09 (Definitieve Relay-Only Hardening voor Boilervat DHW)
+
+### Besturing & Architectuur (Strikte Relais-Only Invariant)
+- **Volledige Verwijdering van Softwarematige Setpoint-Sturing**:
+  - Alle aanroepen naar `climate.set_temperature` op `climate.hc_dhw_dhw_setpoint` definitief uit de runtime verwijderd (`integrations/daikin_altherma/actuator.py`, `integrations/homeassistant/client.py`, `daemon.py`).
+  - Open HEMS raakt de boilervat-thermostaat **nooit meer aan**:
+    - **60 °C Zonnebuffer / Boost**: gebeurt 100% hardwarematig via het Smart Grid relais **SG4 (Geforceerd aan)**.
+    - **50 °C Normaal**: bij het beëindigen van een run vallen de relais terug naar **SG2 (Automatisch)**, waardoor de Daikin hardwarematig op zijn vaste 50 °C fabriekssetpoint blijft staan.
+  - Voorkomt definitief dat een setpoint van 60 °C (of 59,5 °C) 'blijft hangen' in de thermostaat door haperende communicatie of uitgeput write-budget.
+- **Architecturale Anti-Drift Guard**: Nieuwe CI-test `test_never_write_dhw_climate_setpoint()` borgt dat geen enkele module ooit nog een `set_temperature` call naar `climate.hc_dhw_dhw_setpoint` kan introduceren.
+
+## [0.104.43] — 2026-10-08 (Violet/Amethist Opslagkleur & Autonoom vs Gepland Visual Encodings)
+
+### Frontend & Visual Design System
+- **Violet/Amethist Ontwerpkeuze voor Energiebufferen (`#8B5CF6` / `#A855F7`)**:
+  - Oranje (`#F59E0B`) is nu **100% exclusief gereserveerd voor Zonnestroom** (opwek, zonneladen en tariefadvies).
+  - Alle "energie toevoegen aan opslag" (SWW Boilervat, CV Ruimteverwarming vloermassa, Thuisbatterij laden) gestandaardiseerd naar Violet/Amethist.
+  - Temperatuurtrajecten (P50, bandbreedte P05–P95) in thermische grafieken (`charts_thermal.js`) overgezet van verwarrend amber/oranje naar rustig violet.
+- **Tekstloze Onderscheiding Open HEMS vs. Warmtepomp Autonoom**:
+  - **Open HEMS Gepland / Algoritmisch**: Egaal vlak (Solid `#A855F7` met 16% achtergrondtint) en strakke volle 3px top accentrand.
+  - **Warmtepomp Autonoom / Hardware**: Diagonaal gestreept (Hatching pattern `#6D28D9` / `#8B5CF6`) met een gestippelde accentrand bovenaan (`setLineDash([4, 3])`).
+  - `extract_plan_heating_ranges()` en analytics endpoints leveren nu `initiator: "openhems" | "heatpump"` en `is_autonomous: bool` mee.
+
+## [0.104.42] — 2026-10-08 (P1P2 Write-Budget Escalatie Protocol & EEPROM Bescherming)
+
+### Besturing & Gebruikersafspraken
+- **Geen Automatische Refill van Write-Budget**: Automatische verhoging van `number.hc_bridge_write_budget` verwijderd uit `daemon.py` conform gebruikersvoorkeur. De hardwarematige schrijflimiet ter bescherming van Daikin EEPROM/flashgeheugen wordt strikt gerespecteerd.
+- **Escalatieprotocol**: Indien het tokensaldo leeg dreigt te raken ($\le 1$ token) bij een noodzakelijke wijziging, escaleert het systeem dit direct naar de gebruiker in chat in plaats van autonoom in te grijpen.
+- **Relais-Only Strategie Bevestigd**: Standaard DHW-runs (50 °C normaal en 60 °C boost) sturen 0 P1P2-schrijfcommando's en opereren zuiver via de hardware contacten SG2 en SG4.
+
+## [0.104.41] — 2026-10-07 (DHW Setpoint Write-Budget Watchdog & SG4 Native Boost Protection)
+
+### Oorzaak & Structurele Fix
+- **P1P2 Write-Budget Uitputting Opgelost**: De P1P2-bridge (`HC_Bridge`) weigerde setpoint-resets naar 50 °C omdat het write-budget (`number.hc_bridge_write_budget`) op 0 stond (`sensor.hc_bridge_writes_refused_budget : 255`).
+  - `number.hc_bridge_write_budget` direct hersteld naar 50 via service call.
+  - `climate.hc_dhw_dhw_setpoint` direct live teruggezet naar **50 °C**.
+  - Automatische write-budget waakhond toegevoegd aan `daemon.py`: herstelt het budget proactief zodra het onder 10 zakt.
+- **Actuator SG4 Native Boost Isolatie (`actuator.py`)**:
+  - `59.8 °C` (en afwijkingen binnen 0,5 °C van 50/60) wordt nu formeel herkend als standaard relaisdoel. Hierdoor wordt de P1P2 klimaatthermostaat tijdens SG4-boostruns **nooit meer overschreven**; de Daikin stookt hardwarematig via de SG4-contacten naar 60 °C (0 EEPROM wear, 0 write-budget verbruik).
+  - Bij terugkeer naar SG2 blijft het setpoint rotsvast op de 50 °C Elephant baseline staan.
+
+## [0.104.40] — 2026-09-29 (DHW Goldfish / Elephant Control Architecture & OKF v0.2)
+
+### Architectuur & Besturingslogica
+- **🐘 Elephant Baseline Invarianten**:
+  - Permanente thuisbasis geborgd: relais **SG2 (Normaal / Automatisch)**, setpoint **strikt 50,0 °C**, klimaatstatus **strikt `heat` (AAN)**.
+  - Softwarematige `off`-standen definitief gesaneerd uit `daemon.py`, `actuator.py` en legacy `evaluate_dhw_dual_windows.py`.
+  - Spitsblokkade uitsluitend via hardware relais **SG1 (Geforceerd uit)**; de klimaatthermostaat blijft gewoon op 50 °C `heat` staan.
+  - Na afloop van een SG4-boost (zon of dal) of bij het bereiken van de doeltemperatuur ($T_{\text{tank}} \ge T_{\text{target}} - 0{,}2$) wordt direct en onvoorwaardelijk teruggekeerd naar de Elephant baseline.
+- **🐠 Goldfish Stateloze Evaluatie**:
+  - Inactieve en normale tijdsloten erven nooit meer toekomstige boosttemperaturen (geen lekkende 60 °C setpoints tussen runs door).
+  - Actieve watchdogs dwingen stateloos `hvac_mode: heat` en 50,0 °C af buiten actieve runs.
+  - Het systeem behoudt de volledige vrijheid om dynamische doeltemperaturen ($50\text{--}60\text{ }^\circ\text{C}$) te bepalen voor komende runs via de DP Optimizer en `sensor.openhems_dhw_target_temperature`.
+- **OKF v0.2 Documentatie**:
+  - Kennisconcept `knowledge/architecture/dhw-goldfish-elephant-control.md` toegevoegd en gevalideerd met `scripts/validate.sh` (100% OKF conform).
+- **Unittests**:
+  - `tests/unit/test_goldfish_elephant_dhw.py` toegevoegd (215/215 tests groen).
+
 ## [0.104.39] — 2026-09-29 (Opslagwaarde Opgeslagen Energie & Drie-Segmenten Voorspelling)
 
 ### Nieuwe Functionaliteit & Architectuur

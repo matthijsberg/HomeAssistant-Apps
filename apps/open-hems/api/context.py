@@ -145,7 +145,12 @@ def ensure_active_canonical_plan(force_refresh=False, horizon_hours=48.0):
                     poa_kw = calculate_poa_solar_kw(dt_h, float(rad), kwp=s_kwp, tilt_deg=s_tilt, azimuth_deg=s_az, inverter_limit_kw=s_inv, eff=s_eff)
                     raw_solar.append({"dt": dt_h, "solar_kw": poa_kw})
                 w_kmh = float(m_winds[idx_m]) if (idx_m < len(m_winds) and m_winds[idx_m] is not None) else 0.0
-                raw_weather.append({"dt": dt_h, "temperature": float(tmp), "wind_speed_ms": round(w_kmh / 3.6, 2)})
+                raw_weather.append({
+                    "dt": dt_h,
+                    "temperature": float(tmp),
+                    "wind_speed_ms": round(w_kmh / 3.6, 2),
+                    "solar_radiation_w_m2": float(rad) if rad is not None else 0.0
+                })
     except Exception as e_w:
         print(f"Warning fetching Open-Meteo in ensure_active_canonical_plan: {e_w}")
 
@@ -257,6 +262,7 @@ def ensure_active_canonical_plan(force_refresh=False, horizon_hours=48.0):
     live_t_out = None
     live_solar_kw = None
     live_wind_ms = None
+    live_solar_rad_w_m2 = None
     try:
 
         # Live Outdoor Temp from Wittboy
@@ -289,6 +295,15 @@ def ensure_active_canonical_plan(force_refresh=False, horizon_hours=48.0):
                 live_wind_ms = round(float(st_w) / 3.6, 2)
             except ValueError:
                 pass
+
+        # Live Solar Radiation from Wittboy (W/m2)
+        live_solar_rad_w_m2 = None
+        st_rad = states_map.get("sensor.wittboy_gw2000a_weather_station_gw2000a_solar_radiation", {}).get("state")
+        if st_rad and st_rad not in ["unavailable", "unknown"]:
+            try:
+                live_solar_rad_w_m2 = float(st_rad)
+            except ValueError:
+                pass
     except Exception as e_nowcast:
         print(f"[Open HEMS Nowcasting] Error reading live weather telemetry: {e_nowcast}")
 
@@ -319,6 +334,7 @@ def ensure_active_canonical_plan(force_refresh=False, horizon_hours=48.0):
         live_outdoor_temp_c=live_t_out,
         live_solar_kw=live_solar_kw,
         live_wind_speed_ms=live_wind_ms,
+        live_solar_radiation_w_m2=live_solar_rad_w_m2,
         horizon_slots=horizon_slots,
         step_mins=15
     )

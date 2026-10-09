@@ -68,13 +68,16 @@ class DaikinReader:
     @classmethod
     def is_dhw_circuit_enabled(cls, states_map: Dict[str, Any]) -> bool:
         """
-        Determines if Domestic Hot Water (DHW / Tapwater) is enabled in Home Assistant.
-        Authoritative entity: climate.hc_dhw_dhw_setpoint.
-        If state == 'off', DHW is disabled (e.g. during vacations).
+        Determines if Domestic Hot Water (DHW / Tapwater) is enabled.
+        DHW is active by default. It is only disabled if an explicit vacation entity
+        or configuration flag is set to True.
+        Note: climate.hc_dhw_dhw_setpoint being 'off' merely indicates the 3-way valve
+        is in standby/space heating, NOT that DHW heating is disabled!
         """
         if not states_map:
             return True
-        dhw_climate = states_map.get("climate.hc_dhw_dhw_setpoint", {}).get("state")
-        if dhw_climate == "off":
+        # Only disable if an explicit vacation or holiday mode is on
+        vacation = states_map.get("input_boolean.vacation_mode", {}).get("state")
+        if vacation == "on":
             return False
         return True

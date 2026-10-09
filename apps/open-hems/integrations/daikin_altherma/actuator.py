@@ -128,13 +128,11 @@ class DaikinActuator(IActuatorController):
                 success = False
                 err = (err + "; " if err else "") + str(e)
 
-        # 3. Climate setpoint caller (only for anomalous temperatures deviating from standard 50/60 relay targets)
-        if self.climate_caller:
+        # 3. Climate setpoint caller (Strict Relay-Only Policy for DHW: NEVER touch DHW setpoint)
+        # DHW boost is handled 100% natively via SG4 relay. Thermostat stays at 50°C permanently.
+        if self.climate_caller and cmd.target_room_temp_c is not None:
             try:
-                if cmd.target_dhw_temp_c is not None and cmd.target_dhw_temp_c not in (50.0, 60.0):
-                    self.climate_caller("dhw", cmd.target_dhw_temp_c)
-                elif cmd.target_room_temp_c is not None:
-                    self.climate_caller("room", cmd.target_room_temp_c)
+                self.climate_caller("room", cmd.target_room_temp_c)
             except Exception as e:
                 success = False
                 err = (err + "; " if err else "") + str(e)

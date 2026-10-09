@@ -1,7 +1,7 @@
 {
   "ua_base": 7.75896,
   "c_wind": 0.005,
-  "c_solar": 0.05626,
+  "c_solar": 1.15,
   "dhw_average_cop": 2.0,
   "dhw_cop": {
     "cop_50": 2.0,
@@ -24,7 +24,7 @@
   "building": {
     "ua_base_w_per_k": 321.1,
     "c_wind_w_per_k_ms": 0.20833333333333334,
-    "c_solar_passive": 0.05626,
+    "c_solar_passive": 1.15,
     "target_temp_day_c": 20.0,
     "target_temp_night_c": 17.5,
     "summer_lockout_mean_c": 15.5,

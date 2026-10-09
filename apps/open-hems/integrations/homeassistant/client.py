@@ -194,17 +194,20 @@ def make_daikin_ha_actuator() -> DaikinActuator:
         return True
 
     def climate_caller(climate_name: str, temp: float):
-        eid = "climate.hc_dhw_dhw_setpoint"
-        curr_temp_str = states_map.get(eid, {}).get("attributes", {}).get("temperature")
-        try:
-            if curr_temp_str is not None and abs(float(curr_temp_str) - temp) < 0.2:
-                # Idempotent guard: temperature setpoint already set
-                return True
-        except (ValueError, TypeError):
-            pass
-        ok = call_ha_service("climate", "set_temperature", {"entity_id": eid, "temperature": temp})
-        if not ok:
-            raise RuntimeError(f"Home Assistant service call mislukt voor {eid} -> {temp}°C")
+        if climate_name == "dhw":
+            # Strict Relay-Only Mandate: Open HEMS must NEVER touch climate.hc_dhw_dhw_setpoint.
+            # Boost to 60°C is handled strictly via SG4 hardware contact.
+            return True
+
+        if climate_name == "room":
+            eid = "climate.woonkamer_climate_daikin"
+            ok = call_ha_service("climate", "set_temperature", {
+                "entity_id": eid,
+                "target_temp_low": temp,
+                "target_temp_high": temp + 3.0
+            })
+            return bool(ok)
+
         return True
 
     return DaikinActuator(

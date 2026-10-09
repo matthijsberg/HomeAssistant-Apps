@@ -28,6 +28,7 @@ class TelemetrySlot:
     room_temp_c: Optional[float] = None
     floor_temp_c: Optional[float] = None
     wind_speed_ms: float = 0.0
+    solar_rad_w_m2: float = 0.0
     quality: Quality = Quality.GOOD
     issues: List[str] = field(default_factory=list)
 
@@ -52,6 +53,10 @@ class CleanTelemetryFrame:
     @property
     def solar_forecast(self) -> List[float]:
         return [s.solar_kw for s in self.slots]
+
+    @property
+    def solar_radiations(self) -> List[float]:
+        return [s.solar_rad_w_m2 for s in self.slots]
 
     @property
     def outdoor_temperatures(self) -> List[float]:
@@ -103,6 +108,7 @@ class TelemetrySanitizer:
         live_outdoor_temp_c: Optional[float] = None,
         live_solar_kw: Optional[float] = None,
         live_wind_speed_ms: Optional[float] = None,
+        live_solar_radiation_w_m2: Optional[float] = None,
         horizon_slots: int = 96,
         step_mins: int = 15
     ) -> CleanTelemetryFrame:
@@ -179,8 +185,10 @@ class TelemetrySanitizer:
                 t_val = max(-30.0, min(50.0, t_val))
                 w_val = float(w.get("wind_speed_ms", w.get("wind_speed", w.get("wind_speed_10m", 0.0))))
                 w_val = max(0.0, min(50.0, w_val))
+                rad_val = float(w.get("solar_radiation_w_m2", w.get("shortwave_radiation", 0.0)))
+                rad_val = max(0.0, min(1500.0, rad_val))
                 key = dt.strftime("%Y-%m-%d %H:%M")
-                weather_map[key] = {"temp": t_val, "wind": w_val}
+                weather_map[key] = {"temp": t_val, "wind": w_val, "radiation": rad_val}
 
         # Sanitize current temperatures
         clean_dhw = None
@@ -240,11 +248,12 @@ class TelemetrySanitizer:
             else:
                 s_val = 0.0
 
-            # Outdoor temp & wind matching with smooth continuous 15-minute interpolation
+            # Outdoor temp, wind & solar radiation matching with smooth continuous 15-minute interpolation
             if key_exact in weather_map:
                 w_entry = weather_map[key_exact]
                 t_val = w_entry.get("temp", last_known_t)
                 w_val = w_entry.get("wind", 0.0)
+                rad_val = w_entry.get("radiation", 0.0)
             elif slot_dt.minute != 0 and key_floor in weather_map and key_ceil in weather_map:
                 wf = weather_map[key_floor]
                 wc = weather_map[key_ceil]
@@ -252,13 +261,21 @@ class TelemetrySanitizer:
                 tc = wc.get("temp", last_known_t)
                 t_val = (1.0 - frac) * tf + frac * tc
                 w_val = (1.0 - frac) * wf.get("wind", 0.0) + frac * wc.get("wind", 0.0)
+                rf = wf.get("radiation", 0.0)
+                rc = wc.get("radiation", 0.0)
+                rad_val = max(0.0, (1.0 - frac) * rf + frac * rc)
             elif key_hour in weather_map:
                 w_entry = weather_map[key_hour]
                 t_val = w_entry.get("temp", last_known_t)
                 w_val = w_entry.get("wind", 0.0)
+                rad_val = w_entry.get("radiation", 0.0)
             else:
                 t_val = last_known_t
                 w_val = 0.0
+                rad_val = 0.0
+
+            if slot_dt.hour >= 21 or slot_dt.hour < 6:
+                rad_val = 0.0
             last_known_t = t_val
 
             # Unallocated demand matching (7x96 matrix support)
@@ -307,6 +324,7 @@ class TelemetrySanitizer:
                     room_temp_c=clean_room if i == 0 else None,
                     floor_temp_c=clean_floor if i == 0 else None,
                     wind_speed_ms=round(w_val, 2),
+                    solar_rad_w_m2=round(rad_val, 1),
                     quality=p_q if is_fresh else Quality.STALE,
                     issues=slot_issues
                 )
@@ -326,6 +344,16 @@ class TelemetrySanitizer:
                         slots[idx_s].solar_kw = 0.0
                     else:
                         slots[idx_s].solar_kw = val
+                nowcasting_active = True
+
+            if live_solar_radiation_w_m2 is not None and slots:
+                raw_rad = [s.solar_rad_w_m2 for s in slots]
+                nudged_rad = ObservationNowcaster.nudge_radiation_forecast(raw_rad, live_solar_radiation_w_m2, slot_hours=slot_hours)
+                for idx_r, val in enumerate(nudged_rad):
+                    if slots[idx_r].dt.hour >= 21 or slots[idx_r].dt.hour < 6:
+                        slots[idx_r].solar_rad_w_m2 = 0.0
+                    else:
+                        slots[idx_r].solar_rad_w_m2 = val
                 nowcasting_active = True
 
             if live_outdoor_temp_c is not None and slots:
@@ -360,7 +388,8 @@ class TelemetrySanitizer:
                     "active": nowcasting_active,
                     "live_outdoor_temp_c": live_outdoor_temp_c,
                     "live_solar_kw": live_solar_kw,
-                    "live_wind_speed_ms": live_wind_speed_ms
+                    "live_wind_speed_ms": live_wind_speed_ms,
+                    "live_solar_radiation_w_m2": live_solar_radiation_w_m2
                 }
             },
             validation_errors=validation_errors + issues,
