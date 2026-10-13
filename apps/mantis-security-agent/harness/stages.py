@@ -49,14 +49,19 @@ def call_llm(
 
     # Gemini native REST endpoint
     if provider == "gemini":
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+        # SEC-07: Pass API key via header to prevent credential leaks in URL exceptions
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        headers = {
+            "x-goog-api-key": api_key,
+            "Content-Type": "application/json",
+        }
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "systemInstruction": {"parts": [{"text": system_instruction}]},
             "generationConfig": {"temperature": 0.1, "maxOutputTokens": 4096},
         }
         with httpx.Client(timeout=timeout) as client:
-            resp = client.post(url, json=payload)
+            resp = client.post(url, headers=headers, json=payload)
             resp.raise_for_status()
             data = resp.json()
             text = ""
@@ -130,7 +135,8 @@ def run_deterministic_prepass(target_dir: Path) -> Dict[str, Any]:
     Returns prepass results bundle.
     """
     manifest = build_deployment_manifest(target_dir)
-    semgrep_leads = run_semgrep(target_dir)
+    custom_rules = Path(__file__).parent.parent / "rules"
+    semgrep_leads = run_semgrep(target_dir, custom_rules_dir=custom_rules)
     gitleaks_leads = run_gitleaks(target_dir)
     shellcheck_leads = run_shellcheck(target_dir)
     hadolint_leads = run_hadolint(target_dir)
@@ -162,16 +168,21 @@ def synthesize_patch_check(repo_dir: Path, target_file: str, patch_diff: str) ->
     if not patch_diff or not patch_diff.strip():
         return "none"
 
-    patch_file = repo_dir / ".mantis_temp.patch"
     try:
-        patch_file.write_text(patch_diff, encoding="utf-8")
-        res = os.system(f"git -C '{repo_dir}' apply --check '{patch_file}' >/dev/null 2>&1")
-        if res == 0:
-            return "proposed_applies_cleanly"
-        else:
-            return "proposed_conflicts"
+        import subprocess
+        res = subprocess.run(
+            [
+                "git",
+                "-c", "core.fsmonitor=false",
+                "-c", "core.hooksPath=/dev/null",
+                "-C", str(repo_dir),
+                "apply", "--check", "-",
+            ],
+            input=patch_diff,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return "proposed_applies_cleanly" if res.returncode == 0 else "proposed_conflicts"
     except Exception:
         return "proposed_conflicts"
-    finally:
-        if patch_file.exists():
-            patch_file.unlink()

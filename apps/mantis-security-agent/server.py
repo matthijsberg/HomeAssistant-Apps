@@ -5,6 +5,8 @@ import time
 import uuid
 import asyncio
 import secrets
+import datetime
+import shutil
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
@@ -13,7 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from harness.snapshot import validate_target_path, compute_snapshot_id
+from harness.snapshot import validate_target_path, compute_snapshot_id, is_path_denied
 from harness.jobs import init_db, create_job, get_job, update_job_status, list_jobs
 from harness.egress import redact_secrets, create_egress_manifest, format_warning_text
 from harness.stages import run_deterministic_prepass, call_llm, synthesize_patch_check
@@ -71,15 +73,7 @@ def load_options() -> Dict[str, Any]:
 APP_OPTIONS = load_options()
 BEARER_TOKEN = os.environ.get("MANTIS_BEARER_TOKEN") or APP_OPTIONS.get("bearer_token")
 
-app = FastAPI(title="Mantis Security Agent", version="1.0.0-dev.1")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app = FastAPI(title="Mantis Security Agent", version="1.1.0")
 
 # Authentication dependency for MCP
 def verify_bearer_token(authorization: Optional[str] = Header(None)):
@@ -123,6 +117,12 @@ async def api_approve_job(job_id: str, background_tasks: BackgroundTasks):
     if job["status"] != "waiting_confirmation":
         return JSONResponse({"status": "error", "message": f"Job is in state '{job['status']}', not waiting_confirmation"})
 
+    # SEC-02: Verify job approval window has not expired (30 minutes)
+    created_dt = datetime.datetime.fromisoformat(job["created_at"])
+    if (datetime.datetime.now(datetime.timezone.utc) - created_dt).total_seconds() > 1800:
+        update_job_status(job_id, status="cancelled", stage="approval_expired")
+        raise HTTPException(status_code=410, detail="Approval window expired")
+
     update_job_status(job_id, status="running", approved=True, stage="approved")
     # Trigger execution in background
     background_tasks.add_task(execute_campaign_job, job_id)
@@ -137,12 +137,20 @@ async def api_reject_job(job_id: str):
     return JSONResponse({"status": "rejected", "job_id": job_id})
 
 
+def is_job_cancelled(job_id: str) -> bool:
+    job = get_job(job_id)
+    return bool(job and job.get("status") in ("cancelled", "interrupted"))
+
+
 # --- Background Worker for Audits ---
 
 async def execute_campaign_job(job_id: str):
     """Execute Mantis campaign stages sequentially after operator approval."""
     job = get_job(job_id)
     if not job or job["status"] != "running":
+        return
+
+    if is_job_cancelled(job_id):
         return
 
     update_job_status(job_id, status="running", progress=10, stage="indexing")
@@ -228,6 +236,9 @@ async def execute_campaign_job(job_id: str):
                 },
             )
 
+        if is_job_cancelled(job_id):
+            return
+
         update_job_status(
             job_id,
             status="completed",
@@ -241,6 +252,14 @@ async def execute_campaign_job(job_id: str):
 
     except Exception as e:
         update_job_status(job_id, status="failed", error_message=str(e))
+    finally:
+        # LOGIC-03: Cleanup ephemeral workspaces created for upload targets
+        for tgt in targets:
+            tgt_path = tgt.get("target") if isinstance(tgt, dict) else tgt
+            if tgt_path and "/data/workspaces/upload_" in str(tgt_path):
+                up_root = Path(str(tgt_path)).parent
+                if up_root.exists() and up_root.name.startswith("upload_"):
+                    shutil.rmtree(up_root, ignore_errors=True)
 
 
 # --- Model Context Protocol (MCP) Endpoints ---
@@ -354,12 +373,21 @@ async def handle_tool_call(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
 
     if name == "mantis_review_diff":
         diff_text = args.get("diff", "")
+        # LOGIC-04: Enforce max 200 KB diff size
+        if len(diff_text.encode("utf-8")) > 200 * 1024:
+            raise ValueError("Diff exceeds 200 KB limit")
+
         clean_diff, redactions = redact_secrets(diff_text)
         repo_path_str = args.get("repo_path")
+        if repo_path_str:
+            validate_target_path(repo_path_str, APP_OPTIONS.get("allow_list"))
+
+        # Parse added lines (+) to avoid false positives on context/deleted lines
+        added_lines = [l[1:] for l in clean_diff.splitlines() if l.startswith("+") and not l.startswith("+++")]
+        added_diff = "\n".join(added_lines)
         
         findings = []
-        # Run custom regex and AST taint check on diff
-        if "subprocess" in clean_diff and "shell=True" in clean_diff:
+        if ("subprocess" in added_diff and "shell=True" in added_diff) or "os.system(" in added_diff:
             findings.append({
                 "id": f"R-{secrets.token_hex(4)}-001",
                 "cwe": "CWE-78",
@@ -369,7 +397,7 @@ async def handle_tool_call(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
                 "verification": "statically_confirmed",
                 "confidence": "high",
             })
-        if "eval(" in clean_diff or "exec(" in clean_diff:
+        if "eval(" in added_diff or "exec(" in added_diff:
             findings.append({
                 "id": f"R-{secrets.token_hex(4)}-002",
                 "cwe": "CWE-95",
@@ -381,7 +409,17 @@ async def handle_tool_call(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             })
 
         verdict = "FLAGGED" if findings else "CLEAN"
+        job_id = f"rev_{secrets.token_hex(5)}"
+        create_job(
+            job_id=job_id,
+            job_type="diff_review",
+            targets=[{"type": "local_path", "target": repo_path_str or "diff_inline"}],
+            status="completed",
+        )
+        update_job_status(job_id, status="completed", progress=100, stage="report", findings=findings)
+
         return {
+            "job_id": job_id,
             "status": "completed",
             "verdict": verdict,
             "snapshot_id": f"diff:{secrets.token_hex(6)}",
@@ -409,22 +447,55 @@ async def handle_tool_call(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
                 validated_targets.append(str(p))
                 snapshot_ids[str(p)] = snap_id
             elif t_type == "upload":
-                # Ephemeral workspace unpack
+                # Ephemeral workspace unpack with upload_type parameter
                 up_id = secrets.token_hex(6)
                 up_dir = WORKSPACES_DIR / f"upload_{up_id}"
-                unpack_dir, _ = unpack_upload(t.get("target"), up_dir)
+                up_type = t.get("upload_type", "tar") if isinstance(t, dict) else "tar"
+                raw_target = str(t.get("target") or "") if isinstance(t, dict) else str(t)
+                unpack_dir, _ = unpack_upload(raw_target, up_dir, upload_type=up_type)
                 snap_id, _ = compute_snapshot_id(unpack_dir)
                 validated_targets.append(str(unpack_dir))
                 snapshot_ids[str(unpack_dir)] = snap_id
+
+        # LOGIC-02: Compute real file count, byte size, and secret redactions across targets
+        actual_files = 0
+        actual_bytes = 0
+        total_redactions = 0
+        for vt in validated_targets:
+            vt_p = Path(vt)
+            if vt_p.is_file():
+                actual_files += 1
+                try:
+                    f_content = vt_p.read_text(encoding="utf-8", errors="ignore")
+                    actual_bytes += len(f_content.encode("utf-8"))
+                    _, red_cnt = redact_secrets(f_content)
+                    total_redactions += red_cnt
+                except Exception:
+                    pass
+            elif vt_p.is_dir():
+                for root, dirs, files in os.walk(vt_p):
+                    dirs[:] = [d for d in dirs if d not in (".git", "node_modules", ".venv", "vendor", "__pycache__")]
+                    for f in files:
+                        fp = Path(root) / f
+                        if fp.is_symlink() or is_path_denied(str(fp), str(fp)):
+                            continue
+                        try:
+                            f_content = fp.read_text(encoding="utf-8", errors="ignore")
+                            actual_files += 1
+                            actual_bytes += len(f_content.encode("utf-8"))
+                            _, red_cnt = redact_secrets(f_content)
+                            total_redactions += red_cnt
+                        except Exception:
+                            pass
 
         job_id = f"job_{secrets.token_hex(5)}"
         models = args.get("llm") or APP_OPTIONS.get("defaults", {})
         env_context = args.get("context", "")
         egress_manifest = create_egress_manifest(
             targets=validated_targets,
-            files_count=10,
-            bytes_count=50000,
-            redactions=0,
+            files_count=max(1, actual_files),
+            bytes_count=max(1024, actual_bytes),
+            redactions=total_redactions,
             models=models,
         )
         egress_manifest["context"] = env_context
@@ -432,10 +503,11 @@ async def handle_tool_call(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         approval_url = f"{APP_OPTIONS.get('ha_external_url', 'https://hass.b3rg.nl:8123')}/api/hassio_ingress/{job_id}"
         warning_text = format_warning_text(egress_manifest, approval_url)
 
+        # LOGIC-03: Persist validated_targets (not raw base64 upload targets)
         create_job(
             job_id=job_id,
             job_type="campaign",
-            targets=raw_targets,
+            targets=[{"type": "local_path", "target": vt} for vt in validated_targets],
             status="waiting_confirmation",
             snapshot_ids=snapshot_ids,
             egress_manifest=egress_manifest,

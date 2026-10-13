@@ -27,6 +27,7 @@ def run_semgrep(target_dir: Path, custom_rules_dir: Path = None, timeout: int = 
         "--quiet",
         "--no-git-ignore",
         "--disable-version-check",
+        "--metrics=off",
     ]
 
     if custom_rules_dir and custom_rules_dir.exists():

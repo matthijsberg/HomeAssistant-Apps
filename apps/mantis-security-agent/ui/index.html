@@ -92,6 +92,16 @@
   </div>
 
   <script>
+    function escapeHtml(unsafe) {
+      if (unsafe === null || unsafe === undefined) return "";
+      return String(unsafe)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
     async function fetchJSON(url, options = {}) {
       try {
         const res = await fetch(url, options);
@@ -119,12 +129,15 @@
       } else {
         pendingList.innerHTML = pendingJobs.map(job => {
           const m = job.egress_manifest || {};
-          const targets = (m.targets || []).join(", ") || "Onbekend";
+          const targets = escapeHtml((m.targets || []).join(", ") || "Onbekend");
+          const jobId = escapeHtml(job.job_id);
+          const triageModel = escapeHtml(m.models?.triage?.model || 'triage');
+          const deepModel = escapeHtml(m.models?.deep?.model || 'deep');
           return `
             <div class="p-4 rounded-xl bg-slate-900/90 border border-amber-500/40 space-y-3">
               <div class="flex flex-col md:flex-row md:items-center justify-between gap-2">
                 <div>
-                  <span class="text-xs font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300">${job.job_id}</span>
+                  <span class="text-xs font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300">${jobId}</span>
                   <strong class="ml-2 text-white">${targets}</strong>
                 </div>
                 <div class="text-xs text-amber-400 font-mono">
@@ -132,14 +145,14 @@
                 </div>
               </div>
               <p class="text-xs text-slate-400">
-                Modellen: <span class="text-indigo-300 font-mono">${m.models?.triage?.model || 'triage'}</span> & <span class="text-indigo-300 font-mono">${m.models?.deep?.model || 'deep'}</span>.
+                Modellen: <span class="text-indigo-300 font-mono">${triageModel}</span> & <span class="text-indigo-300 font-mono">${deepModel}</span>.
                 ${m.redactions || 0} geheimen automatisch gemaskeerd.
               </p>
               <div class="flex gap-3 pt-1">
-                <button onclick="approveJob('${job.job_id}')" class="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white transition flex items-center gap-1.5">
+                <button onclick="approveJob('${jobId}')" class="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white transition flex items-center gap-1.5">
                   ✅ Goedkeuren & Egress Starten
                 </button>
-                <button onclick="rejectJob('${job.job_id}')" class="px-4 py-1.5 rounded-lg bg-rose-900/60 hover:bg-rose-800 text-xs font-semibold text-rose-300 transition">
+                <button onclick="rejectJob('${jobId}')" class="px-4 py-1.5 rounded-lg bg-rose-900/60 hover:bg-rose-800 text-xs font-semibold text-rose-300 transition">
                   ❌ Afwijzen
                 </button>
               </div>
@@ -152,7 +165,12 @@
         tbody.innerHTML = `<tr><td colspan="8" class="py-4 text-center text-slate-500 italic">Geen audits uitgevoerd.</td></tr>`;
       } else {
         tbody.innerHTML = data.map(j => {
-          const targets = Array.isArray(j.targets) ? j.targets.map(t => typeof t === 'object' ? t.target : t).join(", ") : j.targets;
+          const rawTargets = Array.isArray(j.targets) ? j.targets.map(t => typeof t === 'object' ? t.target : t).join(", ") : j.targets;
+          const targets = escapeHtml(rawTargets);
+          const jobId = escapeHtml(j.job_id);
+          const jobType = escapeHtml(j.job_type);
+          const jobStatus = escapeHtml(j.status);
+
           let badgeClass = "badge-clean";
           if (j.status === "waiting_confirmation") badgeClass = "badge-medium";
           else if (j.status === "failed") badgeClass = "badge-critical";
@@ -164,15 +182,15 @@
 
           return `
             <tr class="hover:bg-slate-900/40">
-              <td class="py-3 px-4 font-mono text-xs">${j.job_id}</td>
-              <td class="py-3 px-4 text-xs font-medium text-slate-300">${j.job_type}</td>
+              <td class="py-3 px-4 font-mono text-xs">${jobId}</td>
+              <td class="py-3 px-4 text-xs font-medium text-slate-300">${jobType}</td>
               <td class="py-3 px-4 text-xs truncate max-w-[200px]" title="${targets}">${targets}</td>
-              <td class="py-3 px-4"><span class="text-xs px-2 py-0.5 rounded-full ${badgeClass}">${j.status}</span></td>
+              <td class="py-3 px-4"><span class="text-xs px-2 py-0.5 rounded-full ${badgeClass}">${jobStatus}</span></td>
               <td class="py-3 px-4 text-xs font-bold ${findingsCount > 0 ? 'text-amber-400' : 'text-emerald-400'}">${findingsCount}</td>
               <td class="py-3 px-4 text-xs font-mono">${cost}</td>
               <td class="py-3 px-4 text-xs text-slate-400">${timeStr}</td>
               <td class="py-3 px-4 text-right">
-                <button onclick="viewReport('${j.job_id}')" class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-xs font-medium text-indigo-300 transition">
+                <button onclick="viewReport('${jobId}')" class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-xs font-medium text-indigo-300 transition">
                   Bekijk
                 </button>
               </td>
@@ -207,19 +225,19 @@
 
       let html = "";
       if (job.markdown_report) {
-        html += `<pre class="whitespace-pre-wrap text-slate-300 bg-slate-950 p-4 rounded-xl border border-slate-800">${job.markdown_report}</pre>`;
+        html += `<pre class="whitespace-pre-wrap text-slate-300 bg-slate-950 p-4 rounded-xl border border-slate-800">${escapeHtml(job.markdown_report)}</pre>`;
       } else if (job.findings && job.findings.length > 0) {
         html += `<div class="space-y-4">` + job.findings.map(f => `
           <div class="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-2">
             <div class="flex items-center justify-between">
-              <span class="text-xs font-bold text-amber-400">${f.cwe || 'CWE'} - ${f.title || 'Vulnerability'}</span>
-              <span class="text-xs px-2 py-0.5 rounded bg-rose-950 text-rose-300 border border-rose-800">${f.severity || 'HIGH'}</span>
+              <span class="text-xs font-bold text-amber-400">${escapeHtml(f.cwe || 'CWE')} - ${escapeHtml(f.title || 'Vulnerability')}</span>
+              <span class="text-xs px-2 py-0.5 rounded bg-rose-950 text-rose-300 border border-rose-800">${escapeHtml(f.severity || 'HIGH')}</span>
             </div>
-            <p class="text-xs text-slate-400">${f.rationale || f.message || ''}</p>
-            <div class="text-xs text-slate-500 font-mono">Locatie: ${f.file || 'onbekend'}:${f.start_line || 0}</div>
+            <p class="text-xs text-slate-400">${escapeHtml(f.rationale || f.message || '')}</p>
+            <div class="text-xs text-slate-500 font-mono">Locatie: ${escapeHtml(f.file || 'system')}:${escapeHtml(f.start_line || 0)}</div>
             ${f.suggested_patch ? `
               <div class="mt-2 text-xs font-mono bg-slate-950 p-2.5 rounded border border-slate-800 text-emerald-400 overflow-x-auto">
-                <pre>${f.suggested_patch}</pre>
+                <pre>${escapeHtml(f.suggested_patch)}</pre>
               </div>
             ` : ''}
           </div>

@@ -15,10 +15,13 @@ def run_hadolint(target_dir: Path, timeout: int = 30) -> List[Dict[str, Any]]:
         return []
 
     dockerfiles = []
-    for root, _, files in os.walk(target_dir):
+    for root, dirs, files in os.walk(target_dir):
+        dirs[:] = [d for d in dirs if d not in (".git", "node_modules", ".venv", "vendor", "__pycache__")]
         for f in files:
             if f == "Dockerfile" or f.startswith("Dockerfile."):
-                dockerfiles.append(str(Path(root) / f))
+                df_path = Path(root) / f
+                if not df_path.is_symlink():
+                    dockerfiles.append(str(df_path))
 
     if not dockerfiles:
         return []
@@ -45,7 +48,8 @@ def run_hadolint(target_dir: Path, timeout: int = 30) -> List[Dict[str, Any]]:
                         "message": issue.get("message"),
                         "severity": issue.get("level", "warning").upper(),
                     })
-        except Exception as e:
-            results.append({"source": "hadolint", "file": df, "error": str(e)})
+        except Exception:
+            # SCAN-02: Do not convert scanner execution errors into vulnerabilities
+            continue
 
     return results

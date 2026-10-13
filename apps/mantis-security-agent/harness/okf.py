@@ -13,13 +13,10 @@ _OKF_MAX_DEPTH = 6
 
 class _NoAnchorLoader(yaml.SafeLoader):
     """Prohibit YAML aliases/anchors to prevent billion-laughs attacks in frontmatter."""
-    pass
-
-def _deny_aliases(loader, node):
-    raise yaml.YAMLError("YAML aliases/anchors are prohibited in OKF frontmatter.")
-
-_NoAnchorLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_SCALAR_TAG, _NoAnchorLoader.construct_scalar)
-_NoAnchorLoader.add_multi_constructor("tag:yaml.org,2002:", _NoAnchorLoader.construct_undefined)
+    def compose_node(self, parent, index):
+        if self.check_event(yaml.events.AliasEvent):
+            raise yaml.YAMLError("YAML aliases/anchors are prohibited in OKF frontmatter.")
+        return super().compose_node(parent, index)
 
 
 def parse_okf_markdown(content: str, default_concept_id: str = "") -> Optional[Dict[str, Any]]:
@@ -45,7 +42,7 @@ def parse_okf_markdown(content: str, default_concept_id: str = "") -> Optional[D
             fm_raw = "".join(lines[1:closing_idx]).strip()
             body = "".join(lines[closing_idx + 1:]).strip()
             try:
-                loaded = yaml.load(fm_raw, Loader=yaml.SafeLoader)
+                loaded = yaml.load(fm_raw, Loader=_NoAnchorLoader)
                 if isinstance(loaded, dict):
                     frontmatter_dict = loaded
             except Exception:
@@ -196,10 +193,12 @@ def query_okf_concepts(
     params = []
 
     if resource:
-        # Match exact resource or wildcard substring
         clean_res = resource.replace("\\", "/").lstrip("/")
-        conditions.append("(resource = ? OR resource LIKE ? OR ? LIKE '%' || resource)")
-        params.extend([clean_res, f"%{clean_res}%", clean_res])
+        escaped_res = clean_res.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        conditions.append(
+            "(resource != '' AND (resource = ? OR resource LIKE ? ESCAPE '\\' OR ? LIKE '%' || resource))"
+        )
+        params.extend([clean_res, f"%{escaped_res}%", clean_res])
     if concept_type:
         conditions.append("type = ?")
         params.append(concept_type)
@@ -256,8 +255,9 @@ def export_okf_bundle(db_path: Path, output_dir: Path) -> int:
         subdir.mkdir(parents=True, exist_ok=True)
 
         slug = _OKF_SLUG_RE.sub('_', c.get('title', 'concept').lower())[:50].strip('_.')
-        cid = c.get('concept_id', 'concept')
-        filename = f"{cid}_{slug}.md"
+        raw_cid = str(c.get("concept_id") or "concept")
+        safe_cid = _OKF_SLUG_RE.sub("_", Path(raw_cid).stem)[:50].strip("_.") or "concept"
+        filename = f"{safe_cid}_{slug}.md" if not safe_cid.endswith(slug) else f"{safe_cid}.md"
         file_path = subdir / filename
 
         title = c.get("title") or "Untitled Concept"
@@ -359,7 +359,7 @@ def import_okf_bundle(db_path: Path, bundle_dir: Path) -> int:
             try:
                 rel_p = str(f_path.relative_to(bundle_dir))
                 content = f_path.read_text(encoding="utf-8", errors="ignore")
-                parsed = parse_okf_markdown(content, default_concept_id=rel_p)
+                parsed = parse_okf_markdown(content, default_concept_id=f_path.stem)
                 if parsed:
                     record_okf_concept(db_path, parsed)
                     imported_count += 1

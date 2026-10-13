@@ -32,16 +32,19 @@ def safely_extract_tar(tar_path: Path, dest_dir: Path) -> int:
             if member.isdev() or member.ischr() or member.isblk() or member.isfifo():
                 raise ValueError(f"Illegal file type in archive: {member.name}")
 
+            # SEC-01: Prohibit .git metadata directory in tar archives
+            member_parts = Path(member.name).parts
+            if ".git" in member_parts:
+                raise ValueError(f"Git metadata directory (.git) is prohibited in tar archives: {member.name}")
+
+            # SEC-06: Prohibit symlinks and hardlinks in uploaded archives
+            if member.issym() or member.islnk():
+                raise ValueError(f"Symlinks and hardlinks are prohibited in uploaded archives: {member.name}")
+
             # Check target path traversal
             target_path = (dest_dir / member.name).resolve()
             if target_path != dest_resolved and dest_resolved not in target_path.parents:
                 raise ValueError(f"Archive entry attempts directory traversal: {member.name}")
-
-            # Check symlinks pointing outside root
-            if member.issym() or member.islnk():
-                link_target = (dest_dir / member.linkname).resolve()
-                if link_target != dest_resolved and dest_resolved not in link_target.parents:
-                    raise ValueError(f"Symlink points outside archive root: {member.name} -> {member.linkname}")
 
             total_bytes += member.size
             if total_bytes > MAX_EXTRACTED_BYTES:
@@ -80,10 +83,16 @@ def unpack_upload(base64_data: str, target_dir: Path, upload_type: str = "tar") 
         if v_res.returncode != 0:
             raise ValueError(f"Git bundle verification failed: {v_res.stderr.strip()}")
 
-        # Clone bundle with hooks disabled and protocol restricted
+        # Clone bundle with hooks, symlinks, and fsmonitor disabled and protocol restricted
         clone_dir = target_dir / "repo"
         c_res = subprocess.run(
-            ["git", "-c", "core.hooksPath=/dev/null", "clone", str(bundle_file), str(clone_dir)],
+            [
+                "git",
+                "-c", "core.hooksPath=/dev/null",
+                "-c", "core.symlinks=false",
+                "-c", "core.fsmonitor=false",
+                "clone", str(bundle_file), str(clone_dir)
+            ],
             capture_output=True,
             text=True,
             timeout=30,

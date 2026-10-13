@@ -88,11 +88,15 @@ def extract_code_surface(repo_dir: Path) -> Dict[str, Any]:
     subproc_regex = re.compile(r"""(subprocess\.Popen|subprocess\.run|os\.system|exec\(|eval\()""")
     sql_regex = re.compile(r"""(\.execute\s*\(\s*f['"]|\.execute\s*\(\s*['"].*%s)""")
 
-    for root, _, files in os.walk(repo_dir):
+    for root, dirs, files in os.walk(repo_dir):
+        # SCAN-03: Exclude noisy or metadata directories
+        dirs[:] = [d for d in dirs if d not in (".git", "node_modules", ".venv", "vendor", "__pycache__")]
         for f in files:
             if not f.endswith((".py", ".js", ".ts", ".sh")):
                 continue
             f_path = Path(root) / f
+            if f_path.is_symlink():
+                continue
             try:
                 content = f_path.read_text(encoding="utf-8", errors="ignore")
                 rel_p = str(f_path.relative_to(repo_dir))

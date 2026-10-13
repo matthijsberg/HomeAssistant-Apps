@@ -91,6 +91,8 @@ def compute_tree_content_hash(root_dir: Path) -> str:
     for root, _, files in os.walk(root_dir):
         for f in sorted(files):
             abs_p = Path(root) / f
+            if abs_p.is_symlink():
+                continue
             try:
                 rel_p = abs_p.relative_to(root_dir)
             except ValueError:
@@ -130,9 +132,16 @@ def compute_snapshot_id(target_path: Path) -> Tuple[str, str]:
     is_git_repo = (target_path / ".git").is_dir()
     if is_git_repo:
         try:
+            git_safe_args = [
+                "git",
+                "-c", "core.fsmonitor=false",
+                "-c", "core.hooksPath=/dev/null",
+                "--no-optional-locks",
+                "-C", str(target_path),
+            ]
             # Check commit
             rev_res = subprocess.run(
-                ["git", "-C", str(target_path), "rev-parse", "HEAD"],
+                git_safe_args + ["rev-parse", "HEAD"],
                 capture_output=True,
                 text=True,
                 timeout=5,
@@ -141,7 +150,7 @@ def compute_snapshot_id(target_path: Path) -> Tuple[str, str]:
                 commit_hash = rev_res.stdout.strip()[:10]
                 # Check status
                 status_res = subprocess.run(
-                    ["git", "-C", str(target_path), "status", "--porcelain"],
+                    git_safe_args + ["status", "--porcelain"],
                     capture_output=True,
                     text=True,
                     timeout=5,

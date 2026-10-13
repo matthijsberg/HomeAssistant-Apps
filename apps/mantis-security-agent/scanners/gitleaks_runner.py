@@ -48,5 +48,6 @@ def run_gitleaks(target_dir: Path, timeout: int = 60) -> List[Dict[str, Any]]:
                 "cwe": "CWE-798",
             })
         return results
-    except Exception as e:
-        return [{"source": "gitleaks", "error": str(e)}]
+    except Exception:
+        # SCAN-02: Do not convert execution errors into findings
+        return []
