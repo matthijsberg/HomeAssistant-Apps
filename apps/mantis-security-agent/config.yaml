@@ -1,6 +1,6 @@
 name: "Mantis Security Agent"
 description: "Sandboxed AI code & configuration security auditing service with MCP interface"
-version: "1.0.0-dev.1"
+version: "1.1.0"
 slug: "mantis_security_agent"
 init: false
 arch:
@@ -33,9 +33,9 @@ options:
     openai:
       api_key: ""
     ollama:
-      base_url: "https://github.com/matthijsberg/HomeAssistant-Apps/tree/main/apps/mantis-security-agent"
+      base_url: "http://172.30.32.1:11434"
     openai_compatible:
-      base_url: "https://github.com/matthijsberg/HomeAssistant-Apps/tree/main/apps/mantis-security-agent"
+      base_url: ""
       api_key: ""
   defaults:
     triage:
@@ -48,7 +48,7 @@ options:
     max_tokens_per_job: 2000000
     max_cost_eur_per_job: 5.0
     max_cost_eur_per_day: 15.0
-  ha_external_url: "https://github.com/matthijsberg/HomeAssistant-Apps/tree/main/apps/mantis-security-agent"
+  ha_external_url: "https://hass.b3rg.nl:8123"
   confirm_wait_seconds: 60
   allow_list:
     - "/addons"
@@ -65,9 +65,9 @@ schema:
     openai:
       api_key: "password?"
     ollama:
-      base_url: "https://github.com/matthijsberg/HomeAssistant-Apps/tree/main/apps/mantis-security-agent"
+      base_url: "str?"
     openai_compatible:
-      base_url: "https://github.com/matthijsberg/HomeAssistant-Apps/tree/main/apps/mantis-security-agent"
+      base_url: "str?"
       api_key: "password?"
   defaults:
     triage:
@@ -80,7 +80,7 @@ schema:
     max_tokens_per_job: "int"
     max_cost_eur_per_job: "float"
     max_cost_eur_per_day: "float"
-  ha_external_url: "https://github.com/matthijsberg/HomeAssistant-Apps/tree/main/apps/mantis-security-agent"
+  ha_external_url: "str"
   confirm_wait_seconds: "int"
   allow_list:
     - "str"

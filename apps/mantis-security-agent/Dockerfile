@@ -5,7 +5,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Install system dependencies and static analysis tools
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
     python3-venv \
@@ -20,7 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Gitleaks (amd64)
-RUN curl -fsSL https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz \
+RUN curl -fsSL https://github.com/gitleaks/gitleaks/releases/download/v8.24.0/gitleaks_8.24.0_linux_x64.tar.gz \
     | tar -xz -C /usr/local/bin gitleaks \
     && chmod +x /usr/local/bin/gitleaks
 
