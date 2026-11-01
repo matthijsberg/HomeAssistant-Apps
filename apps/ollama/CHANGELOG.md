@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.3] - 2026-11-01
+
+### Fixed
+- **Strip Forwarded Transfer-Encoding Header (`web_server.py`)**: Fixed critical bug where `Transfer-Encoding: chunked` from HA Supervisor Ingress was forwarded in `requests` headers to Ollama while passing a decoded `bytes` body, causing Ollama's Go HTTP server to reject or hang on malformed chunk framing.
+- **Conversational Multi-Turn Memory (`index.html`)**: Added `chatHistory` array to `sendMessage()` so chat turns preserve conversational context and support both `/api/chat` and `/api/generate` responses.
+
+---
+
 ## [0.7.2] - 2026-11-01
 
 ### Added

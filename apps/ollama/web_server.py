@@ -57,7 +57,7 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
     def proxy_request(self, method, norm_path):
         url = f"{OLLAMA_URL}{norm_path}"
         try:
-            headers = {k: v for k, v in self.headers.items() if k.lower() not in ["host", "content-length"]}
+            headers = {k: v for k, v in self.headers.items() if k.lower() not in ["host", "content-length", "transfer-encoding"]}
 
             body = None
             if method in ["POST", "DELETE", "PUT", "PATCH"]:

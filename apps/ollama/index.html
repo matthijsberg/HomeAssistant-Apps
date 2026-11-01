@@ -48,7 +48,7 @@
 <body>
     <h1>
         <span>Ollama (Vulkan) Chat</span>
-        <span class="version-tag">v0.7.2 • Ollama 0.40.13</span>
+        <span class="version-tag">v0.7.3 • Ollama 0.40.13</span>
     </h1>
 
     <div class="card">
@@ -289,6 +289,8 @@
             }
         }
 
+        let chatHistory = [];
+
         async function sendMessage() {
             const text = userInput.value.trim();
             if (!text) return;
@@ -308,6 +310,7 @@
             sendBtn.disabled = true;
             sendBtn.textContent = "⏳...";
             appendMessage('user', text);
+            chatHistory.push({ role: 'user', content: text });
 
             const assistantMsgDiv = appendMessage('assistant', '<span style="color:#94a3b8;">Bezig met genereren op Intel Arc...</span>');
 
@@ -317,7 +320,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         model: modelToUse,
-                        messages: [{ role: 'user', content: text }],
+                        messages: chatHistory,
                         stream: false
                     })
                 });
@@ -328,8 +331,10 @@
                 }
 
                 const data = await response.json();
-                if (data.message && data.message.content) {
-                    assistantMsgDiv.innerHTML = renderMarkdown(data.message.content);
+                const reply = (data.message && data.message.content) ? data.message.content : (data.response || "");
+                if (reply) {
+                    assistantMsgDiv.innerHTML = renderMarkdown(reply);
+                    chatHistory.push({ role: 'assistant', content: reply });
                 } else {
                     assistantMsgDiv.textContent = "(Geen tekst ontvangen)";
                 }
