@@ -1,5 +1,5 @@
 name: "Ollama (Vulkan)"
-version: "0.7.1"
+version: "0.7.2"
 slug: "ollama_vulkan"
 description: "Ollama with Vulkan GPU support (Intel Arc/AMD). Optimized for private local LLM inference."
 url: "https://github.com/matthijsberg/HomeAssistant-Apps/tree/main/apps/ollama"
@@ -17,8 +17,10 @@ devices:
   - /dev/dri:/dev/dri
 ports:
   11434/tcp: 11434
+  8099/tcp: 8099
 ports_description:
-  11434/tcp: "The Ollama API Port, not used for End-User Access"
+  11434/tcp: "The Ollama API Port"
+  8099/tcp: "Direct Web UI Port (direct LAN browser access)"
 ingress: true
 ingress_port: 8099
 ingress_entry: /

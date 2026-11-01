@@ -61,9 +61,27 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
 
             body = None
             if method in ["POST", "DELETE", "PUT", "PATCH"]:
-                content_length = int(self.headers.get("Content-Length", 0))
-                if content_length > 0:
-                    body = self.rfile.read(content_length)
+                transfer_encoding = self.headers.get("Transfer-Encoding", "").lower()
+                if "chunked" in transfer_encoding:
+                    chunks = []
+                    while True:
+                        line = self.rfile.readline().strip()
+                        if not line:
+                            break
+                        try:
+                            chunk_len = int(line, 16)
+                        except ValueError:
+                            break
+                        if chunk_len == 0:
+                            self.rfile.readline()
+                            break
+                        chunks.append(self.rfile.read(chunk_len))
+                        self.rfile.readline()
+                    body = b"".join(chunks)
+                else:
+                    content_length = int(self.headers.get("Content-Length", 0))
+                    if content_length > 0:
+                        body = self.rfile.read(content_length)
 
             resp = requests.request(method, url, data=body, headers=headers, stream=False, timeout=300)
 

@@ -14,7 +14,7 @@ RUN_SH_PATH = APP_ROOT / "run.sh"
 def test_config_yaml_manifest(config_yaml):
     assert config_yaml["name"] == "Ollama (Vulkan)"
     assert config_yaml["slug"] == "ollama_vulkan"
-    assert config_yaml["version"] == "0.7.1"
+    assert config_yaml["version"] == "0.7.2"
     assert "amd64" in config_yaml["arch"]
     assert config_yaml["startup"] == "application"
     assert config_yaml["boot"] == "auto"
@@ -28,9 +28,10 @@ def test_config_yaml_manifest(config_yaml):
     assert "devices" in config_yaml
     assert any("/dev/dri" in dev for dev in config_yaml["devices"])
 
-    # Ports check: 11434 mapped
+    # Ports check: 11434 and 8099 mapped
     assert "ports" in config_yaml
     assert "11434/tcp" in config_yaml["ports"]
+    assert "8099/tcp" in config_yaml["ports"]
 
     # Privileged execution checks for GPU & raw I/O
     assert "privileged" in config_yaml

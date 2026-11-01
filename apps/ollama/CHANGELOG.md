@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] - 2026-11-01
+
+### Added
+- **Direct LAN Port Mapping (`8099/tcp`)**: Added direct port `8099` mapping to allow opening the Web UI directly on the local network (`http://<ha-ip>:8099/`), bypassing Home Assistant Ingress iframes.
+
+### Fixed
+- **Ingress Chunked Request Body Decoding (`web_server.py`)**: Fixed critical bug where Home Assistant Supervisor Ingress proxies POST request bodies with `Transfer-Encoding: chunked`. Previously, `web_server.py` only checked `Content-Length`, forwarding empty payload `data=None` to Ollama which caused Ollama to wait until a 300s read timeout occurred.
+
+---
+
 ## [0.7.1] - 2026-11-01
 
 ### Added
