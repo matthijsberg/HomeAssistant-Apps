@@ -9,14 +9,10 @@ OLLAMA_URL = "http://localhost:11434"
 
 
 class ProxyHandler(http.server.SimpleHTTPRequestHandler):
-    protocol_version = "HTTP/1.1"
-
     def _normalize_path(self):
-        # Handle duplicate slashes from Home Assistant Ingress routing
         return "/" + self.path.lstrip("/")
 
     def do_OPTIONS(self):
-        # CORS preflight handler for browser fetch requests
         self.send_response(200)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, PUT, PATCH, OPTIONS")
@@ -53,7 +49,6 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self.send_header("Pragma", "no-cache")
         self.send_header("Expires", "0")
-        self.send_header("Connection", "close")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, PUT, PATCH, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
@@ -70,9 +65,10 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
                 if content_length > 0:
                     body = self.rfile.read(content_length)
 
-            resp = requests.request(method, url, data=body, headers=headers, stream=True)
+            resp = requests.request(method, url, data=body, headers=headers, stream=False, timeout=300)
 
             self.send_response(resp.status_code)
+            content = resp.content
             for key, value in resp.headers.items():
                 if key.lower() not in [
                     "content-encoding",
@@ -82,12 +78,9 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
                     "access-control-allow-origin",
                 ]:
                     self.send_header(key, value)
+            self.send_header("Content-Length", str(len(content)))
             self.end_headers()
-
-            for chunk in resp.iter_content(chunk_size=1024):
-                if chunk:
-                    self.wfile.write(chunk)
-                    self.wfile.flush()
+            self.wfile.write(content)
 
         except Exception as e:
             print(f"Proxy error: {e}", file=sys.stderr)
