@@ -2,53 +2,83 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>Ollama (Vulkan) Chat</title>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
     <style>
-        body { font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background: #f0f0f0; }
-        #chat-container { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); height: 60vh; overflow-y: auto; display: flex; flex-direction: column; }
-        .message { margin-bottom: 10px; padding: 10px; border-radius: 5px; max-width: 80%; }
+        * { box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 860px; margin: 0 auto; padding: 12px; background: #f4f6f8; color: #1e293b; }
+        h1 { font-size: 1.4rem; margin: 4px 0 10px 0; display: flex; align-items: center; justify-content: space-between; }
+        .version-tag { font-size: 0.75rem; background: #e2e8f0; color: #475569; padding: 3px 8px; border-radius: 9999px; font-weight: normal; }
+        
+        .card { background: white; padding: 12px; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-bottom: 10px; }
+        .flex-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+        
+        #chat-container { background: white; padding: 14px; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); height: calc(100vh - 270px); min-height: 280px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+        .message { padding: 10px 14px; border-radius: 12px; max-width: 85%; font-size: 0.95rem; line-height: 1.45; word-break: break-word; }
         .message p { margin: 0 0 6px 0; }
         .message p:last-child { margin-bottom: 0; }
-        .message ul, .message ol { margin: 4px 0 6px 0; padding-left: 20px; }
-        .message li { margin-bottom: 2px; }
-        .message code { background: rgba(0,0,0,0.08); padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
-        .message pre { background: rgba(0,0,0,0.08); padding: 8px; border-radius: 4px; overflow-x: auto; margin: 6px 0; }
+        .message code { background: rgba(0,0,0,0.08); padding: 2px 5px; border-radius: 4px; font-size: 0.9em; font-family: monospace; }
+        .message pre { background: rgba(0,0,0,0.08); padding: 10px; border-radius: 6px; overflow-x: auto; margin: 6px 0; }
         .message pre code { background: none; padding: 0; }
-        .message h1, .message h2, .message h3 { margin: 8px 0 4px 0; font-size: 1em; font-weight: bold; }
-        .message strong { font-weight: bold; }
-        .message em { font-style: italic; }
-        .user { align-self: flex-end; background: #007bff; color: white; }
-        .assistant { align-self: flex-start; background: #e9ecef; color: black; }
-        #input-area { margin-top: 20px; display: flex; gap: 10px; }
-        input[type="text"] { flex-grow: 1; padding: 10px; border: 1px solid #ddd; border-radius: 4px; }
-        button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
-        button:disabled { background: #ccc; }
-        #status { margin-bottom: 10px; font-size: 0.9em; color: #666; }
-        select { padding: 5px; }
+        .user { align-self: flex-end; background: #2563eb; color: white; border-bottom-right-radius: 3px; }
+        .assistant { align-self: flex-start; background: #f1f5f9; color: #0f172a; border-bottom-left-radius: 3px; }
+        .system { align-self: center; background: #fef3c7; color: #92400e; font-size: 0.85rem; border-radius: 8px; max-width: 95%; }
+        
+        form#input-area { display: flex; gap: 8px; margin-top: 10px; }
+        input[type="text"] { flex-grow: 1; padding: 12px 14px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 16px; outline: none; transition: border-color 0.2s; }
+        input[type="text"]:focus { border-color: #2563eb; }
+        
+        button, select { font-size: 15px; border-radius: 8px; padding: 10px 14px; cursor: pointer; border: none; font-weight: 500; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
+        select { background: white; border: 1px solid #cbd5e1; color: #1e293b; max-width: 220px; }
+        
+        .btn-primary { background: #2563eb; color: white; }
+        .btn-success { background: #16a34a; color: white; }
+        .btn-danger { background: #dc2626; color: white; }
+        .btn-info { background: #0284c7; color: white; }
+        button:disabled { opacity: 0.6; cursor: not-allowed; }
+        
+        #download-status { font-size: 0.85rem; color: #64748b; margin-top: 4px; }
     </style>
 </head>
 <body>
-    <h1>Ollama (Vulkan) Chat</h1>
-    <div id="status">
-        Status: <span id="connection-status">Checking...</span> |
-        Model: <select id="model-select"><option>Loading...</option></select>
-        <button id="delete-btn" onclick="deleteModel()" style="background: #dc3545; padding: 5px 10px; margin-left: 10px;">Delete</button>
-        <button id="test-btn" onclick="testModel()" style="background: #28a745; padding: 5px 10px; margin-left: 10px;">Test</button>
-        <span id="running-model" style="margin-left: 10px; color: #007bff; font-size: 0.9em;"></span>
+    <h1>
+        <span>Ollama (Vulkan) Chat</span>
+        <span class="version-tag">v0.7.0 • Ollama 0.40.13</span>
+    </h1>
+
+    <div class="card">
+        <div class="flex-row">
+            <span style="font-weight: 600;">Status:</span>
+            <span id="connection-status" style="color: #64748b;">Checking...</span>
+            <span style="margin-left: 6px; font-weight: 600;">Model:</span>
+            <select id="model-select"><option value="">Laden...</option></select>
+            <button id="test-btn" class="btn-success" onclick="testModel()">⚡ Test</button>
+            <button id="delete-btn" class="btn-danger" onclick="deleteModel()">🗑️ Verwijder</button>
+        </div>
+        <div id="running-model" style="margin-top: 8px; font-size: 0.85rem; color: #475569;">
+            Actief in VRAM: Controleren...
+        </div>
     </div>
-    <div id="download-area" style="margin-bottom: 10px; padding: 10px; background: white; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); display: flex; gap: 10px; align-items: center;">
-        <input type="text" id="download-input" placeholder="Enter model name to download (e.g., llama3.2:3b)" style="flex-grow: 1; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
-        <button id="download-btn" onclick="downloadModel()" style="background: #17a2b8; padding: 8px 15px;">Download / Load</button>
-        <span id="download-status" style="font-size: 0.9em; color: #666;"></span>
+
+    <div class="card">
+        <div class="flex-row" style="gap: 8px;">
+            <input type="text" id="download-input" placeholder="Model downloaden (bijv. qwen3.5:9b of llama3.2:3b)" style="flex-grow: 1; min-height: 44px;">
+            <button id="download-btn" class="btn-info" onclick="downloadModel()">📥 Download</button>
+        </div>
+        <div id="download-status"></div>
     </div>
+
     <div id="chat-container"></div>
-    <div id="input-area">
-        <input type="text" id="user-input" placeholder="Type a message..." onkeypress="if(event.key==='Enter') sendMessage()">
-        <button onclick="sendMessage()" id="send-btn">Send</button>
-    </div>
+
+    <form id="input-area" onsubmit="event.preventDefault(); sendMessage();">
+        <input type="text" id="user-input" placeholder="Typ een bericht..." autocomplete="off">
+        <button type="submit" id="send-btn" class="btn-primary">Verstuur</button>
+    </form>
 
     <script>
         const chatContainer = document.getElementById('chat-container');
@@ -58,12 +88,25 @@
         const statusSpan = document.getElementById('connection-status');
         const runningModelSpan = document.getElementById('running-model');
 
-        marked.setOptions({ breaks: true, gfm: true });
-        function renderMarkdown(text) {
-            return DOMPurify.sanitize(marked.parse(text));
+        if (typeof marked !== 'undefined') {
+            marked.setOptions({ breaks: true, gfm: true });
         }
 
-        let currentModel = '';
+        function renderMarkdown(text) {
+            if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
+                return DOMPurify.sanitize(marked.parse(text));
+            }
+            return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>");
+        }
+
+        function appendMessage(role, text) {
+            const div = document.createElement('div');
+            div.className = `message ${role}`;
+            div.innerHTML = renderMarkdown(text);
+            chatContainer.appendChild(div);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+            return div;
+        }
 
         async function checkRunningModel() {
             try {
@@ -72,150 +115,67 @@
                     const data = await response.json();
                     if (data.models && data.models.length > 0) {
                         const running = data.models.map(m => m.name).join(', ');
-                        runningModelSpan.innerHTML = `<strong>Active Model (VRAM):</strong> ${running}`;
-                        runningModelSpan.style.color = '#28a745';
+                        runningModelSpan.innerHTML = `<strong>In VRAM (Actief):</strong> <span style="color: #16a34a;">${running}</span>`;
                     } else {
-                        const selected = modelSelect.value || "None";
-                        runningModelSpan.textContent = `Active Model (VRAM): Idle (Will load '${selected}')`;
-                        runningModelSpan.style.color = '#666';
+                        const current = modelSelect.value || "Geen";
+                        runningModelSpan.textContent = `In VRAM: Ruststand (laadt '${current}' bij eerste vraag)`;
                     }
                 }
             } catch (e) {
-                console.error("Error fetching running models", e);
+                console.error("Fout bij ophalen actieve modellen", e);
             }
         }
 
         async function fetchModels() {
-            checkRunningModel();
             try {
-                // Use relative path for Ingress compatibility
                 const response = await fetch('api/tags');
                 if (response.ok) {
                     const data = await response.json();
+                    const prevVal = modelSelect.value;
                     modelSelect.innerHTML = '';
+                    
                     if (data.models && data.models.length > 0) {
                         data.models.forEach(model => {
-                            const option = document.createElement('option');
-                            option.value = model.name;
-                            option.textContent = model.name;
-                            modelSelect.appendChild(option);
+                            const opt = document.createElement('option');
+                            opt.value = model.name;
+                            opt.textContent = model.name;
+                            modelSelect.appendChild(opt);
                         });
-                        // Select the first one or keep selection
-                        if (currentModel && Array.from(modelSelect.options).some(o => o.value === currentModel)) {
-                            modelSelect.value = currentModel;
-                        } else {
-                            currentModel = modelSelect.value;
+                        
+                        if (prevVal && Array.from(modelSelect.options).some(o => o.value === prevVal)) {
+                            modelSelect.value = prevVal;
                         }
-                        statusSpan.textContent = 'Connected';
-                        statusSpan.style.color = 'green';
+                        
+                        statusSpan.textContent = 'Verbonden ✓';
+                        statusSpan.style.color = '#16a34a';
                     } else {
-                        const option = document.createElement('option');
-                        option.textContent = "No models found";
-                        modelSelect.appendChild(option);
-                        statusSpan.textContent = 'Connected (No models)';
+                        const opt = document.createElement('option');
+                        opt.value = '';
+                        opt.textContent = "Geen modellen gedownload";
+                        modelSelect.appendChild(opt);
+                        statusSpan.textContent = 'Verbonden (Geen modellen)';
+                        statusSpan.style.color = '#ca8a04';
                     }
                 } else {
-                    throw new Error('Failed to fetch models');
+                    throw new Error('Kon modellen niet ophalen');
                 }
-            } catch (error) {
-                console.error(error);
-                statusSpan.textContent = 'Disconnected';
-                statusSpan.style.color = 'red';
-                modelSelect.innerHTML = '<option>Error loading models</option>';
+            } catch (err) {
+                console.error(err);
+                statusSpan.textContent = 'Niet verbonden ❌';
+                statusSpan.style.color = '#dc2626';
             }
-        }
-
-        modelSelect.addEventListener('change', (e) => {
-            currentModel = e.target.value;
-        });
-
-        async function deleteModel() {
-            if (!currentModel) return;
-            if (!confirm(`Are you sure you want to delete model '${currentModel}'? This cannot be undone.`)) return;
-
-            try {
-                const response = await fetch('api/delete', {
-                    method: 'DELETE',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name: currentModel })
-                });
-
-                if (response.ok) {
-                    alert(`Model '${currentModel}' deleted successfully.`);
-                    fetchModels(); // Refresh list
-                } else {
-                    const err = await response.text();
-                    alert(`Failed to delete model: ${err}`);
-                }
-            } catch (error) {
-                alert(`Error: ${error.message}`);
-            }
-        }
-
-        async function downloadModel() {
-            const input = document.getElementById('download-input');
-            const btn = document.getElementById('download-btn');
-            const status = document.getElementById('download-status');
-            const modelNames = input.value.split(',').map(m => m.trim()).filter(m => m);
-            
-            if (modelNames.length === 0) {
-                alert("Please enter at least one model name.");
-                return;
-            }
-
-            input.disabled = true;
-            btn.disabled = true;
-
-            for (const modelName of modelNames) {
-                status.textContent = `Downloading ${modelName}... (this may take a few minutes)`;
-                status.style.color = '#17a2b8';
-
-                try {
-                    const response = await fetch('api/pull', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ name: modelName, stream: false })
-                    });
-
-                    if (!response.ok) {
-                        const err = await response.text();
-                        throw new Error(`Failed to download ${modelName}: ${err}`);
-                    }
-
-                    status.textContent = `Loading ${modelName} into memory...`;
-                    await fetch('api/generate', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ model: modelName, keep_alive: "5m" })
-                    });
-
-                } catch (error) {
-                    alert(`Error downloading ${modelName}: ${error.message}`);
-                    status.textContent = `Error: ${error.message}`;
-                    status.style.color = '#dc3545';
-                    break;
-                }
-            }
-
-            status.textContent = 'Download(s) complete!';
-            status.style.color = '#28a745';
-            input.value = '';
-            input.disabled = false;
-            btn.disabled = false;
-            fetchModels();
-            
-            setTimeout(() => {
-                if (status.textContent === 'Download(s) complete!') {
-                    status.textContent = '';
-                }
-            }, 5000);
+            checkRunningModel();
         }
 
         async function testModel() {
-            if (!currentModel) return;
+            const modelToUse = modelSelect.value;
+            if (!modelToUse) {
+                appendMessage('system', "Selecteer eerst een model in de dropdown hierboven.");
+                return;
+            }
+            
             const btn = document.getElementById('test-btn');
-            const originalText = btn.textContent;
-            btn.textContent = "Testing...";
+            btn.textContent = "⏳ Test...";
             btn.disabled = true;
 
             try {
@@ -223,66 +183,137 @@
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        model: currentModel,
-                        prompt: "Are you working?",
+                        model: modelToUse,
+                        prompt: "Zeg 'Klaar voor gebruik!' in één zin.",
                         stream: false
                     })
                 });
 
                 if (response.ok) {
                     const data = await response.json();
-                    alert(`Success! Model responded: "${data.response}"`);
+                    appendMessage('system', `⚡ **Test geslaagd op ${modelToUse}:** ${data.response}`);
                 } else {
                     const err = await response.text();
-                    alert(`Test Failed: ${response.status} ${response.statusText}\n${err}`);
+                    appendMessage('system', `❌ **Test mislukt:** HTTP ${response.status} - ${err}`);
                 }
-            } catch (error) {
-                alert(`Test Error: ${error.message}`);
+            } catch (err) {
+                appendMessage('system', `❌ **Verbindingsfout:** ${err.message}`);
             } finally {
-                btn.textContent = originalText;
+                btn.textContent = "⚡ Test";
                 btn.disabled = false;
+                checkRunningModel();
             }
         }
 
-        function appendMessage(role, text) {
-            const div = document.createElement('div');
-            div.className = `message ${role}`;
-            div.textContent = text;
-            chatContainer.appendChild(div);
-            chatContainer.scrollTop = chatContainer.scrollHeight;
-            return div;
+        async function deleteModel() {
+            const modelToDelete = modelSelect.value;
+            if (!modelToDelete) return;
+            if (!confirm(`Weet je zeker dat je '${modelToDelete}' wilt verwijderen van de schijf?`)) return;
+
+            try {
+                const response = await fetch('api/delete', {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: modelToDelete })
+                });
+
+                if (response.ok) {
+                    appendMessage('system', `🗑️ Model '${modelToDelete}' succesvol verwijderd.`);
+                    fetchModels();
+                } else {
+                    const err = await response.text();
+                    appendMessage('system', `❌ Fout bij verwijderen: ${err}`);
+                }
+            } catch (err) {
+                appendMessage('system', `❌ Fout: ${err.message}`);
+            }
+        }
+
+        async function downloadModel() {
+            const input = document.getElementById('download-input');
+            const btn = document.getElementById('download-btn');
+            const status = document.getElementById('download-status');
+            const modelName = input.value.trim();
+
+            if (!modelName) {
+                status.textContent = "Vul eerst een modelnaam in.";
+                status.style.color = '#dc2626';
+                return;
+            }
+
+            input.disabled = true;
+            btn.disabled = true;
+            status.textContent = `Bezig met downloaden van '${modelName}'... Dit duurt 1 tot 3 minuten.`;
+            status.style.color = '#0284c7';
+
+            try {
+                const response = await fetch('api/pull', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: modelName, stream: false })
+                });
+
+                if (!response.ok) {
+                    const err = await response.text();
+                    throw new Error(`HTTP ${response.status}: ${err}`);
+                }
+
+                status.textContent = `Download voltooid! Laden in VRAM...`;
+                status.style.color = '#16a34a';
+
+                await fetch('api/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model: modelName, keep_alive: "5m" })
+                });
+
+                appendMessage('system', `✅ Model '${modelName}' is gedownload en geladen in het geheugen!`);
+                input.value = '';
+                await fetchModels();
+                modelSelect.value = modelName;
+
+            } catch (err) {
+                status.textContent = `Fout bij downloaden: ${err.message}`;
+                status.style.color = '#dc2626';
+            } finally {
+                input.disabled = false;
+                btn.disabled = false;
+                checkRunningModel();
+            }
         }
 
         async function sendMessage() {
             const text = userInput.value.trim();
             if (!text) return;
-            if (!currentModel) {
-                alert("Please select a model first.");
+
+            const modelToUse = modelSelect.value;
+            if (!modelToUse) {
+                appendMessage('system', "⚠️ Selecteer eerst een model in de dropdown hierboven.");
                 return;
             }
 
             userInput.value = '';
             userInput.disabled = true;
             sendBtn.disabled = true;
+            sendBtn.textContent = "⏳...";
             appendMessage('user', text);
 
-            const assistantMsgDiv = appendMessage('assistant', '...');
+            const assistantMsgDiv = appendMessage('assistant', '<span style="color:#94a3b8;">Bezig met genereren op Intel Arc...</span>');
 
             try {
-                // Use relative path for Ingress compatibility
                 const response = await fetch('api/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        model: currentModel,
+                        model: modelToUse,
                         messages: [{ role: 'user', content: text }],
                         stream: false
                     })
                 });
 
                 if (!response.ok) {
-                    const err = await response.text();
-                    throw new Error(`HTTP ${response.status}: ${err}`);
+                    const errText = await response.text();
+                    throw new Error(`HTTP ${response.status}: ${errText}`);
                 }
 
                 const data = await response.json();
@@ -294,36 +325,34 @@
 
                 if (data.done) {
                     const totalDuration = (data.total_duration / 1e9).toFixed(2);
-                    const loadDuration = (data.load_duration / 1e9).toFixed(2);
                     const evalCount = data.eval_count || 0;
                     const evalDuration = (data.eval_duration / 1e9).toFixed(2);
                     const tps = evalDuration > 0 ? (evalCount / evalDuration).toFixed(1) : "N/A";
                     
                     const metricsHtml = `
-                        <div style="font-size: 0.75em; color: #888; margin-top: 8px; border-top: 1px solid #eee; padding-top: 4px;">
-                            ⏱️ ${totalDuration}s (Load: ${loadDuration}s, Gen: ${evalDuration}s) &nbsp;|&nbsp;
-                            🔤 ${evalCount} tokens (${tps} t/s)
+                        <div style="font-size: 0.75em; color: #94a3b8; margin-top: 8px; border-top: 1px solid #e2e8f0; padding-top: 4px;">
+                            ⏱️ ${totalDuration}s &nbsp;|&nbsp; 🔤 ${evalCount} tokens (${tps} t/s) &nbsp;|&nbsp; 🧠 ${modelToUse}
                         </div>
                     `;
                     assistantMsgDiv.insertAdjacentHTML('beforeend', metricsHtml);
                     chatContainer.scrollTop = chatContainer.scrollHeight;
-                    checkRunningModel();
                 }
 
             } catch (error) {
-                assistantMsgDiv.textContent = "Error: " + error.message;
+                assistantMsgDiv.innerHTML = `<span style="color:#dc2626;">❌ Fout: ${error.message}</span>`;
             } finally {
                 userInput.disabled = false;
                 sendBtn.disabled = false;
+                sendBtn.textContent = "Verstuur";
                 userInput.focus();
+                checkRunningModel();
             }
         }
 
-        // Initial load
+        // Initialiseer direct
         fetchModels();
-        // Check running model status every 5s without wiping select options
+        // Polling VRAM status elke 5s (zonder dropdown leeg te vegen)
         setInterval(checkRunningModel, 5000);
     </script>
-    <div style="font-size: 0.8em; color: #aaa; text-align: center; margin-top: 20px;">v0.6.10</div>
 </body>
 </html>
