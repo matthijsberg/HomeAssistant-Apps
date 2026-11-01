@@ -144,6 +144,9 @@
                         
                         if (prevVal && Array.from(modelSelect.options).some(o => o.value === prevVal)) {
                             modelSelect.value = prevVal;
+                        } else if (modelSelect.options.length > 0) {
+                            modelSelect.selectedIndex = 0;
+                            modelSelect.value = modelSelect.options[0].value;
                         }
                         
                         statusSpan.textContent = 'Verbonden ✓';
@@ -168,7 +171,11 @@
         }
 
         async function testModel() {
-            const modelToUse = modelSelect.value;
+            let modelToUse = modelSelect.value;
+            if (!modelToUse && modelSelect.options.length > 0 && modelSelect.options[0].value) {
+                modelToUse = modelSelect.options[0].value;
+                modelSelect.value = modelToUse;
+            }
             if (!modelToUse) {
                 appendMessage('system', "Selecteer eerst een model in de dropdown hierboven.");
                 return;
@@ -286,7 +293,11 @@
             const text = userInput.value.trim();
             if (!text) return;
 
-            const modelToUse = modelSelect.value;
+            let modelToUse = modelSelect.value;
+            if (!modelToUse && modelSelect.options.length > 0 && modelSelect.options[0].value) {
+                modelToUse = modelSelect.options[0].value;
+                modelSelect.value = modelToUse;
+            }
             if (!modelToUse) {
                 appendMessage('system', "⚠️ Selecteer eerst een model in de dropdown hierboven.");
                 return;
