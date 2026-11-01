@@ -3,11 +3,23 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ollama Chat</title>
+    <title>Ollama (Vulkan) Chat</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
     <style>
         body { font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background: #f0f0f0; }
         #chat-container { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); height: 60vh; overflow-y: auto; display: flex; flex-direction: column; }
-        .message { margin-bottom: 10px; padding: 10px; border-radius: 5px; max-width: 80%; white-space: pre-wrap; }
+        .message { margin-bottom: 10px; padding: 10px; border-radius: 5px; max-width: 80%; }
+        .message p { margin: 0 0 6px 0; }
+        .message p:last-child { margin-bottom: 0; }
+        .message ul, .message ol { margin: 4px 0 6px 0; padding-left: 20px; }
+        .message li { margin-bottom: 2px; }
+        .message code { background: rgba(0,0,0,0.08); padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+        .message pre { background: rgba(0,0,0,0.08); padding: 8px; border-radius: 4px; overflow-x: auto; margin: 6px 0; }
+        .message pre code { background: none; padding: 0; }
+        .message h1, .message h2, .message h3 { margin: 8px 0 4px 0; font-size: 1em; font-weight: bold; }
+        .message strong { font-weight: bold; }
+        .message em { font-style: italic; }
         .user { align-self: flex-end; background: #007bff; color: white; }
         .assistant { align-self: flex-start; background: #e9ecef; color: black; }
         #input-area { margin-top: 20px; display: flex; gap: 10px; }
@@ -19,13 +31,18 @@
     </style>
 </head>
 <body>
-    <h1>Ollama Chat</h1>
+    <h1>Ollama (Vulkan) Chat</h1>
     <div id="status">
         Status: <span id="connection-status">Checking...</span> |
         Model: <select id="model-select"><option>Loading...</option></select>
         <button id="delete-btn" onclick="deleteModel()" style="background: #dc3545; padding: 5px 10px; margin-left: 10px;">Delete</button>
         <button id="test-btn" onclick="testModel()" style="background: #28a745; padding: 5px 10px; margin-left: 10px;">Test</button>
         <span id="running-model" style="margin-left: 10px; color: #007bff; font-size: 0.9em;"></span>
+    </div>
+    <div id="download-area" style="margin-bottom: 10px; padding: 10px; background: white; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); display: flex; gap: 10px; align-items: center;">
+        <input type="text" id="download-input" placeholder="Enter model name to download (e.g., llama3.2:3b)" style="flex-grow: 1; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+        <button id="download-btn" onclick="downloadModel()" style="background: #17a2b8; padding: 8px 15px;">Download / Load</button>
+        <span id="download-status" style="font-size: 0.9em; color: #666;"></span>
     </div>
     <div id="chat-container"></div>
     <div id="input-area">
@@ -40,6 +57,11 @@
         const modelSelect = document.getElementById('model-select');
         const statusSpan = document.getElementById('connection-status');
         const runningModelSpan = document.getElementById('running-model');
+
+        marked.setOptions({ breaks: true, gfm: true });
+        function renderMarkdown(text) {
+            return DOMPurify.sanitize(marked.parse(text));
+        }
 
         let currentModel = '';
 
@@ -130,6 +152,94 @@
             }
         }
 
+        async function downloadModel() {
+            const input = document.getElementById('download-input');
+            const btn = document.getElementById('download-btn');
+            const status = document.getElementById('download-status');
+            const modelNames = input.value.split(',').map(m => m.trim()).filter(m => m);
+            
+            if (modelNames.length === 0) {
+                alert("Please enter at least one model name.");
+                return;
+            }
+
+            input.disabled = true;
+            btn.disabled = true;
+
+            for (const modelName of modelNames) {
+                status.textContent = `Downloading ${modelName}...`;
+                status.style.color = '#17a2b8';
+
+                try {
+                    const response = await fetch('api/pull', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name: modelName, stream: true })
+                    });
+
+                    if (!response.ok) {
+                        const err = await response.text();
+                        throw new Error(`Failed to download ${modelName}: ${err}`);
+                    }
+
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        
+                        const chunk = decoder.decode(value, { stream: true });
+                        const lines = chunk.split('\n');
+                        
+                        for (const line of lines) {
+                            if (!line.trim()) continue;
+                            try {
+                                const json = JSON.parse(line);
+                                if (json.status) {
+                                    let progressText = `Downloading ${modelName}: ${json.status}`;
+                                    if (json.total && json.completed) {
+                                        const percent = Math.round((json.completed / json.total) * 100);
+                                        progressText += ` (${percent}%)`;
+                                    }
+                                    status.textContent = progressText;
+                                }
+                            } catch (e) {
+                                // Ignore parse errors for incomplete chunks
+                            }
+                        }
+                    }
+                    
+                    // Preload model into memory after download
+                    status.textContent = `Loading ${modelName} into memory...`;
+                    await fetch('api/generate', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ model: modelName, keep_alive: "5m" })
+                    });
+
+                } catch (error) {
+                    alert(`Error downloading ${modelName}: ${error.message}`);
+                    status.textContent = `Error: ${error.message}`;
+                    status.style.color = '#dc3545';
+                    break; // Stop processing further models on error
+                }
+            }
+
+            status.textContent = 'Download(s) complete!';
+            status.style.color = '#28a745';
+            input.value = '';
+            input.disabled = false;
+            btn.disabled = false;
+            fetchModels(); // Refresh list
+            
+            setTimeout(() => {
+                if (status.textContent === 'Download(s) complete!') {
+                    status.textContent = '';
+                }
+            }, 5000);
+        }
+
         async function testModel() {
             if (!currentModel) return;
             const btn = document.getElementById('test-btn');
@@ -215,9 +325,9 @@
                         try {
                             const json = JSON.parse(line);
                             if (json.message && json.message.content) {
-                                if (fullResponse === '') assistantMsgDiv.textContent = ''; // Clear loading dots
+                                if (fullResponse === '') assistantMsgDiv.innerHTML = ''; // Clear loading dots
                                 fullResponse += json.message.content;
-                                assistantMsgDiv.textContent = fullResponse;
+                                assistantMsgDiv.innerHTML = renderMarkdown(fullResponse);
                                 chatContainer.scrollTop = chatContainer.scrollHeight;
                             }
                             if (json.done) {
@@ -257,6 +367,6 @@
         // Refresh models every 5s to keep status updated
         setInterval(fetchModels, 5000);
     </script>
-    <div style="font-size: 0.8em; color: #aaa; text-align: center; margin-top: 20px;">v0.2.212</div>
+    <div style="font-size: 0.8em; color: #aaa; text-align: center; margin-top: 20px;">v0.6.10</div>
 </body>
 </html>

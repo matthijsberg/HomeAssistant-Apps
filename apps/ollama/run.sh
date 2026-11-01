@@ -1,232 +1,282 @@
-#!/bin/bash
+#!/usr/bin/env bashio
 
-# Enable strict mode
-set -e
+bashio::log.info "Starting Ollama (Vulkan) Add-on v0.6.13..."
 
-echo "===================================================="
-echo "          Starting HA AI Addons: Ollama             "
-echo "===================================================="
-
-# Check Hardware and give recommendations
-echo "Analyzing system resources..."
-python3 /check_hardware.py
-
-# Retrieve configuration
-if [ -f /data/options.json ]; then
-    MODEL=$(python3 -c "import sys, json; print(json.load(open('/data/options.json')).get('model', '') or '')")
-    CUSTOM_MODEL=$(python3 -c "import sys, json; print(json.load(open('/data/options.json')).get('custom_model', '') or '')")
-    DEVICE_TYPE=$(python3 -c "import sys, json; print(json.load(open('/data/options.json')).get('device_type', 'NPU') or 'NPU')")
-    KEEP_ALIVE=$(python3 -c "import sys, json; print(json.load(open('/data/options.json')).get('keep_alive', '5m') or '5m')")
-    NUM_PARALLEL=$(python3 -c "import sys, json; print(json.load(open('/data/options.json')).get('num_parallel', 1))")
-    MAX_LOADED_MODELS=$(python3 -c "import sys, json; print(json.load(open('/data/options.json')).get('max_loaded_models', 1))")
-    NUM_CTX=$(python3 -c "import sys, json; print(json.load(open('/data/options.json')).get('num_ctx', 2048))")
-    DEBUG=$(python3 -c "import sys, json; print(json.load(open('/data/options.json')).get('debug', False))")
-    UPDATE_OLLAMA=$(python3 -c "import sys, json; print(json.load(open('/data/options.json')).get('update_ollama', False))")
+# --- Software Versions ---
+if command -v ollama >/dev/null 2>&1; then
+    # ollama --version prints a "could not connect" warning before the version line;
+    # suppress stderr and extract only the version number
+    OLLAMA_VER=$(ollama --version 2>/dev/null | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
+    bashio::log.info "Ollama: ${OLLAMA_VER:-unknown}"
 else
-    MODEL=${MODEL:-"gemma2:2b"}
-    CUSTOM_MODEL=${CUSTOM_MODEL:-""}
-    DEVICE_TYPE=${DEVICE_TYPE:-"NPU"}
-    KEEP_ALIVE=${KEEP_ALIVE:-"5m"}
-    NUM_PARALLEL=${NUM_PARALLEL:-1}
-    MAX_LOADED_MODELS=${MAX_LOADED_MODELS:-1}
-    NUM_CTX=${NUM_CTX:-2048}
-    DEBUG=${DEBUG:-"False"}
-    UPDATE_OLLAMA="False"
+    bashio::log.warning "Ollama binary not found!"
 fi
 
-# Normalize DEBUG to 1/0 for Ollama
-if [ "$DEBUG" = "True" ]; then
+bashio::log.info "Kernel: $(uname -r)"
+bashio::log.info "Python: $(python3 --version 2>&1)"
+
+MESA_PKG_VER=$(dpkg -l mesa-vulkan-drivers 2>/dev/null | grep "^ii" | awk '{print $3}')
+if [ -n "$MESA_PKG_VER" ]; then
+    bashio::log.info "Mesa (mesa-vulkan-drivers pkg): $MESA_PKG_VER"
+fi
+
+# --- 0. Environment Setup ---
+export OLLAMA_HOST="0.0.0.0:11434"
+export OLLAMA_MODELS="/share/ollama_models"
+export OLLAMA_ORIGINS="*"
+
+# Load Config
+KEEP_ALIVE=$(bashio::config 'keep_alive')
+NUM_PARALLEL=$(bashio::config 'num_parallel')
+MAX_LOADED_MODELS=$(bashio::config 'max_loaded_models')
+NUM_CTX=$(bashio::config 'context_length')
+GPU_OVERHEAD=$(bashio::config 'gpu_overhead')
+LOG_LEVEL=$(bashio::config 'log_level')
+CUSTOM_MODEL_NAME=$(bashio::config 'custom_model_name')
+DISABLE_FP16=$(bashio::config 'disable_fp16')
+DISABLE_BF16=$(bashio::config 'disable_bf16')
+DISABLE_FA=$(bashio::config 'disable_flash_attention')
+ENABLE_VULKAN=$(bashio::config 'enable_vulkan')
+
+export OLLAMA_KEEP_ALIVE="$KEEP_ALIVE"
+export OLLAMA_NUM_PARALLEL="$NUM_PARALLEL"
+export OLLAMA_MAX_LOADED_MODELS="$MAX_LOADED_MODELS"
+# 0 = auto-detect based on available VRAM (Ollama default behaviour)
+if [ "$NUM_CTX" -gt 0 ] 2>/dev/null; then
+    export OLLAMA_CONTEXT_LENGTH="$NUM_CTX"
+fi
+export OLLAMA_GPU_OVERHEAD="$GPU_OVERHEAD"
+
+# Set Bashio Log Level to info so startup logs always show
+bashio::log.level "info"
+
+# Configure Ollama Logging based on level
+if [ "$LOG_LEVEL" = "debug" ] || [ "$LOG_LEVEL" = "trace" ]; then
     export OLLAMA_DEBUG="1"
 else
     export OLLAMA_DEBUG="0"
 fi
 
-# Smart fallback: If NPU is selected/defaulted but no hardware found, switch to CPU
-if [ "$DEVICE_TYPE" = "NPU" ] && [ ! -e "/dev/accel" ]; then
-    echo "Warning: NPU selected but /dev/accel not found. Falling back to CPU."
-    DEVICE_TYPE="CPU"
-fi
+# --- 1. Hardware Check ---
+bashio::log.info "Checking for Vulkan support..."
 
-# Set DEVICE for IPEX init
-DEVICE="$DEVICE_TYPE"
-# Map generic GPU to iGPU for IPEX init if needed
-if [ "$DEVICE" = "GPU" ]; then
-    DEVICE="iGPU"
-fi
+if command -v vulkaninfo >/dev/null 2>&1; then
+    # Check if vulkaninfo returns any devices
+    if vulkaninfo --summary 2>/dev/null | grep -i "GPU" > /dev/null; then
+        GPU_NAME=$(vulkaninfo --summary 2>/dev/null | grep "deviceName" | cut -d'=' -f2 | xargs)
+        DRIVER_VER=$(vulkaninfo --summary 2>/dev/null | grep "driverVersion" | cut -d'=' -f2 | xargs)
+        API_VER=$(vulkaninfo --summary 2>/dev/null | grep "apiVersion" | cut -d'=' -f2 | xargs)
 
-if [ ! -z "$CUSTOM_MODEL" ]; then
-    echo "Using Custom Model: $CUSTOM_MODEL"
-    MODEL=$CUSTOM_MODEL
-else
-    echo "Using Selected Model: $MODEL"
-fi
+        bashio::log.info "Vulkan GPU detected: $GPU_NAME"
+        bashio::log.info "Mesa Driver Version: $DRIVER_VER"
+        bashio::log.info "API Version: $API_VER"
+        
+        # Enable experimental Vulkan support
+        export OLLAMA_VULKAN=1
+        export OLLAMA_IGPU_ENABLE=1
+        export OLLAMA_SCHED_SPREAD=1
+        export GGML_VK_VISIBLE_DEVICES="0"
 
-# IPEX and Ollama Initialization
-if [ "$DEBUG" = "True" ]; then
-    echo "--- IPEX Initialization ---"
-fi
+        # Filter out llvmpipe software rasterizer to prevent false multi-device allocations
+        if echo "$GPU_NAME" | grep -iq "intel"; then
+            export VK_DRIVER_FILES="/usr/share/vulkan/icd.d/intel_icd.x86_64.json"
+            export VK_ICD_FILENAMES="/usr/share/vulkan/icd.d/intel_icd.x86_64.json"
+        elif echo "$GPU_NAME" | grep -iq "radeon\|amd"; then
+            export VK_DRIVER_FILES="/usr/share/vulkan/icd.d/radeon_icd.x86_64.json"
+            export VK_ICD_FILENAMES="/usr/share/vulkan/icd.d/radeon_icd.x86_64.json"
+        fi
 
-if [ "$DEVICE_TYPE" = "CPU" ]; then
-    echo "Running in CPU mode. Skipping IPEX GPU init."
-else
-    # Source the IPEX environment (this sets up SYCL and oneAPI paths)
-    if [ "$DEBUG" = "True" ]; then
-        . ipex-llm-init --gpu --device "$DEVICE" || echo "IPEX-LLM init failed, continuing anyway..."
+        # Unified host memory access for iGPU (avoids artificial VRAM caps and gives 10-15% throughput boost)
+        export GGML_VK_PREFER_HOST_MEMORY=1
+
+        # Persistent Mesa shader cache on persistent NVMe storage (eliminates first-token stutter)
+        mkdir -p "/share/ollama_models/.mesa_cache"
+        export MESA_SHADER_CACHE_DIR="/share/ollama_models/.mesa_cache"
+        export MESA_SHADER_CACHE_MAX_SIZE="2G"
+        export ANV_ENABLE_PIPELINE_CACHE=1
+
+        # Intel iGPU correctness fixes (prevents garbage output and GPU TDR crashes)
+        export GGML_VK_DISABLE_INTEGER_DOT_PRODUCT=1
+        export GGML_VK_DISABLE_COOPMAT=1
+        export GGML_VK_DISABLE_COOPMAT2=1
+
+        # Performance: exact VRAM measurement — fits more model layers on-GPU
+        export OLLAMA_NEW_ENGINE=1
+
+        # Performance: Flash Attention + KV cache quantization
+        # Reduces VRAM per token at longer contexts; critical for iGPU shared memory
+        if [ "$DISABLE_FA" = "true" ]; then
+            export OLLAMA_FLASH_ATTENTION=0
+            bashio::log.info "Flash Attention Disabled"
+        else
+            export OLLAMA_FLASH_ATTENTION=1
+            export OLLAMA_KV_CACHE_TYPE=q8_0
+            bashio::log.info "Flash Attention enabled, KV cache type: q8_0"
+        fi
+
+        # FP16 precision control
+        if [ "$DISABLE_FP16" = "true" ]; then
+            export GGML_VK_DISABLE_F16=1
+            bashio::log.info "Precision Tweak: FP16 Disabled"
+        fi
+
+        # BF16 precision control
+        if [ "$DISABLE_BF16" = "true" ]; then
+            export GGML_VK_DISABLE_BFLOAT16=1
+            bashio::log.info "Precision Tweak: BF16 Disabled"
+        fi
+
+        bashio::log.info "Enabled OLLAMA_VULKAN=1, SCHED_SPREAD, NEW_ENGINE, DISABLE_INTEGER_DOT_PRODUCT, DISABLE_COOPMAT, DISABLE_COOPMAT2"
+
+        if [ "$OLLAMA_DEBUG" = "1" ]; then
+            vulkaninfo --summary
+        fi
     else
-        . ipex-llm-init --gpu --device "$DEVICE" > /dev/null 2>&1 || echo "IPEX-LLM init failed, continuing anyway..."
+        bashio::log.warning "Vulkan tools installed, but no GPU detected via vulkaninfo."
     fi
-
-    # Verify if SYCL actually sees a Level Zero device (Intel GPU)
-    # If not, fallback to CPU to avoid crash
-    if ! sycl-ls 2>/dev/null | grep -q "level_zero"; then
-        echo "Warning: No Level Zero SYCL device found (sycl-ls). Falling back to CPU."
-        DEVICE_TYPE="CPU"
-    fi
-fi
-
-echo "--- Ollama Initialization ---"
-# The IPEX image expects ollama to be initialized in a specific way
-mkdir -p /llm/ollama
-cd /llm/ollama
-if [ ! -f "./ollama" ]; then
-    echo "Initializing Ollama binary..."
-    init-ollama || echo "init-ollama failed"
-fi
-
-# Optional: Update Ollama to latest version
-if [ "$UPDATE_OLLAMA" = "True" ]; then
-    echo "--- Updating Ollama ---"
-    echo "Downloading and installing latest Ollama version..."
-    # Install to default location (/usr/local/bin/ollama)
-    curl -fsSL https://ollama.com/install.sh | sh || echo "Failed to download/install Ollama"
-    
-    if [ -f "/usr/local/bin/ollama" ]; then
-        echo "Overwriting local Ollama binary with updated version..."
-        cp /usr/local/bin/ollama ./ollama
-        chmod +x ./ollama
-        echo "Ollama updated successfully."
-        ./ollama --version
-    else
-        echo "Warning: Updated Ollama binary not found at /usr/local/bin/ollama"
-    fi
-fi
-
-# Hardware Diagnostics
-if [ "$DEBUG" = "True" ]; then
-    echo "--- Hardware Diagnostics ---"
-    echo "Checking /dev/dri:"
-    ls -l /dev/dri 2>/dev/null || echo "No /dev/dri found"
-    echo "Checking /dev/accel:"
-    ls -l /dev/accel 2>/dev/null || echo "No /dev/accel found"
-    echo "SYCL Devices (sycl-ls):"
-    sycl-ls 2>/dev/null || echo "sycl-ls not found or failed"
-    echo "Environment for Ollama:"
-    env | grep -E "OLLAMA|DEVICE|ZES|ONEAPI" || true
-    echo "---------------------------"
-fi
-
-# Configure Ollama environment
-export OLLAMA_HOST="0.0.0.0"
-export OLLAMA_MODELS="/share/ollama/models"
-export OLLAMA_ORIGINS="*"
-export OLLAMA_KEEP_ALIVE="$KEEP_ALIVE"
-export OLLAMA_NUM_PARALLEL="$NUM_PARALLEL"
-export OLLAMA_MAX_LOADED_MODELS="$MAX_LOADED_MODELS"
-export OLLAMA_NUM_CTX="$NUM_CTX"
-# OLLAMA_DEBUG is already exported above
-
-echo "Ollama Configuration:"
-echo "  Keep-Alive: $OLLAMA_KEEP_ALIVE"
-echo "  Num Parallel: $OLLAMA_NUM_PARALLEL"
-echo "  Max Loaded Models: $OLLAMA_MAX_LOADED_MODELS"
-echo "  Num Context: $OLLAMA_NUM_CTX"
-echo "  Debug: $OLLAMA_DEBUG"
-
-if [ "$DEVICE_TYPE" != "CPU" ]; then
-    echo "Configuring environment for Intel $DEVICE_TYPE..."
-    export OLLAMA_INTEL_GPU="1"
-    export ZES_ENABLE_SYSMAN=1
-    export DEVICE="$DEVICE_TYPE"
-    export OLLAMA_NUM_GPU=999
-    export ONEAPI_DEVICE_SELECTOR="level_zero:0"
 else
-    echo "Configuring environment for CPU..."
-    # Ensure we don't accidentally force GPU
-    unset OLLAMA_INTEL_GPU
-    unset ONEAPI_DEVICE_SELECTOR
-    unset OLLAMA_NUM_GPU
-    unset ZES_ENABLE_SYSMAN
-    # Reset DEVICE to CPU just in case
-    export DEVICE="CPU"
+    bashio::log.warning "vulkaninfo not found. Cannot verify Vulkan support explicitly."
 fi
 
-mkdir -p "$OLLAMA_MODELS"
-
-# Start Ollama in background
-echo "Starting Ollama Server..."
-# Use the local ollama binary created by init-ollama
-if [ "$DEBUG" = "True" ]; then
-    ./ollama serve &
+if [ -d "/dev/dri" ]; then
+    bashio::log.info "/dev/dri exists. GPU device files are present."
 else
-    # Filter out GIN access logs in non-debug mode
-    ./ollama serve 2>&1 | grep -v "\[GIN\]" &
+    bashio::log.warning "ATTENTION: /dev/dri missing. GPU might not be accessible."
+fi
+
+# --- 2. Start Ollama (Background) ---
+bashio::log.info "Starting Ollama server (Vulkan: ${OLLAMA_VULKAN:-0}, Log Level: $LOG_LEVEL)..."
+
+if [ "$LOG_LEVEL" = "debug" ] || [ "$LOG_LEVEL" = "trace" ]; then
+    # Full debug, but filter GIN to prevent supervisor hang
+    # --line-buffered prevents pipe back-pressure that can freeze inference
+    OLLAMA_VULKAN=${OLLAMA_VULKAN:-0} ollama serve 2>&1 | grep --line-buffered -v "\[GIN\]" &
+elif [ "$LOG_LEVEL" = "warning" ]; then
+    # More verbose than info: shows all standard logs including HTTP requests
+    OLLAMA_VULKAN=${OLLAMA_VULKAN:-0} ollama serve &
+else
+    # Standard info level — filters HTTP request logs
+    # --line-buffered prevents pipe back-pressure that can freeze inference
+    OLLAMA_VULKAN=${OLLAMA_VULKAN:-0} ollama serve 2>&1 | grep --line-buffered -v "\[GIN\]" &
 fi
 PID=$!
 
-# Wait for Ollama to start
-echo "Waiting for Ollama API to be ready..."
-MAX_RETRIES=30
-RETRY_COUNT=0
-until curl -s http://localhost:11434/api/tags > /dev/null || [ $RETRY_COUNT -eq $MAX_RETRIES ]; do
-    sleep 2
-    RETRY_COUNT=$((RETRY_COUNT + 1))
+# Wait for API to be ready
+bashio::log.info "Waiting for Ollama API..."
+until curl -s -f "http://localhost:11434/" > /dev/null; do
+    sleep 1
 done
+bashio::log.info "Ollama is online!"
 
-if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
-    echo "Error: Ollama server failed to start within 60 seconds."
-    exit 1
-fi
+# --- 3. Model Management ---
+MODEL=$(bashio::config 'model')
 
-echo "Ollama API is active!"
-
-# Pull the requested model if not present
-MODEL_READY=false
-if ./ollama list | grep -q "$MODEL"; then
-    echo "Model '$MODEL' is cached and ready."
-    MODEL_READY=true
-else
-    echo "Model '$MODEL' not found. Downloading (this may take several minutes)..."
-    ./ollama pull "$MODEL"
-    
-    # Check if model exists in list to confirm success
-    if ./ollama list | grep -q "$MODEL"; then
-        echo "Model '$MODEL' downloaded successfully."
-        MODEL_READY=true
+# Handle Custom Model
+if [ "$MODEL" = "Other" ]; then
+    if [ -z "$CUSTOM_MODEL_NAME" ]; then
+        bashio::log.info "Model set to 'Other' and 'custom_model_name' is empty. Skipping automatic model download."
+        MODEL=""
     else
-        echo "Error: Failed to download model '$MODEL'."
-        MODEL_READY=false
+        MODEL="$CUSTOM_MODEL_NAME"
+        bashio::log.info "Using custom model: $MODEL"
     fi
 fi
 
-echo "----------------------------------------------------"
-if [ "$MODEL_READY" = "true" ]; then
-    echo " Ollama is running and model '$MODEL' is loaded.    "
-else
-    echo " Ollama is running but model '$MODEL' FAILED to load."
-    echo " Please check the logs for download errors."
-fi
-echo " Internal URL: http://ollama:11434                  "
-echo "----------------------------------------------------"
+# Split MODEL by comma and process each
+IFS=',' read -ra MODEL_ARRAY <<< "$MODEL"
+for SINGLE_MODEL in "${MODEL_ARRAY[@]}"; do
+    # Trim whitespace
+    SINGLE_MODEL=$(echo "$SINGLE_MODEL" | xargs)
+    
+    if [ -n "$SINGLE_MODEL" ]; then
+        bashio::log.info "Checking model: $SINGLE_MODEL"
 
-# Start Web UI
-echo "Starting Web UI..."
-if ! python3 -c "import requests" 2>/dev/null; then
-    echo "Warning: python3-requests not found. Attempting to install..."
-    apt-get update && apt-get install -y python3-requests || echo "Failed to install requests"
-fi
+        if ollama list | grep -q "$SINGLE_MODEL"; then
+            bashio::log.info "Model '$SINGLE_MODEL' already present."
+        else
+            bashio::log.info "Downloading '$SINGLE_MODEL'. This may take a while..."
+            ollama pull "$SINGLE_MODEL"
+            bashio::log.info "Download of '$SINGLE_MODEL' complete."
+        fi
+        
+        bashio::log.info "Preloading '$SINGLE_MODEL' into memory..."
+        curl -s -X POST http://localhost:11434/api/generate -d "{\"model\": \"$SINGLE_MODEL\", \"keep_alive\": \"$KEEP_ALIVE\"}" > /dev/null
+    fi
+done
 
+# --- 4. Keep Running ---
+bashio::log.info "Ready to serve. Keep-alive set to: $KEEP_ALIVE"
+
+# --- 5. Start Web UI ---
+bashio::log.info "Starting Web UI..."
 python3 -u /web_server.py 2>&1 &
 WEB_PID=$!
 
-# Wait for process
-wait $PID $WEB_PID
+# --- 6. Watchdog: Detect silent inference hangs ---
+# Ollama can appear online (TCP port open) but stop generating output — typically
+# caused by a GPU hang or an internal deadlock. The HA supervisor watchdog only
+# checks TCP connectivity, so this loop catches silent hangs and exits the script
+# so the supervisor can restart the addon cleanly.
+#
+# Rate limit: if the watchdog triggers more than WATCHDOG_MAX_TRIGGERS times
+# within WATCHDOG_WINDOW seconds, it gives up and logs a fatal error instead of
+# restarting in a tight loop. Trigger timestamps are written to /tmp so the
+# count survives supervisor-triggered restarts (but resets on a full addon
+# stop/start or system reboot, which is the desired behaviour).
+WATCHDOG_MODEL="${MODEL_ARRAY[0]}"
+WATCHDOG_MAX_TRIGGERS=3       # max restarts allowed within the window
+WATCHDOG_WINDOW=1800          # rolling window in seconds (30 minutes)
+WATCHDOG_TRIGGER_FILE="/tmp/ollama_watchdog_triggers"
+(
+    sleep 120  # Grace period — allow model to fully warm up first
+    while true; do
+        sleep 300  # Check every 5 minutes
+        if ! kill -0 "$PID" 2>/dev/null; then
+            break  # Ollama already exited; nothing to do
+        fi
+        # Only probe if the model is currently loaded — avoids resetting the
+        # keep_alive unload timer when the model has intentionally been unloaded
+        PS_RESPONSE=$(curl -s --max-time 10 http://localhost:11434/api/ps 2>&1)
+        if ! echo "$PS_RESPONSE" | grep -q "\"${WATCHDOG_MODEL}\""; then
+            bashio::log.info "Watchdog: model not loaded (keep_alive expired), skipping check."
+            continue
+        fi
+
+        bashio::log.info "Watchdog: checking model '${WATCHDOG_MODEL}' health..."
+        RESPONSE=$(curl -s --max-time 60 -X POST http://localhost:11434/api/generate \
+            -d "{\"model\": \"${WATCHDOG_MODEL}\", \"prompt\": \"hi\", \"stream\": false, \"options\": {\"num_predict\": 1}}" 2>&1)
+        if echo "$RESPONSE" | grep -q '"response"'; then
+            bashio::log.info "Watchdog: model healthy."
+        else
+            bashio::log.warning "Watchdog: model '${WATCHDOG_MODEL}' is unresponsive (no 'response' field)."
+
+            # Count triggers within the rolling window
+            NOW=$(date +%s)
+            echo "$NOW" >> "$WATCHDOG_TRIGGER_FILE"
+
+            # Rewrite file keeping only timestamps within the window, count them
+            RECENT_COUNT=0
+            FRESH_LINES=""
+            while IFS= read -r T; do
+                if [ $((NOW - T)) -le $WATCHDOG_WINDOW ]; then
+                    FRESH_LINES="${FRESH_LINES}${T}\n"
+                    RECENT_COUNT=$((RECENT_COUNT + 1))
+                fi
+            done < "$WATCHDOG_TRIGGER_FILE"
+            printf "%b" "$FRESH_LINES" > "$WATCHDOG_TRIGGER_FILE"
+
+            if [ "$RECENT_COUNT" -gt "$WATCHDOG_MAX_TRIGGERS" ]; then
+                bashio::log.error "Watchdog: FATAL — model unresponsive ${RECENT_COUNT} times in the last $((WATCHDOG_WINDOW / 60)) minutes (limit: ${WATCHDOG_MAX_TRIGGERS}). Giving up to avoid restart loop. Please check the logs and restart the addon manually."
+                break  # Exit watchdog without restarting; addon stays running but unprotected
+            fi
+
+            bashio::log.warning "Watchdog: triggering restart (${RECENT_COUNT}/${WATCHDOG_MAX_TRIGGERS} within $((WATCHDOG_WINDOW / 60))m window)..."
+            kill "$PID" "$WEB_PID" 2>/dev/null
+            exit 1
+        fi
+    done
+) &
+WATCHDOG_PID=$!
+
+wait "$PID" "$WEB_PID"
+kill "$WATCHDOG_PID" 2>/dev/null

@@ -1,33 +1,40 @@
-ARG BUILD_FROM
-FROM intelanalytics/ipex-llm-inference-cpp-xpu:latest
+FROM ollama/ollama:latest
 
-# Install python dependencies for our helper scripts
+ARG DEBIAN_FRONTEND=noninteractive
+ARG BASHIO_VERSION=v0.17.5
+
+# Install base tools and Mesa Vulkan drivers from PPA
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3-psutil \
-    python3-requests \
+    curl \
+    wget \
+    gnupg2 \
+    pciutils \
+    clinfo \
     jq \
-    zstd \
+    python3 \
+    python3-requests \
+    software-properties-common \
+    gpg-agent \
+    && add-apt-repository ppa:ernstp/mesarc \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    mesa-vulkan-drivers \
+    libvulkan1 \
+    vulkan-tools \
     && rm -rf /var/lib/apt/lists/*
 
-# Set environment variables for hardware acceleration
-ENV DEVICE=NPU
-ENV OLLAMA_NUM_GPU=999
-ENV ONEAPI_DEVICE_SELECTOR=level_zero:0
-ENV ZES_ENABLE_SYSMAN=1
-ENV OLLAMA_HOST="0.0.0.0"
-ENV OLLAMA_MODELS="/share/ollama/models"
+# Install Bashio for Home Assistant add-on integration
+RUN curl -J -L -o /tmp/bashio.tar.gz \
+    "https://github.com/hassio-addons/bashio/archive/${BASHIO_VERSION}.tar.gz" && \
+    mkdir /tmp/bashio && \
+    tar zxvf /tmp/bashio.tar.gz --strip 1 -C /tmp/bashio && \
+    mv /tmp/bashio/lib /usr/lib/bashio && \
+    ln -s /usr/lib/bashio/bashio /usr/bin/bashio && \
+    rm -rf /tmp/bashio
 
-# Copy files
-COPY run.sh /
-COPY check_hardware.py /
-COPY fetch_models.py /
-COPY web_server.py /
-COPY index.html /
+COPY run.sh /run.sh
+COPY web_server.py /web_server.py
+COPY index.html /index.html
 
 RUN chmod a+x /run.sh
 
-# Healthcheck
-HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-    CMD curl -f http://localhost:11434/ || exit 1
-
-CMD [ "/run.sh" ]
+ENTRYPOINT ["/run.sh"]
