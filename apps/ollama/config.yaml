@@ -33,7 +33,7 @@ options:
   model: "qwen3.5:2b"
   keep_alive: "5m"
   num_parallel: 1
-  max_loaded_models: 0
+  max_loaded_models: 2
   context_length: 8192
   gpu_overhead: 0
   log_level: "info"
