@@ -5,6 +5,8 @@ import subprocess
 from pathlib import Path
 from typing import List, Dict, Any
 
+from harness.snapshot import is_path_denied
+
 
 def run_hadolint(target_dir: Path, timeout: int = 30) -> List[Dict[str, Any]]:
     """
@@ -20,7 +22,8 @@ def run_hadolint(target_dir: Path, timeout: int = 30) -> List[Dict[str, Any]]:
         for f in files:
             if f == "Dockerfile" or f.startswith("Dockerfile."):
                 df_path = Path(root) / f
-                if not df_path.is_symlink():
+                rel_f = str(df_path.relative_to(target_dir))
+                if not df_path.is_symlink() and not is_path_denied(rel_f, str(df_path)):
                     dockerfiles.append(str(df_path))
 
     if not dockerfiles:

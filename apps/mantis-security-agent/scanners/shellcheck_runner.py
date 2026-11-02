@@ -5,6 +5,8 @@ import subprocess
 from pathlib import Path
 from typing import List, Dict, Any
 
+from harness.snapshot import is_path_denied
+
 
 def run_shellcheck(target_dir: Path, timeout: int = 45) -> List[Dict[str, Any]]:
     """
@@ -20,7 +22,8 @@ def run_shellcheck(target_dir: Path, timeout: int = 45) -> List[Dict[str, Any]]:
         for f in files:
             if f.endswith(".sh") or f in ("run", "finish"):
                 s_path = Path(root) / f
-                if not s_path.is_symlink():
+                rel_f = str(s_path.relative_to(target_dir))
+                if not s_path.is_symlink() and not is_path_denied(rel_f, str(s_path)):
                     scripts.append(str(s_path))
 
     if not scripts:

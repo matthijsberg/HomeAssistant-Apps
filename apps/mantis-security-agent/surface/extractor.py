@@ -4,6 +4,8 @@ import yaml
 from pathlib import Path
 from typing import Dict, Any, List
 
+from harness.snapshot import is_path_denied
+
 
 def extract_addon_config_surface(config_yaml_path: Path) -> Dict[str, Any]:
     """Extract security-relevant fields from add-on config.yaml."""
@@ -97,9 +99,11 @@ def extract_code_surface(repo_dir: Path) -> Dict[str, Any]:
             f_path = Path(root) / f
             if f_path.is_symlink():
                 continue
+            rel_p = str(f_path.relative_to(repo_dir))
+            if is_path_denied(rel_p, str(f_path)):
+                continue
             try:
                 content = f_path.read_text(encoding="utf-8", errors="ignore")
-                rel_p = str(f_path.relative_to(repo_dir))
                 
                 # Check routes
                 for m in route_regex.finditer(content):
@@ -141,11 +145,11 @@ def build_deployment_manifest(target_dir: Path) -> Dict[str, Any]:
     }
 
     config_yaml = target_dir / "config.yaml"
-    if config_yaml.exists():
+    if config_yaml.exists() and not config_yaml.is_symlink():
         manifest["addon_config"] = extract_addon_config_surface(config_yaml)
 
     dockerfile = target_dir / "Dockerfile"
-    if dockerfile.exists():
+    if dockerfile.exists() and not dockerfile.is_symlink():
         manifest["dockerfile"] = extract_dockerfile_surface(dockerfile)
 
     manifest["code_surface"] = extract_code_surface(target_dir)

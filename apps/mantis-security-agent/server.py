@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import json
 import time
@@ -18,6 +19,7 @@ from pydantic import BaseModel, Field
 from harness.snapshot import validate_target_path, compute_snapshot_id, is_path_denied
 from harness.jobs import init_db, create_job, get_job, update_job_status, list_jobs
 from harness.egress import redact_secrets, create_egress_manifest, format_warning_text
+from harness.budget import check_and_update_budget, BudgetExceededError
 from harness.stages import run_deterministic_prepass, call_llm, synthesize_patch_check
 from harness.uploads import unpack_upload
 from harness.okf import (
@@ -109,8 +111,32 @@ async def api_get_job(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
     return JSONResponse(job)
 
+def cleanup_job_workspaces(job: Dict[str, Any]) -> None:
+    """Remove ephemeral /data/workspaces/upload_* directories for a job."""
+    if not job:
+        return
+    workspaces_root = str((DATA_DIR / "workspaces").resolve())
+    for t in job.get("targets", []):
+        t_path = str(t.get("target", "")) if isinstance(t, dict) else str(t)
+        if t_path.startswith(workspaces_root + "/upload_"):
+            ws_parent = Path(t_path).parent
+            shutil.rmtree(ws_parent, ignore_errors=True)
+
+
+def verify_ingress_request(request: Request):
+    """Ensure approval/rejection comes from HA Ingress proxy (172.30.32.2) or localhost test client."""
+    client_host = request.client.host if request.client else ""
+    allowed_hosts = {"172.30.32.2", "127.0.0.1", "::1", "testclient"}
+    if client_host not in allowed_hosts and not request.headers.get("X-Ingress-Path"):
+        raise HTTPException(
+            status_code=403,
+            detail="Approval endpoints may only be invoked via the Home Assistant Ingress UI",
+        )
+
+
 @app.post("/api/approve/{job_id}")
-async def api_approve_job(job_id: str, background_tasks: BackgroundTasks):
+async def api_approve_job(job_id: str, request: Request, background_tasks: BackgroundTasks):
+    verify_ingress_request(request)
     job = get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -120,6 +146,7 @@ async def api_approve_job(job_id: str, background_tasks: BackgroundTasks):
     # SEC-02: Verify job approval window has not expired (30 minutes)
     created_dt = datetime.datetime.fromisoformat(job["created_at"])
     if (datetime.datetime.now(datetime.timezone.utc) - created_dt).total_seconds() > 1800:
+        cleanup_job_workspaces(job)
         update_job_status(job_id, status="cancelled", stage="approval_expired")
         raise HTTPException(status_code=410, detail="Approval window expired")
 
@@ -129,10 +156,12 @@ async def api_approve_job(job_id: str, background_tasks: BackgroundTasks):
     return JSONResponse({"status": "approved", "job_id": job_id})
 
 @app.post("/api/reject/{job_id}")
-async def api_reject_job(job_id: str):
+async def api_reject_job(job_id: str, request: Request):
+    verify_ingress_request(request)
     job = get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    cleanup_job_workspaces(job)
     update_job_status(job_id, status="cancelled", stage="rejected_by_operator")
     return JSONResponse({"status": "rejected", "job_id": job_id})
 
@@ -165,42 +194,112 @@ async def execute_campaign_job(job_id: str):
         for tgt in targets:
             target_path = tgt.get("target") if isinstance(tgt, dict) else tgt
             p = Path(target_path).resolve()
-            prepass = run_deterministic_prepass(p)
+            prepass = await asyncio.to_thread(run_deterministic_prepass, p)
             for risk in prepass.get("manifest", {}).get("cross_artifact_risks", []):
+                clean_title, _ = redact_secrets(risk.get("type", "Configuration Risk"))
+                clean_msg, _ = redact_secrets(risk.get("message", ""))
                 all_findings.append({
                     "id": f"A-{job_id[:6]}-{len(all_findings)+1:03d}",
                     "cwe": risk.get("cwe", "CWE-Unknown"),
-                    "title": risk.get("type", "Configuration Risk"),
+                    "title": clean_title,
                     "severity": risk.get("severity", "MEDIUM"),
-                    "rationale": risk.get("message"),
+                    "rationale": clean_msg,
                     "verification": "statically_confirmed",
                     "source": "deployment_surface_extractor",
                 })
             for lead in prepass.get("leads", []):
+                lead_file = lead.get("file")
+                if lead_file:
+                    try:
+                        rel_lead = str(Path(lead_file).resolve().relative_to(p))
+                    except Exception:
+                        rel_lead = str(lead_file)
+                    if is_path_denied(rel_lead, str(lead_file)):
+                        continue
+
                 raw_cwe = lead.get("metadata", {}).get("cwe", "CWE-Unknown") or lead.get("cwe", "CWE-Unknown")
                 severity = lead.get("severity", "WARNING")
-                rationale = lead.get("message") or lead.get("description") or "Scanner Lead"
+                raw_rationale = lead.get("message") or lead.get("description") or "Scanner Lead"
 
                 # Context-aware Calibration
                 if env_context and "CWE-939" in str(raw_cwe):
                     if any(term in env_context.lower() for term in ["home assistant", "haos", "ingress"]):
                         severity = "INFO"
-                        rationale = f"[Context Calibrated - {env_context}]: urllib calls to internal HA Core / Supervisor APIs operate within an isolated network container behind HA Ingress. File scheme risks are restricted."
+                        raw_rationale = f"[Context Calibrated - {env_context}]: urllib calls to internal HA Core / Supervisor APIs operate within an isolated network container behind HA Ingress. File scheme risks are restricted."
+
+                raw_title = lead.get("message") or lead.get("description") or "Scanner Lead"
+                clean_title, _ = redact_secrets(raw_title)
+                clean_rationale, _ = redact_secrets(raw_rationale)
 
                 all_findings.append({
                     "id": f"A-{job_id[:6]}-{len(all_findings)+1:03d}",
                     "cwe": raw_cwe,
-                    "title": lead.get("message") or lead.get("description") or "Scanner Lead",
+                    "title": clean_title,
                     "file": lead.get("file"),
                     "start_line": lead.get("start_line"),
                     "end_line": lead.get("end_line"),
                     "severity": severity,
-                    "rationale": rationale,
+                    "rationale": clean_rationale,
                     "verification": "statically_confirmed",
                     "source": lead.get("source"),
                 })
 
         update_job_status(job_id, status="running", progress=75, stage="critic_and_patch")
+
+        # LOGIC-01: LLM Critic, Patch Generation, and Budget Tracking
+        models = job.get("egress_manifest", {}).get("models", {})
+        triage_cfg = models.get("triage") or models.get("deep") or APP_OPTIONS.get("defaults", {}).get("triage")
+        api_key = triage_cfg.get("api_key") if isinstance(triage_cfg, dict) else os.environ.get("GEMINI_API_KEY")
+        total_cost_eur = 0.0
+
+        if api_key and isinstance(triage_cfg, dict):
+            patch_base_dir = Path(targets[0].get("target") if isinstance(targets[0], dict) else targets[0]).resolve() if targets else Path(".")
+            for f in all_findings:
+                if is_job_cancelled(job_id):
+                    return
+                if f.get("severity") in ("CRITICAL", "HIGH", "ERROR"):
+                    prompt = (
+                        f"Context: {env_context}\n"
+                        f"Vulnerability: {f.get('title')} ({f.get('cwe')}) at file {f.get('file')}:{f.get('start_line')}\n"
+                        f"Details: {f.get('rationale')}\n"
+                        "Analyze this finding and suggest a minimal, safe unified diff patch if applicable."
+                    )
+                    clean_prompt, _ = redact_secrets(prompt)
+                    try:
+                        llm_resp = await asyncio.to_thread(
+                            call_llm,
+                            clean_prompt,
+                            "You are Mantis Security Agent. Suggest minimal, safe security fixes in unified diff format.",
+                            triage_cfg,
+                            "triage",
+                        )
+                        in_tok = llm_resp.get("tokens_in", 0)
+                        out_tok = llm_resp.get("tokens_out", 0)
+                        total_tokens_in += in_tok
+                        total_tokens_out += out_tok
+                        cost_delta = (in_tok / 1_000_000 * 0.15) + (out_tok / 1_000_000 * 0.60)
+                        total_cost_eur += cost_delta
+                        check_and_update_budget(
+                            DATA_DIR / "jobs.db",
+                            job_id,
+                            in_tok,
+                            out_tok,
+                            cost_delta,
+                            APP_OPTIONS.get("budgets", {}),
+                        )
+                        patch_content = llm_resp.get("text", "")
+                        if "```diff" in patch_content:
+                            diff_body = patch_content.split("```diff")[1].split("```")[0].strip()
+                            f["suggested_patch"] = diff_body
+                            patch_ok = await asyncio.to_thread(
+                                synthesize_patch_check, patch_base_dir, f.get("file", ""), diff_body
+                            )
+                            f["patch_status"] = patch_ok
+                    except BudgetExceededError as be:
+                        update_job_status(job_id, status="interrupted", stage="budget_exceeded", error_message=str(be))
+                        return
+                    except Exception:
+                        pass
 
         # Synthesize Markdown Report
         summary = {
@@ -246,7 +345,7 @@ async def execute_campaign_job(job_id: str):
             stage="report",
             findings=all_findings,
             summary=summary,
-            usage={"tokens_in": total_tokens_in, "tokens_out": total_tokens_out, "estimated_cost_eur": 0.05},
+            usage={"tokens_in": total_tokens_in, "tokens_out": total_tokens_out, "estimated_cost_eur": round(total_cost_eur, 4)},
             markdown_report=report_md,
         )
 
@@ -254,12 +353,7 @@ async def execute_campaign_job(job_id: str):
         update_job_status(job_id, status="failed", error_message=str(e))
     finally:
         # LOGIC-03: Cleanup ephemeral workspaces created for upload targets
-        for tgt in targets:
-            tgt_path = tgt.get("target") if isinstance(tgt, dict) else tgt
-            if tgt_path and "/data/workspaces/upload_" in str(tgt_path):
-                up_root = Path(str(tgt_path)).parent
-                if up_root.exists() and up_root.name.startswith("upload_"):
-                    shutil.rmtree(up_root, ignore_errors=True)
+        cleanup_job_workspaces(job)
 
 
 # --- Model Context Protocol (MCP) Endpoints ---
@@ -289,7 +383,7 @@ MCP_TOOLS = [
                 "targets": {
                     "type": "array",
                     "items": {"type": "object"},
-                    "description": "Array of target objects with type ('local_path' | 'git_url' | 'upload'), target, and role"
+                    "description": "Array of target objects with type ('local_path' | 'upload'), target, and role"
                 },
                 "focus": {"type": "string", "description": "Optional plain-language audit objective"},
                 "context": {"type": "string", "description": "Environment, runtime architecture, and trust boundary context (e.g. 'Home Assistant add-on on HAOS, behind Ingress, internal network only')"},
@@ -383,17 +477,17 @@ async def handle_tool_call(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             validate_target_path(repo_path_str, APP_OPTIONS.get("allow_list"))
 
         # Parse added lines (+) to avoid false positives on context/deleted lines
-        added_lines = [l[1:] for l in clean_diff.splitlines() if l.startswith("+") and not l.startswith("+++")]
+        added_lines = [l.strip()[1:] for l in clean_diff.splitlines() if l.strip().startswith("+") and not l.strip().startswith("+++")]
         added_diff = "\n".join(added_lines)
         
         findings = []
-        if ("subprocess" in added_diff and "shell=True" in added_diff) or "os.system(" in added_diff:
+        if ("subprocess" in added_diff and "shell=True" in added_diff) or "os.system(" in added_diff or "os.popen(" in added_diff:
             findings.append({
                 "id": f"R-{secrets.token_hex(4)}-001",
                 "cwe": "CWE-78",
                 "severity": "CRITICAL",
-                "title": "Command injection via subprocess shell=True in diff",
-                "rationale": "Direct subprocess execution with shell=True allows arbitrary shell command execution if arguments are untrusted.",
+                "title": "Command injection via shell execution in diff",
+                "rationale": "Direct subprocess execution with shell=True, os.system, or os.popen allows arbitrary shell command execution if arguments are untrusted.",
                 "verification": "statically_confirmed",
                 "confidence": "high",
             })
@@ -404,6 +498,47 @@ async def handle_tool_call(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
                 "severity": "HIGH",
                 "title": "Arbitrary code execution construct in diff",
                 "rationale": "Use of eval() or exec() construct allows execution of arbitrary strings as Python bytecode.",
+                "verification": "statically_confirmed",
+                "confidence": "high",
+            })
+        if "yaml.load(" in added_diff and not any(k in added_diff for k in ("SafeLoader", "_NoAnchorLoader", "CSafeLoader")):
+            findings.append({
+                "id": f"R-{secrets.token_hex(4)}-003",
+                "cwe": "CWE-502",
+                "severity": "HIGH",
+                "title": "Insecure YAML deserialization without SafeLoader",
+                "rationale": "yaml.load() without an explicit SafeLoader allows arbitrary Python object instantiation and code execution.",
+                "verification": "statically_confirmed",
+                "confidence": "high",
+            })
+        if "verify=False" in added_diff or "verify = False" in added_diff or "CERT_NONE" in added_diff:
+            findings.append({
+                "id": f"R-{secrets.token_hex(4)}-004",
+                "cwe": "CWE-295",
+                "severity": "MEDIUM",
+                "title": "TLS certificate verification disabled",
+                "rationale": "Disabling TLS certificate verification allows man-in-the-middle attacks against network traffic.",
+                "verification": "statically_confirmed",
+                "confidence": "high",
+            })
+        if re.search(r'\.execute\s*\(\s*f["\']', added_diff):
+            findings.append({
+                "id": f"R-{secrets.token_hex(4)}-005",
+                "cwe": "CWE-89",
+                "severity": "HIGH",
+                "title": "SQL string interpolation in query execution",
+                "rationale": "Constructing SQL queries using f-strings allows SQL injection vulnerabilities.",
+                "verification": "statically_confirmed",
+                "confidence": "high",
+            })
+        added_lower = added_diff.lower()
+        if "host_network: true" in added_lower or "full_access: true" in added_lower or "apparmor: false" in added_lower:
+            findings.append({
+                "id": f"R-{secrets.token_hex(4)}-006",
+                "cwe": "CWE-250",
+                "severity": "HIGH",
+                "title": "Dangerous Home Assistant container privilege grant",
+                "rationale": "Granting host_network, full_access, or disabling apparmor breaks container isolation in Home Assistant.",
                 "verification": "statically_confirmed",
                 "confidence": "high",
             })
@@ -545,7 +680,10 @@ async def handle_tool_call(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     elif name == "mantis_cancel_audit":
-        job_id = args.get("job_id")
+        job_id = str(args.get("job_id") or "")
+        job = get_job(job_id)
+        if job:
+            cleanup_job_workspaces(job)
         update_job_status(job_id, status="cancelled", stage="cancelled_by_request")
         return {"job_id": job_id, "status": "cancelled"}
 
@@ -562,14 +700,27 @@ async def handle_tool_call(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         return guidance
 
     elif name == "mantis_export_okf":
-        out_dir = Path(args.get("output_dir", "/data/okf_bundle")).resolve()
+        allowed_export_root = (DATA_DIR / "okf_bundle").resolve()
+        allowed_export_root.mkdir(parents=True, exist_ok=True)
+        raw_out = args.get("output_dir") or str(allowed_export_root)
+        out_dir = Path(raw_out).resolve()
+        if out_dir != allowed_export_root and not str(out_dir).startswith(str(allowed_export_root) + "/"):
+            raise ValueError(f"Export output_dir '{out_dir}' must reside inside '{allowed_export_root}'")
         count = export_okf_bundle(KNOWLEDGE_DB, out_dir)
-        return {"status": "exported", "output_dir": str(out_dir), "concepts_count": count}
+        return {"status": "exported", "concepts_exported": count, "output_dir": str(out_dir)}
 
     elif name == "mantis_import_okf":
-        b_dir = Path(args.get("bundle_dir", "")).resolve()
+        raw_bundle = args.get("bundle_dir", "")
+        if not raw_bundle:
+            raise ValueError("bundle_dir is required")
+        allowed_export_root = (DATA_DIR / "okf_bundle").resolve()
+        b_path = Path(raw_bundle).resolve()
+        if b_path == allowed_export_root or str(b_path).startswith(str(allowed_export_root) + "/"):
+            b_dir = b_path
+        else:
+            b_dir = validate_target_path(raw_bundle, APP_OPTIONS.get("allow_list"))
         count = import_okf_bundle(KNOWLEDGE_DB, b_dir)
-        return {"status": "imported", "bundle_dir": str(b_dir), "concepts_count": count}
+        return {"status": "imported", "concepts_imported": count, "bundle_dir": str(b_dir)}
 
     else:
         raise ValueError(f"Unknown MCP tool: {name}")

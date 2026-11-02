@@ -25,10 +25,8 @@ else
     if [ ! -f "$TOKEN_FILE" ]; then
         python3 -c "import secrets; print(secrets.token_hex(32))" > "$TOKEN_FILE"
         chmod 600 "$TOKEN_FILE"
-        echo "[Mantis] Generated fresh persistent bearer token."
-        echo "[Mantis] =========================================================="
-        echo "[Mantis] Bearer Token: $(cat "$TOKEN_FILE")"
-        echo "[Mantis] =========================================================="
+        TOKEN_PREVIEW="$(head -c 6 "$TOKEN_FILE")..."
+        echo "[Mantis] Generated fresh persistent bearer token at $TOKEN_FILE (prefix: $TOKEN_PREVIEW)"
     fi
     export MANTIS_BEARER_TOKEN="$(cat "$TOKEN_FILE")"
 fi
