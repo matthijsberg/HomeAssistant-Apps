@@ -1,0 +1,19 @@
+name: "Open HEMS"
+app_type: "local_app"
+upstream:
+  github_repo: "matthijsberg/ha-addon-open-hems"
+  pip_file: "requirements.txt"
+healthcheck:
+  port: 8088
+  endpoint: "/api/health"
+  timeout_seconds: 30
+security:
+  cve_check: true
+  secret_scan: true
+  okf_required: true
+docs:
+  sync_changelog: true
+  sync_readme: true
+  sync_okf: true
+test_commands:
+  - "pytest tests/unit/"

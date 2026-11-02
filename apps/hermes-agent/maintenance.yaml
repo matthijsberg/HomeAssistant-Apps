@@ -1,0 +1,18 @@
+name: "Hermes Agent"
+app_type: "local_app"
+upstream:
+  github_repo: "nousresearch/hermes-agent"
+healthcheck:
+  port: 8787
+  endpoint: "/"
+  timeout_seconds: 30
+security:
+  cve_check: true
+  secret_scan: true
+  okf_required: false
+docs:
+  sync_changelog: true
+  sync_readme: true
+  sync_okf: false
+test_commands:
+  - "pytest tests/"

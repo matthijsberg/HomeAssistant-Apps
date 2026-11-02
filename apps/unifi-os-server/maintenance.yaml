@@ -1,0 +1,17 @@
+name: "UniFi OS Server"
+app_type: "infra"
+upstream:
+  base_image: "debian:bookworm-slim"
+healthcheck:
+  port: 8443
+  endpoint: "/"
+  timeout_seconds: 30
+security:
+  cve_check: false
+  secret_scan: true
+  okf_required: false
+docs:
+  sync_changelog: true
+  sync_readme: true
+  sync_okf: false
+test_commands: []

@@ -1,0 +1,20 @@
+name: "Laya Router"
+app_type: "local_app"
+upstream:
+  base_image: "ubuntu:24.04"
+  pip_file: "requirements.txt"
+healthcheck:
+  port: 8080
+  endpoint: "/health"
+  timeout_seconds: 30
+security:
+  cve_check: true
+  secret_scan: true
+  okf_required: true
+docs:
+  sync_changelog: true
+  sync_readme: true
+  sync_okf: true
+test_commands:
+  - "pytest tests/"
+  - "./scripts/validate_okf.sh"
