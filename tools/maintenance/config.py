@@ -26,6 +26,8 @@ class SecurityConfig:
     cve_check: bool = True
     secret_scan: bool = True
     okf_required: bool = True
+    mantis_review: bool = True
+    mantis_model: str = "gemini-4-argon"
 
 @dataclass
 class DocsConfig:
@@ -98,7 +100,9 @@ def load_app_maintenance_config(app_dir: Path) -> AppMaintenanceConfig:
     security = SecurityConfig(
         cve_check=bool(sec_data.get("cve_check", True)),
         secret_scan=bool(sec_data.get("secret_scan", True)),
-        okf_required=bool(sec_data.get("okf_required", (app_dir / "knowledge").exists()))
+        okf_required=bool(sec_data.get("okf_required", (app_dir / "knowledge").exists())),
+        mantis_review=bool(sec_data.get("mantis_review", True)),
+        mantis_model=str(sec_data.get("mantis_model", "gemini-4-argon"))
     )
 
     docs_data = data.get("docs", {})

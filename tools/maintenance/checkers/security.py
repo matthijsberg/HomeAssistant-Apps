@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import re
 import urllib.request
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from ..config import AppMaintenanceConfig
 
 @dataclass
@@ -95,6 +95,59 @@ def query_osv_package(package_name: str, version: str) -> List[Vulnerability]:
     except Exception:
         pass
     return vulns
+
+def run_mantis_diff_review(diff_text: str, context: str = "Home Assistant add-on on HAOS, behind Ingress", model: str = "gemini-4-argon") -> Tuple[bool, str, Dict[str, Any]]:
+    """Runs a synchronous diff review via Mantis MCP server using the specified LLM (default gemini-4-argon)."""
+    if not diff_text.strip():
+        return True, "No diff to review", {"verdict": "CLEAN"}
+
+    hermes_cfg_path = Path("/config/.hermes/profiles/matthijs/config.yaml")
+    mcp_url = "http://local-mantis-security-agent:8000/mcp"
+    headers = {"Content-Type": "application/json"}
+
+    if hermes_cfg_path.exists():
+        try:
+            import yaml
+            cfg = yaml.safe_load(hermes_cfg_path.read_text(encoding="utf-8")) or {}
+            mantis_sec = cfg.get("mcp_servers", {}).get("mantis", {})
+            mcp_url = mantis_sec.get("url", mcp_url)
+            headers.update(mantis_sec.get("headers", {}))
+        except Exception:
+            pass
+
+    payload = {
+        "jsonrpc": "2.0",
+        "id": "mantis-maint-review",
+        "method": "tools/call",
+        "params": {
+            "name": "mantis_review_diff",
+            "arguments": {
+                "diff": diff_text[:150000],
+                "context": context,
+                "llm": {"provider": "gemini", "model": model}
+            }
+        }
+    }
+
+    req = urllib.request.Request(mcp_url, data=json.dumps(payload).encode("utf-8"), headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            if resp.status == 200:
+                body = json.loads(resp.read().decode("utf-8"))
+                content_items = body.get("result", {}).get("content", [])
+                if content_items and content_items[0].get("type") == "text":
+                    review_data = json.loads(content_items[0]["text"])
+                    verdict = review_data.get("verdict", "UNKNOWN")
+                    job_id = review_data.get("job_id", "")
+                    findings = review_data.get("findings", [])
+                    if verdict in ("CLEAN", "PASS"):
+                        return True, f"Mantis ({model}) passed [Job: {job_id}, Verdict: {verdict}]", review_data
+                    else:
+                        return False, f"Mantis ({model}) flagged issues [Verdict: {verdict}, Findings: {len(findings)}]", review_data
+    except Exception as e:
+        return False, f"Mantis review call failed: {e}", {}
+
+    return True, f"Mantis review completed", {}
 
 def parse_requirements_file(req_file: Path) -> List[tuple]:
     packages = []

@@ -8,6 +8,7 @@ import subprocess
 from typing import Optional, Tuple
 from .config import AppMaintenanceConfig, load_app_maintenance_config
 from .smoke_test import run_app_mock_and_smoke_test, SmokeTestResult
+from .checkers.security import run_mantis_diff_review
 from .docs_manager import sync_manifest_version, prepend_changelog_entry, sync_readme_version
 from .okf_manager import append_okf_maintenance_log, validate_okf_bundle
 
@@ -64,8 +65,31 @@ def execute_app_update(app_dir: Path, target_version: str, summary: str, urgency
             smoke_test=smoke_res
         )
 
-    # 4. Synchronize documentation & OKF bundle
-    prepend_changelog_entry(app_dir, target_version, summary)
+    # 4. Mantis Security Review pass (Gemini 4 Argon)
+    mantis_summary = ""
+    if config.security.mantis_review:
+        code, diff_out, _ = _run_git(["diff", "HEAD", "--", str(app_dir)], repo_root)
+        if diff_out:
+            mantis_ok, mantis_msg, _ = run_mantis_diff_review(
+                diff_text=diff_out,
+                context=f"Home Assistant add-on {config.app_name} on HAOS, behind Ingress, internal network only",
+                model=config.security.mantis_model
+            )
+            if not mantis_ok:
+                _run_git(["checkout", "--", str(app_dir)], repo_root)
+                _run_git(["checkout", "main"], repo_root)
+                return ExecutionResult(
+                    app_name=config.app_name,
+                    target_version=target_version,
+                    success=False,
+                    branch_name=branch_name,
+                    error_message=f"Mantis security review failed: {mantis_msg}"
+                )
+            mantis_summary = f"Security: {mantis_msg}"
+
+    # 5. Synchronize documentation & OKF bundle
+    full_summary = f"{summary}. {mantis_summary}".strip()
+    prepend_changelog_entry(app_dir, target_version, full_summary)
     sync_readme_version(app_dir, target_version)
     if config.docs.sync_okf:
         append_okf_maintenance_log(app_dir, target_version, summary, urgency)
