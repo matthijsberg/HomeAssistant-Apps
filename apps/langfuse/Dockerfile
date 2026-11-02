@@ -1,4 +1,4 @@
-ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base:3.20
+ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base:3.21
 FROM ghcr.io/langfuse/langfuse:4 AS langfuse-web-source
 FROM ghcr.io/langfuse/langfuse-worker:4 AS langfuse-worker-source
 FROM chrislusf/seaweedfs:latest AS seaweedfs-source
