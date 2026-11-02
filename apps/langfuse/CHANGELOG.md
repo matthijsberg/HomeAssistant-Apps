@@ -5,6 +5,15 @@ All notable changes to the `Langfuse` Home Assistant Add-on will be documented i
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.72.0] - 2026-11-02
+
+### Changed
+- Upgraded Langfuse upstream images to v4.72.0 (`ghcr.io/langfuse/langfuse:4` web and worker).
+- Validated all s6-overlay service configurations, dual Nginx listeners, and Ingress routing.
+- Passed pre-flight manifest and build schema validation tests.
+- Verified OKF v0.2 knowledge bundle conformance.
+- Security review pass completed via Mantis using Google Gemini 4 Argon (`gemini-4-argon`): Clean verdict.
+
 ## [4.0.0-1] - 2026-09-29
 
 ### Added

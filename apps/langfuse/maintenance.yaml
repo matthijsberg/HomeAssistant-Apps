@@ -10,9 +10,11 @@ healthcheck:
 security:
   cve_check: false
   secret_scan: true
-  okf_required: false
+  okf_required: true
 docs:
   sync_changelog: true
   sync_readme: true
-  sync_okf: false
-test_commands: []
+  sync_okf: true
+test_commands:
+  - "/usr/bin/python3 scripts/test_config.py"
+  - "./scripts/validate_okf.sh"
