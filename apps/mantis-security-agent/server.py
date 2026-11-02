@@ -56,6 +56,7 @@ def load_options() -> Dict[str, Any]:
     return {
         "providers": {
             "gemini": {"api_key": os.environ.get("GEMINI_API_KEY", "")},
+            "openrouter": {"api_key": os.environ.get("OPENROUTER_API_KEY", ""), "base_url": "https://openrouter.ai/api/v1"},
             "ollama": {"base_url": os.environ.get("OLLAMA_BASE_URL", "http://172.30.32.1:11434")},
         },
         "defaults": {

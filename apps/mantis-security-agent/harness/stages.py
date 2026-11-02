@@ -104,7 +104,10 @@ def call_llm(
                 "tokens_out": usage.get("output_tokens", 0),
             }
 
-    # OpenAI / OpenAI-compatible endpoint
+    # OpenAI / OpenRouter / OpenAI-compatible endpoint
+    if provider == "openrouter" and not base_url:
+        base_url = "https://openrouter.ai/api/v1"
+
     endpoint = f"{base_url.rstrip('/')}/chat/completions" if base_url else "https://api.openai.com/v1/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     payload = {
