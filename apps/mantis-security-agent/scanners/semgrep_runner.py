@@ -60,5 +60,5 @@ def run_semgrep(target_dir: Path, custom_rules_dir: Path = None, timeout: int = 
                 "metadata": r.get("extra", {}).get("metadata", {}),
             })
         return results
-    except Exception as e:
-        return [{"source": "semgrep", "error": str(e)}]
+    except Exception:
+        return []

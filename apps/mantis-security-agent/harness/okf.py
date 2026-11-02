@@ -351,13 +351,15 @@ def import_okf_bundle(db_path: Path, bundle_dir: Path) -> int:
         return 0
 
     imported_count = 0
-    for root, _, files in os.walk(bundle_dir):
+    for root, dirs, files in os.walk(bundle_dir):
+        dirs[:] = [d for d in dirs if d not in (".git", "node_modules", ".venv", "vendor", "__pycache__")]
         for f in files:
-            if not f.endswith(".md") or f in ("index.md", "log.md"):
+            if not f.endswith(".md") or f in ("index.md", "log.md") or f.upper().startswith("README"):
                 continue
             f_path = Path(root) / f
+            if f_path.is_symlink():
+                continue
             try:
-                rel_p = str(f_path.relative_to(bundle_dir))
                 content = f_path.read_text(encoding="utf-8", errors="ignore")
                 parsed = parse_okf_markdown(content, default_concept_id=f_path.stem)
                 if parsed:
