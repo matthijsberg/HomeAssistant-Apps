@@ -17,22 +17,30 @@ ADMIN_PASSWORD=""
 CLICKHOUSE_MEM_MB=4096
 NODE_MAX_OLD_SPACE_MB=2048
 TELEMETRY_ENABLED="false"
-EXTERNAL_URL="https://hass.b3rg.nl:8123"
+EXTERNAL_URL="http://homeassistant.local:8123"
 
 if [ -f "/data/options.json" ]; then
-  # Simple robust JSON extraction
-  OPT_EMAIL=$(grep -o '"admin_email": *"[^"]*"' /data/options.json | cut -d'"' -f4 || true)
-  OPT_PASS=$(grep -o '"admin_password": *"[^"]*"' /data/options.json | cut -d'"' -f4 || true)
-  OPT_CH_MEM=$(grep -o '"clickhouse_memory_limit_mb": *[0-9]*' /data/options.json | awk '{print $2}' || true)
-  OPT_NODE_MEM=$(grep -o '"node_max_old_space_mb": *[0-9]*' /data/options.json | awk '{print $2}' || true)
-  OPT_TELEM=$(grep -o '"telemetry_enabled": *true' /data/options.json || true)
-  OPT_EXT_URL=$(grep -o '"external_url": *"[^"]*"' /data/options.json | cut -d'"' -f4 || true)
+  if command -v jq >/dev/null 2>&1; then
+    OPT_EMAIL=$(jq -r '.admin_email // empty' /data/options.json)
+    OPT_PASS=$(jq -r '.admin_password // empty' /data/options.json)
+    OPT_CH_MEM=$(jq -r '.clickhouse_memory_limit_mb // empty' /data/options.json)
+    OPT_NODE_MEM=$(jq -r '.node_max_old_space_mb // empty' /data/options.json)
+    OPT_TELEM=$(jq -r '.telemetry_enabled // empty' /data/options.json)
+    OPT_EXT_URL=$(jq -r '.external_url // empty' /data/options.json)
+  else
+    OPT_EMAIL=$(grep -o '"admin_email": *"[^"]*"' /data/options.json | cut -d'"' -f4 || true)
+    OPT_PASS=$(grep -o '"admin_password": *"[^"]*"' /data/options.json | cut -d'"' -f4 || true)
+    OPT_CH_MEM=$(grep -o '"clickhouse_memory_limit_mb": *[0-9]*' /data/options.json | awk '{print $2}' || true)
+    OPT_NODE_MEM=$(grep -o '"node_max_old_space_mb": *[0-9]*' /data/options.json | awk '{print $2}' || true)
+    OPT_TELEM=$(grep -o '"telemetry_enabled": *true' /data/options.json || true)
+    OPT_EXT_URL=$(grep -o '"external_url": *"[^"]*"' /data/options.json | cut -d'"' -f4 || true)
+  fi
 
   [ -n "${OPT_EMAIL}" ] && ADMIN_EMAIL="${OPT_EMAIL}"
   [ -n "${OPT_PASS}" ] && ADMIN_PASSWORD="${OPT_PASS}"
   [ -n "${OPT_CH_MEM}" ] && CLICKHOUSE_MEM_MB="${OPT_CH_MEM}"
   [ -n "${OPT_NODE_MEM}" ] && NODE_MAX_OLD_SPACE_MB="${OPT_NODE_MEM}"
-  [ -n "${OPT_TELEM}" ] && TELEMETRY_ENABLED="true"
+  [ "${OPT_TELEM}" = "true" ] && TELEMETRY_ENABLED="true"
   [ -n "${OPT_EXT_URL}" ] && EXTERNAL_URL="${OPT_EXT_URL}"
 fi
 

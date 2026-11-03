@@ -86,3 +86,27 @@ def test_clickhouse_memory_limits_configured():
         worker_content = f.read()
     assert "ha_sensor_reporter.js &" not in worker_content, "worker run must not background ha_sensor_reporter"
 
+
+def test_glm53_hardening_recommendations():
+    init_secrets_sh = REPO_ROOT / "rootfs" / "usr" / "bin" / "init_secrets.sh"
+    redis_run = REPO_ROOT / "rootfs" / "etc" / "s6-overlay" / "s6-rc.d" / "redis" / "run"
+    init_postgres = REPO_ROOT / "rootfs" / "usr" / "bin" / "init_postgres.sh"
+
+    with open(init_secrets_sh, "r", encoding="utf-8") as f:
+        sec_content = f.read()
+    assert "<ip>127.0.0.1</ip>" in sec_content
+    assert "<ip>::1</ip>" in sec_content
+    assert "<ip>::/0</ip>" not in sec_content
+    assert "<access_management>0</access_management>" in sec_content
+
+    with open(redis_run, "r", encoding="utf-8") as f:
+        red_content = f.read()
+    assert "--maxmemory 512mb" in red_content
+    assert "--maxmemory-policy allkeys-lru" in red_content
+
+    with open(init_postgres, "r", encoding="utf-8") as f:
+        pg_content = f.read()
+    assert "shared_buffers = 256MB" in pg_content
+    assert "work_mem = 16MB" in pg_content
+
+

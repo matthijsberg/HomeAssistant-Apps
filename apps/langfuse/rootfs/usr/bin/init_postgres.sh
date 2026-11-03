@@ -27,6 +27,14 @@ if [ ! -f "${PG_DATA}/PG_VERSION" ]; then
   echo "[init-postgres] PostgreSQL initialized."
 fi
 
+# Ensure memory bounds in postgresql.conf on existing clusters
+if ! grep -q "^shared_buffers" "${PG_DATA}/postgresql.conf" 2>/dev/null; then
+  echo "shared_buffers = 256MB" >> "${PG_DATA}/postgresql.conf"
+fi
+if ! grep -q "^work_mem" "${PG_DATA}/postgresql.conf" 2>/dev/null; then
+  echo "work_mem = 16MB" >> "${PG_DATA}/postgresql.conf"
+fi
+
 # Wait for PostgreSQL to be ready
 echo "[init-postgres] Waiting for PostgreSQL readiness..."
 for i in $(seq 1 30); do

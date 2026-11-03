@@ -52,20 +52,18 @@ cat <<EOF > /etc/clickhouse-server/users.d/langfuse.xml
         <langfuse>
             <password>${CLICKHOUSE_PASSWORD}</password>
             <networks>
-                <ip>::/0</ip>
+                <ip>127.0.0.1</ip>
+                <ip>::1</ip>
             </networks>
             <profile>default</profile>
             <quota>default</quota>
-            <access_management>1</access_management>
-            <named_collection_control>1</named_collection_control>
-            <show_named_collections>1</show_named_collections>
-            <show_named_collections_secrets>1</show_named_collections_secrets>
+            <access_management>0</access_management>
         </langfuse>
     </users>
 </clickhouse>
 EOF
 chmod 644 /etc/clickhouse-server/users.d/langfuse.xml
-echo "[init-secrets] Configured ClickHouse user 'langfuse' in users.d/langfuse.xml."
+echo "[init-secrets] Configured ClickHouse user 'langfuse' in users.d/langfuse.xml (loopback only, least-privilege)."
 
 # Ensure ClickHouse persistent data path in /data/clickhouse
 mkdir -p /etc/clickhouse-server/config.d

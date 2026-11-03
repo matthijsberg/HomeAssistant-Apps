@@ -5,6 +5,14 @@ All notable changes to the `Langfuse` Home Assistant Add-on will be documented i
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.72.2] - 2026-11-03
+
+### Security
+- Restricted ClickHouse user network scope strictly to loopback (`127.0.0.1` and `::1`) and revoked `access_management: 1` admin privileges in `users.d/langfuse.xml` following Mantis GLM-5.3 audit findings.
+- Added Redis memory ceiling (`--maxmemory 512mb --maxmemory-policy allkeys-lru`) and enforced PostgreSQL buffer boundaries (`shared_buffers = 256MB`, `work_mem = 16MB`).
+- Modernized options parsing in `init_config.sh` to use `jq` and sanitized fallback URL to generic Home Assistant address.
+- Verified with Mantis Security Agent using GLM 5.3 (`z-ai/glm-5.3`).
+
 ## [4.72.1] - 2026-11-03
 
 ### Fixed
