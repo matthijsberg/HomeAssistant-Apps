@@ -80,10 +80,12 @@ Enable Vulkan GPU support.
 
 ## Web UI
 
-The add-on includes a built-in Chat UI.
-- **Chat:** Interact with the loaded model directly.
-- **Performance Metrics:** View token generation speed and load times.
-- **Model Management:** See which model is currently loaded.
+The add-on includes a built-in Chat UI (accessible via Home Assistant Ingress or directly on port `8099`).
+- **Live Chunked Streaming:** Real-time token streaming with zero idle proxy timeouts.
+- **Thinking / Reasoning Models:** Live-updating collapsible thought blocks (`🧠 Denkproces`) for models like `ornith-1.5:35b` and DeepSeek-R1.
+- **Mobile Reconnection Resilience:** If your mobile 5G or Wi-Fi connection drops during a long generation, the server keeps generating in the background and resumes seamlessly when connectivity returns.
+- **Performance Metrics:** View token generation speed (tokens/sec) and latency.
+- **Model Management & Chat History:** Persistent conversation history with quick clear (`🧹 Wis chat`).
 
 ## Hardware Support
 

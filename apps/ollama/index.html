@@ -19,7 +19,7 @@
         .flex-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
         
         #chat-container { background: white; padding: 14px; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); height: calc(100vh - 270px); min-height: 280px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
-        .message { padding: 10px 14px; border-radius: 12px; max-width: 85%; font-size: 0.95rem; line-height: 1.45; word-break: break-word; }
+        .message { padding: 10px 14px; border-radius: 12px; max-width: 88%; font-size: 0.95rem; line-height: 1.45; word-break: break-word; }
         .message p { margin: 0 0 6px 0; }
         .message p:last-child { margin-bottom: 0; }
         .message code { background: rgba(0,0,0,0.08); padding: 2px 5px; border-radius: 4px; font-size: 0.9em; font-family: monospace; }
@@ -28,6 +28,19 @@
         .user { align-self: flex-end; background: #2563eb; color: white; border-bottom-right-radius: 3px; }
         .assistant { align-self: flex-start; background: #f1f5f9; color: #0f172a; border-bottom-left-radius: 3px; }
         .system { align-self: center; background: #fef3c7; color: #92400e; font-size: 0.85rem; border-radius: 8px; max-width: 95%; }
+        
+        .thinking-details { background: rgba(245, 158, 11, 0.08); border-left: 3px solid #f59e0b; border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; font-size: 0.85rem; color: #92400e; }
+        .thinking-summary { cursor: pointer; font-weight: 600; user-select: none; outline: none; }
+        .thinking-body { margin-top: 6px; white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 0.82rem; max-height: 220px; overflow-y: auto; line-height: 1.4; color: #78350f; }
+        
+        .typing-cursor { display: inline-block; width: 6px; height: 14px; background-color: #2563eb; margin-left: 3px; vertical-align: middle; animation: blink 1s infinite; }
+        @keyframes blink { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0; } }
+        
+        .reconnect-badge { display: inline-block; font-size: 0.8rem; padding: 4px 8px; border-radius: 6px; background: #fef3c7; color: #92400e; margin-top: 6px; font-weight: 500; }
+        .reconnect-badge.success { background: #dcfce7; color: #166534; }
+        .reconnect-badge.error { background: #fee2e2; color: #991b1b; }
+        
+        .metrics-bar { font-size: 0.75rem; color: #94a3b8; margin-top: 8px; border-top: 1px solid #e2e8f0; padding-top: 4px; }
         
         form#input-area { display: flex; gap: 8px; margin-top: 10px; }
         input[type="text"] { flex-grow: 1; padding: 12px 14px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 16px; outline: none; transition: border-color 0.2s; }
@@ -40,6 +53,7 @@
         .btn-success { background: #16a34a; color: white; }
         .btn-danger { background: #dc2626; color: white; }
         .btn-info { background: #0284c7; color: white; }
+        .btn-secondary { background: #64748b; color: white; }
         button:disabled { opacity: 0.6; cursor: not-allowed; }
         
         #download-status { font-size: 0.85rem; color: #64748b; margin-top: 4px; }
@@ -48,7 +62,7 @@
 <body>
     <h1>
         <span>Ollama (Vulkan) Chat</span>
-        <span class="version-tag">v0.7.3 • Ollama 0.40.13</span>
+        <span class="version-tag">v0.8.0 • Ollama 0.40.13</span>
     </h1>
 
     <div class="card">
@@ -59,6 +73,7 @@
             <select id="model-select"><option value="">Laden...</option></select>
             <button id="test-btn" class="btn-success" onclick="testModel()">⚡ Test</button>
             <button id="delete-btn" class="btn-danger" onclick="deleteModel()">🗑️ Verwijder</button>
+            <button id="clear-btn" class="btn-secondary" onclick="clearChat()">🧹 Wis chat</button>
         </div>
         <div id="running-model" style="margin-top: 8px; font-size: 0.85rem; color: #475569;">
             Actief in VRAM: Controleren...
@@ -88,6 +103,10 @@
         const statusSpan = document.getElementById('connection-status');
         const runningModelSpan = document.getElementById('running-model');
 
+        let chatHistory = [];
+        const STORAGE_KEY_CHAT = 'ha_ollama_chat_history_v1';
+        const STORAGE_KEY_PENDING = 'ha_ollama_pending_msg_v1';
+
         if (typeof marked !== 'undefined') {
             marked.setOptions({ breaks: true, gfm: true });
         }
@@ -106,6 +125,86 @@
             chatContainer.appendChild(div);
             chatContainer.scrollTop = chatContainer.scrollHeight;
             return div;
+        }
+
+        function createAssistantMessageNode() {
+            const msgDiv = document.createElement('div');
+            msgDiv.className = 'message assistant';
+
+            const thinkingDetails = document.createElement('details');
+            thinkingDetails.className = 'thinking-details';
+            thinkingDetails.style.display = 'none';
+            thinkingDetails.open = true;
+
+            const thinkingSummary = document.createElement('summary');
+            thinkingSummary.className = 'thinking-summary';
+            thinkingSummary.textContent = '🧠 Denkproces';
+            thinkingDetails.appendChild(thinkingSummary);
+
+            const thinkingBody = document.createElement('div');
+            thinkingBody.className = 'thinking-body';
+            thinkingDetails.appendChild(thinkingBody);
+            msgDiv.appendChild(thinkingDetails);
+
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'content-body';
+            contentDiv.innerHTML = '<span class="typing-cursor"></span>';
+            msgDiv.appendChild(contentDiv);
+
+            const reconnectBadge = document.createElement('div');
+            reconnectBadge.className = 'reconnect-badge';
+            reconnectBadge.style.display = 'none';
+            msgDiv.appendChild(reconnectBadge);
+
+            const metricsDiv = document.createElement('div');
+            metricsDiv.className = 'metrics-bar';
+            metricsDiv.style.display = 'none';
+            msgDiv.appendChild(metricsDiv);
+
+            chatContainer.appendChild(msgDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+
+            return {
+                container: msgDiv,
+                thinkingDetails,
+                thinkingBody,
+                contentDiv,
+                reconnectBadge,
+                metricsDiv
+            };
+        }
+
+        function saveHistory() {
+            try {
+                localStorage.setItem(STORAGE_KEY_CHAT, JSON.stringify(chatHistory));
+            } catch (e) {
+                console.warn("Kon chatgeschiedenis niet opslaan in localStorage", e);
+            }
+        }
+
+        function loadHistory() {
+            try {
+                const saved = localStorage.getItem(STORAGE_KEY_CHAT);
+                if (saved) {
+                    chatHistory = JSON.parse(saved);
+                    chatContainer.innerHTML = '';
+                    chatHistory.forEach(msg => {
+                        appendMessage(msg.role, msg.content);
+                    });
+                }
+            } catch (e) {
+                console.warn("Kon chatgeschiedenis niet laden", e);
+                chatHistory = [];
+            }
+        }
+
+        function clearChat() {
+            if (confirm("Weet je zeker dat je de chatgeschiedenis wilt wissen?")) {
+                chatHistory = [];
+                localStorage.removeItem(STORAGE_KEY_CHAT);
+                localStorage.removeItem(STORAGE_KEY_PENDING);
+                chatContainer.innerHTML = '';
+            }
         }
 
         async function checkRunningModel() {
@@ -289,7 +388,108 @@
             }
         }
 
-        let chatHistory = [];
+        // --- Live Streaming Reader with Reconnection Resilience ---
+
+        async function consumeStream(reader, state, ui) {
+            const decoder = new TextDecoder('utf-8');
+            let buffer = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop(); // keep remainder
+
+                for (const line of lines) {
+                    const trimmed = line.trim();
+                    if (!trimmed) continue;
+                    state.tokenOffset++;
+
+                    try {
+                        const chunk = JSON.parse(trimmed);
+
+                        if (chunk.error) {
+                            throw new Error(chunk.error);
+                        }
+
+                        if (chunk.message) {
+                            if (chunk.message.thinking) {
+                                state.thinkingText += chunk.message.thinking;
+                                ui.thinkingDetails.style.display = 'block';
+                                ui.thinkingBody.textContent = state.thinkingText;
+                                ui.thinkingBody.scrollTop = ui.thinkingBody.scrollHeight;
+                            }
+                            if (chunk.message.content) {
+                                state.contentText += chunk.message.content;
+                                ui.contentDiv.innerHTML = renderMarkdown(state.contentText) + '<span class="typing-cursor"></span>';
+                            }
+                        }
+
+                        if (chunk.done) {
+                            state.isComplete = true;
+                            ui.contentDiv.innerHTML = renderMarkdown(state.contentText); // remove cursor
+
+                            const totalSec = (chunk.total_duration / 1e9).toFixed(2);
+                            const evalCount = chunk.eval_count || 0;
+                            const evalSec = (chunk.eval_duration / 1e9).toFixed(2);
+                            const tps = evalSec > 0 ? (evalCount / evalSec).toFixed(1) : "N/A";
+
+                            ui.metricsDiv.style.display = 'block';
+                            ui.metricsDiv.innerHTML = `⏱️ ${totalSec}s &nbsp;|&nbsp; 🔤 ${evalCount} tokens (${tps} t/s) &nbsp;|&nbsp; 🧠 ${state.model}`;
+                        }
+                    } catch (e) {
+                        if (e.message && e.message.startsWith("Ollama HTTP")) {
+                            throw e;
+                        }
+                        console.warn("Chunk parse warning:", e, line);
+                    }
+                }
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+        }
+
+        async function resumeStreamLoop(messageId, state, ui) {
+            const maxAttempts = 20;
+            let attempt = 0;
+
+            ui.reconnectBadge.style.display = 'inline-block';
+            ui.reconnectBadge.className = 'reconnect-badge';
+
+            while (attempt < maxAttempts && !state.isComplete) {
+                attempt++;
+                ui.reconnectBadge.textContent = `📡 Verbinding weggevallen... herstellen (poging ${attempt}/${maxAttempts})...`;
+                
+                const delayMs = Math.min(1500 * Math.pow(1.2, attempt - 1), 5000);
+                await new Promise(r => setTimeout(r, delayMs));
+
+                try {
+                    const resumeUrl = `api/chat_resume?id=${encodeURIComponent(messageId)}&offset=${state.tokenOffset}`;
+                    const res = await fetch(resumeUrl);
+
+                    if (res.ok) {
+                        ui.reconnectBadge.className = 'reconnect-badge success';
+                        ui.reconnectBadge.textContent = '✅ Verbinding hersteld!';
+                        setTimeout(() => { ui.reconnectBadge.style.display = 'none'; }, 3000);
+
+                        await consumeStream(res.body.getReader(), state, ui);
+                        if (state.isComplete) {
+                            return;
+                        }
+                    } else if (res.status === 404) {
+                        throw new Error("Sessie verlopen op server");
+                    }
+                } catch (err) {
+                    console.warn(`Resume poging ${attempt} mislukt:`, err);
+                }
+            }
+
+            if (!state.isComplete) {
+                ui.reconnectBadge.className = 'reconnect-badge error';
+                ui.reconnectBadge.innerHTML = '❌ Verbinding kon niet worden hersteld. <button style="padding:2px 6px; font-size:12px; margin-left:6px;" onclick="location.reload()">Opnieuw proberen</button>';
+            }
+        }
 
         async function sendMessage() {
             const text = userInput.value.trim();
@@ -305,14 +505,33 @@
                 return;
             }
 
+            const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 7)}`;
+
             userInput.value = '';
             userInput.disabled = true;
             sendBtn.disabled = true;
             sendBtn.textContent = "⏳...";
+
             appendMessage('user', text);
             chatHistory.push({ role: 'user', content: text });
+            saveHistory();
 
-            const assistantMsgDiv = appendMessage('assistant', '<span style="color:#94a3b8;">Bezig met genereren op Intel Arc...</span>');
+            const ui = createAssistantMessageNode();
+            const state = {
+                messageId: messageId,
+                model: modelToUse,
+                tokenOffset: 0,
+                thinkingText: '',
+                contentText: '',
+                isComplete: false
+            };
+
+            // Store active pending message for reload recovery
+            localStorage.setItem(STORAGE_KEY_PENDING, JSON.stringify({
+                messageId,
+                model: modelToUse,
+                timestamp: Date.now()
+            }));
 
             try {
                 const response = await fetch('api/chat', {
@@ -321,7 +540,8 @@
                     body: JSON.stringify({
                         model: modelToUse,
                         messages: chatHistory,
-                        stream: false
+                        stream: true,
+                        message_id: messageId
                     })
                 });
 
@@ -330,33 +550,22 @@
                     throw new Error(`HTTP ${response.status}: ${errText}`);
                 }
 
-                const data = await response.json();
-                const reply = (data.message && data.message.content) ? data.message.content : (data.response || "");
-                if (reply) {
-                    assistantMsgDiv.innerHTML = renderMarkdown(reply);
-                    chatHistory.push({ role: 'assistant', content: reply });
-                } else {
-                    assistantMsgDiv.textContent = "(Geen tekst ontvangen)";
-                }
+                await consumeStream(response.body.getReader(), state, ui);
 
-                if (data.done) {
-                    const totalDuration = (data.total_duration / 1e9).toFixed(2);
-                    const evalCount = data.eval_count || 0;
-                    const evalDuration = (data.eval_duration / 1e9).toFixed(2);
-                    const tps = evalDuration > 0 ? (evalCount / evalDuration).toFixed(1) : "N/A";
-                    
-                    const metricsHtml = `
-                        <div style="font-size: 0.75em; color: #94a3b8; margin-top: 8px; border-top: 1px solid #e2e8f0; padding-top: 4px;">
-                            ⏱️ ${totalDuration}s &nbsp;|&nbsp; 🔤 ${evalCount} tokens (${tps} t/s) &nbsp;|&nbsp; 🧠 ${modelToUse}
-                        </div>
-                    `;
-                    assistantMsgDiv.insertAdjacentHTML('beforeend', metricsHtml);
-                    chatContainer.scrollTop = chatContainer.scrollHeight;
+                if (!state.isComplete) {
+                    await resumeStreamLoop(messageId, state, ui);
                 }
 
             } catch (error) {
-                assistantMsgDiv.innerHTML = `<span style="color:#dc2626;">❌ Fout: ${error.message}</span>`;
+                console.warn("Direct stream error, starting auto-resume...", error);
+                await resumeStreamLoop(messageId, state, ui);
             } finally {
+                if (state.contentText) {
+                    chatHistory.push({ role: 'assistant', content: state.contentText });
+                    saveHistory();
+                }
+                localStorage.removeItem(STORAGE_KEY_PENDING);
+
                 userInput.disabled = false;
                 sendBtn.disabled = false;
                 sendBtn.textContent = "Verstuur";
@@ -365,10 +574,38 @@
             }
         }
 
-        // Initialiseer direct
+        // --- Startup & Pending Recovery ---
+        loadHistory();
         fetchModels();
-        // Polling VRAM status elke 5s (zonder dropdown leeg te vegen)
         setInterval(checkRunningModel, 5000);
+
+        window.addEventListener('load', async () => {
+            try {
+                const pendingRaw = localStorage.getItem(STORAGE_KEY_PENDING);
+                if (pendingRaw) {
+                    const pending = JSON.parse(pendingRaw);
+                    if (Date.now() - pending.timestamp < 600000) {
+                        const ui = createAssistantMessageNode();
+                        const state = {
+                            messageId: pending.messageId,
+                            model: pending.model,
+                            tokenOffset: 0,
+                            thinkingText: '',
+                            contentText: '',
+                            isComplete: false
+                        };
+                        await resumeStreamLoop(pending.messageId, state, ui);
+                        if (state.contentText) {
+                            chatHistory.push({ role: 'assistant', content: state.contentText });
+                            saveHistory();
+                        }
+                    }
+                    localStorage.removeItem(STORAGE_KEY_PENDING);
+                }
+            } catch (e) {
+                console.error("Fout bij herstellen van sessie", e);
+            }
+        });
     </script>
 </body>
 </html>

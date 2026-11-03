@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-11-03
+
+### Added
+- **Live Chunked Streaming (`web_server.py` & `index.html`)**: Switched chat completions to HTTP/1.1 chunked streaming (`Transfer-Encoding: chunked`) with native `ReadableStream` decoding. Eliminates the 60s idle reverse proxy timeout on long generations (such as code generation on 35B models).
+- **Mobile Reconnection Resilience (`SessionManager` & `/api/chat_resume`)**: Background worker thread buffers Ollama response tokens on the host. If a mobile 5G or Wi-Fi connection drops mid-stream, the generation continues uninterrupted and the browser automatically re-attaches and resumes via `/api/chat_resume?id=<message_id>&offset=<token_count>`.
+- **Reasoning / Thinking Model Visualization**: Dedicated live-updating collapsible card (`🧠 Denkproces`) for reasoning models (e.g. `ornith-1.5:35b` / DeepSeek-R1) displaying thought steps in real time before code/content output.
+- **LocalStorage State Persistence**: Multi-turn chat history and active in-flight requests persist in browser `localStorage`, seamlessly recovering conversations across browser restarts or page reloads.
+- **Chat Management**: Added `🧹 Wis chat` button in the Web UI to reset conversation history cleanly.
+
+---
+
 ## [0.7.3] - 2026-11-01
 
 ### Fixed

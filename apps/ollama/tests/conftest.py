@@ -1,6 +1,7 @@
 """Pytest fixtures for ha-addon-ollama test suite."""
 
 from pathlib import Path
+
 import pytest
 import yaml
 

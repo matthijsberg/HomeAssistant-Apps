@@ -2,6 +2,7 @@
 
 import re
 from pathlib import Path
+
 import yaml
 
 KNOWLEDGE_ROOT = Path(__file__).parent.parent / "knowledge"

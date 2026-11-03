@@ -14,7 +14,7 @@ RUN_SH_PATH = APP_ROOT / "run.sh"
 def test_config_yaml_manifest(config_yaml):
     assert config_yaml["name"] == "Ollama (Vulkan)"
     assert config_yaml["slug"] == "ollama_vulkan"
-    assert config_yaml["version"] == "0.7.3"
+    assert config_yaml["version"] == "0.8.0"
     assert "amd64" in config_yaml["arch"]
     assert config_yaml["startup"] == "application"
     assert config_yaml["boot"] == "auto"
@@ -49,7 +49,7 @@ def test_config_yaml_manifest(config_yaml):
     assert "model" in opts
     assert opts.get("keep_alive") == "5m"
     assert opts.get("context_length") == 8192
-    assert opts.get("max_loaded_models") == 0
+    assert opts.get("max_loaded_models") == 2
     assert opts.get("enable_vulkan") is True
     assert opts.get("disable_flash_attention") is False
 

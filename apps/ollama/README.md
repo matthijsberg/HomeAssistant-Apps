@@ -9,7 +9,7 @@ Optimized for **Intel Arc graphics (Discrete & Integrated Xe-LPG)** and **AMD Ra
 - **Intel Arc & Core Ultra Support:** Includes stability workarounds for cooperative matrix (`GGML_VK_DISABLE_COOPMAT=1`) and integer dot products (`GGML_VK_DISABLE_INTEGER_DOT_PRODUCT=1`).
 - **Memory Efficiency:** Enables Flash Attention (`OLLAMA_FLASH_ATTENTION=1`) paired with Q8_0 KV cache quantization (`OLLAMA_KV_CACHE_TYPE=q8_0`).
 - **Supervision & Watchdog:** Autonomous background health loop detects silent inference hangs and restarts Ollama cleanly with a 3-strike restart limit in a 30-minute rolling window.
-- **Embedded Web UI:** Ingress proxy on port 8099 with direct model metrics, token latency, and local test chat.
+- **Embedded Web UI with Live Streaming & Reconnect Resilience:** Ingress proxy on port 8099 with HTTP/1.1 chunked live token streaming, reasoning/thinking visualization (`🧠 Denkproces`), and background session buffering (`/api/chat_resume`) to recover seamlessly from transient mobile 5G drops.
 - **Open Knowledge Format (OKF v0.2):** Full architecture and operational specifications located in `knowledge/`.
 
 ## Architecture & Documentation
