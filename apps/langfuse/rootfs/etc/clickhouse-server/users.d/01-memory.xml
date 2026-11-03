@@ -1,0 +1,10 @@
+<clickhouse>
+    <profiles>
+        <default>
+            <!-- Max memory per individual query (2048 MB) -->
+            <max_memory_usage>2147483648</max_memory_usage>
+            <!-- Max memory for user queries concurrently (3072 MB) -->
+            <max_memory_usage_for_user>3221225472</max_memory_usage_for_user>
+        </default>
+    </profiles>
+</clickhouse>

@@ -5,6 +5,13 @@ All notable changes to the `Langfuse` Home Assistant Add-on will be documented i
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.72.1] - 2026-11-03
+
+### Fixed
+- Enforced strict ClickHouse memory caps via `max_server_memory_usage` and `users.d` query limits based on `clickhouse_memory_limit_mb` (default 4096 MB) to prevent host RAM exhaustion.
+- Added `init-config` to `clickhouse` s6-overlay dependencies to ensure memory cap configs are written before server startup.
+- Removed duplicate background `ha_sensor_reporter.js &` from `langfuse-worker/run`, resolving leaked orphaned node processes across worker restarts.
+
 ## [4.72.0] - 2026-11-02
 
 ### Changed

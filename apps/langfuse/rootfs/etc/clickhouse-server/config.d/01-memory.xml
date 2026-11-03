@@ -1,0 +1,6 @@
+<clickhouse>
+    <!-- Hard server memory cap to prevent host RAM exhaustion (default 4096 MB) -->
+    <max_server_memory_usage>4294967296</max_server_memory_usage>
+    <!-- Prevent ratio fallback calculation on large RAM systems -->
+    <max_server_memory_usage_to_ram_ratio>0.0</max_server_memory_usage_to_ram_ratio>
+</clickhouse>

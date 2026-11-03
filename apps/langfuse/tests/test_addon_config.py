@@ -53,3 +53,36 @@ def test_translations_en():
     assert "configuration" in trans
     assert "admin_email" in trans["configuration"]
     assert "retention_days" in trans["configuration"]
+
+
+def test_clickhouse_memory_limits_configured():
+    config_mem_xml = REPO_ROOT / "rootfs" / "etc" / "clickhouse-server" / "config.d" / "01-memory.xml"
+    users_mem_xml = REPO_ROOT / "rootfs" / "etc" / "clickhouse-server" / "users.d" / "01-memory.xml"
+    init_config_sh = REPO_ROOT / "rootfs" / "usr" / "bin" / "init_config.sh"
+    ch_deps = REPO_ROOT / "rootfs" / "etc" / "s6-overlay" / "s6-rc.d" / "clickhouse" / "dependencies"
+    worker_run = REPO_ROOT / "rootfs" / "etc" / "s6-overlay" / "s6-rc.d" / "langfuse-worker" / "run"
+
+    assert config_mem_xml.exists(), "01-memory.xml must exist in config.d"
+    with open(config_mem_xml, "r", encoding="utf-8") as f:
+        content = f.read()
+    assert "<max_server_memory_usage>" in content
+    assert "<max_server_memory_usage_to_ram_ratio>0.0" in content
+
+    assert users_mem_xml.exists(), "01-memory.xml must exist in users.d"
+    with open(users_mem_xml, "r", encoding="utf-8") as f:
+        content = f.read()
+    assert "<max_memory_usage>" in content
+
+    with open(init_config_sh, "r", encoding="utf-8") as f:
+        sh_content = f.read()
+    assert "max_server_memory_usage" in sh_content
+    assert "CH_MEM_BYTES" in sh_content
+
+    with open(ch_deps, "r", encoding="utf-8") as f:
+        deps_content = f.read()
+    assert "init-config" in deps_content, "clickhouse must depend on init-config"
+
+    with open(worker_run, "r", encoding="utf-8") as f:
+        worker_content = f.read()
+    assert "ha_sensor_reporter.js &" not in worker_content, "worker run must not background ha_sensor_reporter"
+

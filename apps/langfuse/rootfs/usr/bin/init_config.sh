@@ -36,6 +36,34 @@ if [ -f "/data/options.json" ]; then
   [ -n "${OPT_EXT_URL}" ] && EXTERNAL_URL="${OPT_EXT_URL}"
 fi
 
+# Render ClickHouse memory limit configs to enforce hard caps
+CH_MEM_BYTES=$(( CLICKHOUSE_MEM_MB * 1024 * 1024 ))
+CH_QUERY_MEM_BYTES=$(( CH_MEM_BYTES / 2 ))
+CH_USER_MEM_BYTES=$(( CH_MEM_BYTES * 3 / 4 ))
+
+mkdir -p /etc/clickhouse-server/config.d /etc/clickhouse-server/users.d
+
+cat <<EOF > /etc/clickhouse-server/config.d/01-memory.xml
+<clickhouse>
+    <max_server_memory_usage>${CH_MEM_BYTES}</max_server_memory_usage>
+    <max_server_memory_usage_to_ram_ratio>0.0</max_server_memory_usage_to_ram_ratio>
+</clickhouse>
+EOF
+chmod 644 /etc/clickhouse-server/config.d/01-memory.xml
+
+cat <<EOF > /etc/clickhouse-server/users.d/01-memory.xml
+<clickhouse>
+    <profiles>
+        <default>
+            <max_memory_usage>${CH_QUERY_MEM_BYTES}</max_memory_usage>
+            <max_memory_usage_for_user>${CH_USER_MEM_BYTES}</max_memory_usage_for_user>
+        </default>
+    </profiles>
+</clickhouse>
+EOF
+chmod 644 /etc/clickhouse-server/users.d/01-memory.xml
+echo "[init-config] ClickHouse memory limits configured: ${CLICKHOUSE_MEM_MB} MB (server: ${CH_MEM_BYTES} B, query: ${CH_QUERY_MEM_BYTES} B)."
+
 # Write environment file for Langfuse Web and Worker processes
 cat <<EOF > /run/langfuse.env
 DATABASE_URL=postgresql://langfuse:${POSTGRES_PASSWORD}@127.0.0.1:5432/langfuse
