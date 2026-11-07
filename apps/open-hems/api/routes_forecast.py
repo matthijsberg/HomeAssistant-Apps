@@ -1,7 +1,6 @@
 # Open HEMS: Operational Forecast Router (DHW & Space Heating)
 import urllib
 import json
-import ssl
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
@@ -16,6 +15,7 @@ from api.secrets_store import (
 )
 from layer3_scheduling.dhw_specs import DhwTankSpec
 from integrations.homeassistant.client import (
+    ha_ssl_context,
     get_ha_client_config
 )
 from api.energy_feed import (
@@ -24,7 +24,7 @@ from api.energy_feed import (
 from layer3_scheduling.plan_decision_evaluator import evaluate_and_apply_dhw_run_merger
 from layer3_scheduling.tariff_provider import TariffProvider
 from layer3_scheduling.battery_policy import (
-    BatteryPolicy, BatterySpec, extract_battery_overlay_ranges, BatterySlotResult
+    BatteryPolicy, extract_battery_overlay_ranges, BatterySlotResult
 )
 
 def handle_get(handler, path: str, qp: dict) -> bool:
@@ -49,8 +49,10 @@ def handle_get(handler, path: str, qp: dict) -> bool:
         hist_indoor = [hp["indoor_temp_c"] for hp in hist_pts]
         hist_floor = [hp["indoor_temp_c"] for hp in hist_pts]
         from layer3_scheduling.space_heating_policy import SpaceHeatingPolicy
-        hist_cops = [SpaceHeatingPolicy.calculate_carnot_cop(hp["outdoor_temp_c"]) for hp in hist_pts]
-        hist_th_loss = [round((321.1 / 1000.0) * max(0.0, hp["indoor_temp_c"] - hp["outdoor_temp_c"]), 2) for hp in hist_pts]
+        act_p = SpaceHeatingPolicy.get_active_parameters()
+        ua_loss_kw = act_p.get("ua_kw_per_k", 0.310)
+        hist_cops = [SpaceHeatingPolicy.calculate_cop(hp["outdoor_temp_c"]) for hp in hist_pts]
+        hist_th_loss = [round(ua_loss_kw * max(0.0, hp["indoor_temp_c"] - hp["outdoor_temp_c"]), 2) for hp in hist_pts]
         hist_el_kw = [hp["heating_kw"] for hp in hist_pts]
         hist_costs = [round(hp["heating_kw"] * interval_h * 0.25, 3) for hp in hist_pts]
 
@@ -72,6 +74,11 @@ def handle_get(handler, path: str, qp: dict) -> bool:
                 for i, s in enumerate(h_summary.slots[:n_sim])
             ]
             raw_unh = (h_summary.unheated_room_temps_c[:n_sim] if (h_summary and h_summary.unheated_room_temps_c) else raw_in_temps)
+            raw_unh2 = (
+                h_summary.unheated_second_run_temps_c[:n_sim]
+                if (h_summary and getattr(h_summary, "unheated_second_run_temps_c", None))
+                else [None] * n_sim
+            )
             raw_in_p05 = (h_summary.room_temps_p05_c[:n_sim] if (h_summary and h_summary.room_temps_p05_c) else raw_in_temps)
             raw_in_p95 = (h_summary.room_temps_p95_c[:n_sim] if (h_summary and h_summary.room_temps_p95_c) else raw_in_temps)
             raw_unh_p05 = (h_summary.unheated_temps_p05_c[:n_sim] if (h_summary and h_summary.unheated_temps_p05_c) else raw_in_temps)
@@ -80,8 +87,10 @@ def handle_get(handler, path: str, qp: dict) -> bool:
             tot_th = h_summary.total_heating_kwh_th
             tot_el = h_summary.total_heating_kwh_el
             tot_cost = round(sum(raw_costs_eur), 2)
-            t_setpoint = h_summary.target_room_temp_c
-            t_start_threshold = h_summary.min_comfort_room_c
+            t_setpoint = getattr(h_summary, "thermostat_setpoint_c", h_summary.target_room_temp_c)
+            t_baseline = getattr(h_summary, "baseline_comfort_temp_c", h_summary.target_room_temp_c)
+            t_start_threshold = getattr(h_summary, "min_comfort_room_c", round(t_baseline - 0.5, 2))
+            is_buffering = getattr(h_summary, "is_buffering", False)
             t_active = h_summary.is_heating_season
             t_status = h_summary.season_status_label
 
@@ -90,6 +99,7 @@ def handle_get(handler, path: str, qp: dict) -> bool:
                 out_temps = []
                 in_temps = []
                 unheated_temps = []
+                unheated2_temps = []
                 in_p05 = []
                 in_p95 = []
                 unh_p05 = []
@@ -105,6 +115,8 @@ def handle_get(handler, path: str, qp: dict) -> bool:
                     out_temps.append(round(sum(raw_out_temps[idx:idx+4]) / 4.0, 1))
                     in_temps.append(round(sum(raw_in_temps[idx:idx+4]) / 4.0, 1))
                     unheated_temps.append(round(sum(raw_unh[idx:idx+4]) / 4.0, 1))
+                    u2_vals = [float(v) for v in raw_unh2[idx:idx+4] if v is not None]
+                    unheated2_temps.append(round(sum(u2_vals) / len(u2_vals), 1) if u2_vals else None)
                     in_p05.append(round(sum(raw_in_p05[idx:idx+4]) / 4.0, 1))
                     in_p95.append(round(sum(raw_in_p95[idx:idx+4]) / 4.0, 1))
                     unh_p05.append(round(sum(raw_unh_p05[idx:idx+4]) / 4.0, 1))
@@ -123,6 +135,7 @@ def handle_get(handler, path: str, qp: dict) -> bool:
                 out_temps = raw_out_temps[:n_q]
                 in_temps = raw_in_temps[:n_q]
                 unheated_temps = raw_unh[:n_q]
+                unheated2_temps = [round(float(v), 1) if v is not None else None for v in raw_unh2[:n_q]]
                 in_p05 = raw_in_p05[:n_q]
                 in_p95 = raw_in_p95[:n_q]
                 unh_p05 = raw_unh_p05[:n_q]
@@ -140,9 +153,12 @@ def handle_get(handler, path: str, qp: dict) -> bool:
             n_sim = 0
             all_labels, out_temps, in_temps, floor_temps, cops, th_loss_kw, el_power_kw, costs_eur = [], [], [], [], [], [], [], []
             unheated_temps, in_p05, in_p95, unh_p05, unh_p95 = [], [], [], [], []
+            unheated2_temps = []
             tot_th, tot_el, tot_cost = 0.0, 0.0, 0.0
             t_setpoint = 20.0
-            t_start_threshold = 19.6
+            t_baseline = 20.0
+            t_start_threshold = 19.5
+            is_buffering = False
             t_active = True
             t_status = "Stookseizoen Actief (Centrale PlanStore)"
 
@@ -187,6 +203,7 @@ def handle_get(handler, path: str, qp: dict) -> bool:
             "outdoor_temps_c": hist_outdoor + out_temps,
             "indoor_temps_c": hist_indoor + in_temps,
             "unheated_temps_c": hist_indoor + unheated_temps,
+            "unheated_second_run_temps_c": ([None] * len(hist_pts)) + unheated2_temps,
             "indoor_temps_p05_c": hist_indoor + in_p05,
             "indoor_temps_p95_c": hist_indoor + in_p95,
             "unheated_temps_p05_c": hist_indoor + unh_p05,
@@ -204,7 +221,9 @@ def handle_get(handler, path: str, qp: dict) -> bool:
             "total_electrical_kwh": tot_el,
             "total_cost_eur": tot_cost,
             "thermostat_setpoint_c": t_setpoint,
+            "baseline_comfort_temp_c": t_baseline,
             "thermostat_start_threshold_c": t_start_threshold,
+            "is_buffering": is_buffering,
             "thermostat_active": t_active,
             "thermostat_status_label": t_status,
             "decision_explanation": heating_explanation
@@ -218,7 +237,8 @@ def handle_get(handler, path: str, qp: dict) -> bool:
         is_48h = (horizon_mode == "48h")
         hours_sim = 48 if is_48h else 24
         is_15m = (res_mode == "15m")
-        t_live = 49.2
+        t_live = None
+        sp_live = None
         try:
             ha_url, ha_tok = get_ha_client_config()
             if ha_tok and ha_url:
@@ -226,22 +246,82 @@ def handle_get(handler, path: str, qp: dict) -> bool:
                     f"{ha_url}/api/states/sensor.hc_dhw_temperature_r5t_dhw_tank",
                     headers={"Authorization": f"Bearer {ha_tok}", "Content-Type": "application/json"}
                 )
-                ctx = ssl.create_default_context()
-                ctx.check_hostname = False
-                ctx.verify_mode = ssl.CERT_NONE
+                ctx = ha_ssl_context(ha_url)
                 with urllib.request.urlopen(req_t, timeout=3, context=ctx) as r_t:
                     st_t = json.loads(r_t.read().decode())
-                    val_t = float(st_t.get("state", 49.2))
-                    if 20.0 <= val_t <= 75.0:
-                        t_live = val_t
+                    state_val = st_t.get("state")
+                    if state_val not in (None, "unavailable", "unknown"):
+                        val_t = float(state_val)
+                        if 20.0 <= val_t <= 75.0:
+                            t_live = val_t
+
+                try:
+                    req_sp = urllib.request.Request(
+                        f"{ha_url}/api/states/sensor.hc_dhw_dhw_setpoint",
+                        headers={"Authorization": f"Bearer {ha_tok}", "Content-Type": "application/json"}
+                    )
+                    with urllib.request.urlopen(req_sp, timeout=2, context=ctx) as r_sp:
+                        st_sp = json.loads(r_sp.read().decode())
+                        sp_val = st_sp.get("state")
+                        if sp_val not in (None, "unavailable", "unknown"):
+                            f_sp = float(sp_val)
+                            if 35.0 <= f_sp <= 65.0:
+                                sp_live = f_sp
+                except Exception:
+                    pass
         except Exception:
-            pass
+            t_live = None
 
         now_ams = datetime.now(ZoneInfo("Europe/Amsterdam"))
         plan = ensure_active_canonical_plan()
         planner_name = "arbiter"
         if plan and plan.dhw_summary and plan.dhw_summary.decision_details:
             planner_name = str(plan.dhw_summary.decision_details.get("planner", "arbiter"))
+
+        if t_live is None or (plan and plan.dhw_summary and getattr(plan.dhw_summary, "decision_details", {}).get("status") == "SENSOR_UNAVAILABLE"):
+            decision = {
+                "status": "SENSOR_UNAVAILABLE",
+                "planned_mode": "normal",
+                "box_title": "Boilervat: Tanksensor Niet Beschikbaar (P1P2 offline)",
+                "badge_html": '<span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-950 text-amber-300 border border-amber-800"><span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span> Sensor Onbereikbaar (P1P2 offline)</span>',
+                "explanation": "Tanksensor geeft geen geldige data door (P1P2 offline). Open HEMS maakt geen aannames en toont geen fictieve voorspelling.",
+                "summary": "Geen sturing mogelijk. De warmtepomp regelt autonoom op SG2 (Daikin fabrieksregeling).",
+                "comfort_card_title": "Status Tanksensor",
+                "comfort_card_reason": "Tanksensor niet beschikbaar (P1P2 offline)."
+            }
+            handler._send_json({
+                "status": "online",
+                "planner": planner_name,
+                "resolution": res_mode,
+                "decision": decision,
+                "trajectory": {
+                    "initial_temp_c": None,
+                    "labels": [],
+                    "temperatures_c": [],
+                    "temperatures_p05_c": [],
+                    "temperatures_p95_c": [],
+                    "demand_kwh_th": [],
+                    "energy_usable_kwh": [],
+                    "unavailable": True,
+                    "reason": "Tanksensor niet beschikbaar (P1P2 offline)",
+                    "morning_dip_temp_c": None,
+                    "morning_dip_time": None,
+                    "history_count": 0
+                },
+                "unheated_trajectory": {
+                    "temperatures_c": [],
+                    "temperatures_p05_c": [],
+                    "temperatures_p95_c": [],
+                    "unavailable": True,
+                    "morning_dip_temp_c": None,
+                    "morning_dip_time": None
+                },
+                "forced_off_ranges": [],
+                "advised_off_ranges": [],
+                "heating_ranges": [],
+                "history_count": 0
+            })
+            return True
 
         if GLOBAL_DHW_MODEL:
             # Safe defaults for plan metadata
@@ -252,7 +332,7 @@ def handle_get(handler, path: str, qp: dict) -> bool:
 
             # Check if plan already carries authoritative trajectory from optimizer adapter (Dumb View Invariant #1)
             has_optimizer_traj = (
-                planner_name == "optimizer"
+                planner_name in ("optimizer", "daikin_first")
                 and bool(plan_details)
                 and "trajectory" in plan_details
             )
@@ -304,7 +384,7 @@ def handle_get(handler, path: str, qp: dict) -> bool:
             else:
                 # Retrieve planned slots & dispatch parameters directly from authoritative CanonicalDispatchPlan
                 cached_slots = [i for i, s in enumerate(plan.slots) if s.dhw_kw > 0]
-                spec = DhwTankSpec.from_config(load_json(CONFIG_FILE))
+                spec = DhwTankSpec.from_config(load_json(CONFIG_FILE), live_setpoint_c=sp_live)
                 c_power = plan.dhw_summary.power_kw if plan.dhw_summary else spec.heat_pump_electric_kw
                 c_target = plan.dhw_summary.target_temp_c if plan.dhw_summary else spec.target_setpoint_c
 
@@ -400,9 +480,21 @@ def handle_get(handler, path: str, qp: dict) -> bool:
             raw_unh = raw_unh_temps if raw_unh_temps else []
             # Decision details are derived directly from the authoritative CentralPlanner plan
             lang = qp.get("lang", ["nl"])[0]
-            decision = getattr(plan.dhw_summary, "decision_details", None) if (plan and plan.dhw_summary) else None
-            if decision:
-                decision = localize_dhw_decision(decision, lang=lang)
+            raw_decision = getattr(plan.dhw_summary, "decision_details", None) if (plan and plan.dhw_summary) else None
+            decision: dict = {}
+            if t_live is None or (raw_decision and raw_decision.get("status") == "SENSOR_UNAVAILABLE"):
+                decision = {
+                    "status": "SENSOR_UNAVAILABLE",
+                    "planned_mode": "normal",
+                    "box_title": "Boilervat: Tanksensor Niet Beschikbaar (P1P2 offline)",
+                    "badge_html": '<span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-950 text-amber-300 border border-amber-800"><span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span> Sensor Onbereikbaar (P1P2 offline)</span>',
+                    "explanation": "Tanksensor geeft geen geldige data door (P1P2 offline). Open HEMS maakt geen aannames en toont geen fictieve voorspelling.",
+                    "summary": "Geen sturing mogelijk. De warmtepomp regelt autonoom op SG2 (Daikin fabrieksregeling).",
+                    "comfort_card_title": "Status Tanksensor",
+                    "comfort_card_reason": "Tanksensor niet beschikbaar (P1P2 offline)."
+                }
+            elif raw_decision:
+                decision = dict(localize_dhw_decision(raw_decision, lang=lang))
             if not decision:
                 decision = {
                     "status": "STANDBY",
@@ -421,23 +513,24 @@ def handle_get(handler, path: str, qp: dict) -> bool:
                     "savings_eur": 0.0
                 }
 
-            # Evaluate Opportunistic Run Merger
-            try:
-                plan_for_merger = ensure_active_canonical_plan()
-                merge_outcome = evaluate_and_apply_dhw_run_merger(plan_for_merger, t_live)
-                if merge_outcome:
-                    decision["opportunistic_merge"] = {
-                        "should_merge": merge_outcome.should_merge,
-                        "reason": merge_outcome.reason,
-                        "promoted_mode": merge_outcome.promoted_mode,
-                        "target_temp_c": merge_outcome.target_temp_c,
-                        "original_slot_time": merge_outcome.original_slot_time,
-                        "savings_estimate_eur": merge_outcome.savings_estimate_eur
-                    }
-                    if merge_outcome.should_merge:
-                        decision["badge_html"] = '<span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-purple-950/80 text-purple-300 border border-purple-800/80"><span class="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse"></span> ⚡ Opportunistische Zonnebuffer Actief (tot 60°C)</span>'
-            except Exception as e_mrg:
-                print(f"Warning in evaluate_and_apply_dhw_run_merger: {e_mrg}")
+            # Evaluate Opportunistic Run Merger (DP engine only; Daikin-first has no merger, ADR-006)
+            if planner_name != "daikin_first":
+                try:
+                    plan_for_merger = ensure_active_canonical_plan()
+                    merge_outcome = evaluate_and_apply_dhw_run_merger(plan_for_merger, t_live)
+                    if merge_outcome:
+                        decision["opportunistic_merge"] = {
+                            "should_merge": merge_outcome.should_merge,
+                            "reason": merge_outcome.reason,
+                            "promoted_mode": merge_outcome.promoted_mode,
+                            "target_temp_c": merge_outcome.target_temp_c,
+                            "original_slot_time": merge_outcome.original_slot_time,
+                            "savings_estimate_eur": merge_outcome.savings_estimate_eur
+                        }
+                        if merge_outcome.should_merge:
+                            decision["badge_html"] = '<span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-purple-950/80 text-purple-300 border border-purple-800/80"><span class="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse"></span> ⚡ Opportunistische Zonnebuffer Actief (tot 60°C)</span>'
+                except Exception as e_mrg:
+                    print(f"Warning in evaluate_and_apply_dhw_run_merger: {e_mrg}")
 
             # Prepend 1 hour of actual historical telemetry
             hist_pts = fetch_recent_telemetry_history(is_15m, base_sim_dt)
@@ -462,10 +555,18 @@ def handle_get(handler, path: str, qp: dict) -> bool:
             advised_off_ranges = extract_plan_soft_advice_ranges(dhw_plan_slots, history_count=len(hist_pts), is_15m=is_15m)
             heating_ranges = extract_plan_heating_ranges(dhw_plan_slots, history_count=len(hist_pts), is_15m=is_15m, domain="dhw")
 
+            target_setpoint_c = (
+                sp_live
+                or decision.get("target_setpoint_c")
+                or (plan.dhw_summary.decision_details.get("target_setpoint_c") if (plan and plan.dhw_summary and plan.dhw_summary.decision_details) else None)
+                or (plan.dhw_summary.target_temp_c if (plan and plan.dhw_summary) else 50.0)
+            )
+
             handler._send_json({
                 "status": "online",
                 "planner": planner_name,
                 "resolution": res_mode,
+                "target_setpoint_c": float(target_setpoint_c),
                 "decision": decision,
                 "trajectory": traj,
                 "unheated_trajectory": unheated_traj,
@@ -498,53 +599,18 @@ def handle_get(handler, path: str, qp: dict) -> bool:
         max_canonical_slots = min(len(plan.slots), 192)
         full_slots = plan.slots[:max_canonical_slots]
 
-        unalloc = [s.unallocated_kw for s in full_slots]
-        dhw = [s.dhw_kw for s in full_slots]
-        heat = [s.heating_kw for s in full_slots]
-        solar = [s.solar_kw for s in full_slots]
         prices = [s.price_eur for s in full_slots]
-        tp = TariffProvider()
-        export_prices = [round(tp.calculate_export_value_from_import(p), 4) for p in prices]
-        residual_15m = [round(u + d + h - s, 3) for u, d, h, s in zip(unalloc, dhw, heat, solar)]
-
-        forced_lockouts = {
-            i for i, s in enumerate(full_slots)
-            if s.mode_code == "forced_off" or getattr(s, "is_lockout", False)
-        }
-
-        live_soc = 50.0
-        try:
-            ha_url, ha_tok = get_ha_client_config()
-            if ha_tok and ha_url:
-                ctx = ssl.create_default_context()
-                ctx.check_hostname = False
-                ctx.verify_mode = ssl.CERT_NONE
-                req = urllib.request.Request(
-                    f"{ha_url}/api/states/sensor.battery_state_of_charge",
-                    headers={"Authorization": f"Bearer {ha_tok}", "Content-Type": "application/json"}
-                )
-                with urllib.request.urlopen(req, timeout=2, context=ctx) as r:
-                    st = json.loads(r.read().decode())
-                    live_soc = float(st.get("state", 50.0))
-        except Exception:
-            live_soc = 50.0
-
         cfg = load_json(CONFIG_FILE) if CONFIG_FILE.exists() else {}
-        spec = BatterySpec.from_config(
-            cfg,
-            reserve_lookahead_slots=max_canonical_slots,
-            valley_lookahead_slots=max_canonical_slots
-        )
+        tp = TariffProvider.from_dict(cfg)
+        export_prices = [round(tp.calculate_export_value_from_import(p), 4) for p in prices]
 
-        summary_15m = BatteryPolicy.optimize(
-            residual_demand_kw=residual_15m,
-            import_prices=prices,
-            export_prices=export_prices,
-            spec=spec,
-            initial_soc_pct=live_soc,
-            step_hours=0.25,
-            forced_off_indices=forced_lockouts
-        )
+        # Dumb view: the battery plan is computed once by CentralPlanner (Priority 3) from live SoC.
+        summary_15m = getattr(plan, "battery_summary", None)
+        if summary_15m is None:
+            summary_15m = BatteryPolicy._inactive_plan(
+                max_canonical_slots,
+                "Geen thuisaccu geïnstalleerd of gesimuleerd (devices[home_battery] / simulate_battery)."
+            )
 
         now_ams = datetime.now(AMS_TZ)
         start_min = (now_ams.minute // 15) * 15 if is_15m else 0
@@ -738,7 +804,10 @@ def handle_get(handler, path: str, qp: dict) -> bool:
                 "total_deficit_kwh": summary_15m.total_deficit_kwh,
                 "total_discharged_kwh": summary_15m.total_discharged_kwh,
                 "total_charged_kwh": round(summary_15m.total_charged_solar_kwh + summary_15m.total_charged_grid_kwh, 2),
-                "mode_code": disp_slots[0].mode_code if disp_slots else "STANDBY"
+                "mode_code": disp_slots[0].mode_code if disp_slots else "STANDBY",
+                "is_active": summary_15m.is_active,
+                "is_simulation": getattr(summary_15m, "is_simulation", False),
+                "inactive_reason": summary_15m.inactive_reason
             }
         })
         return True
@@ -763,9 +832,14 @@ def handle_get(handler, path: str, qp: dict) -> bool:
         from layer3_scheduling.storage_valuation import calculate_storage_valuation
         from api.energy_feed import get_epex_tariffs_cached
 
-        ha_states = get_ha_states_map()
-        live_tank_temp = float(ha_states.get("sensor.hc_dhw_temperature_r5t_dhw_tank", {}).get("state", 49.2)) if ha_states else 49.2
-        live_battery_soc = float(ha_states.get("sensor.battery_state_of_charge", {}).get("state", 50.0)) if ha_states else 50.0
+        ha_states = get_ha_states_map() or {}
+        from integrations.daikin_altherma.reader import read_dhw_activity
+        live_tank_temp = read_dhw_activity(ha_states).tank_temp_c  # None when unavailable (never invented)
+        try:
+            soc_raw = ha_states.get("sensor.battery_state_of_charge", {}).get("state")
+            live_battery_soc = float(soc_raw) if soc_raw not in (None, "unknown", "unavailable") else None
+        except (TypeError, ValueError):
+            live_battery_soc = None
 
         now_ams = datetime.now(ZoneInfo("Europe/Amsterdam"))
         _, prices_map, _ = get_epex_tariffs_cached(is_15m=True)

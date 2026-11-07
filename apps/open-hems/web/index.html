@@ -143,7 +143,7 @@
         </div>
 
         <div class="p-4 border-t border-[#1E293B] bg-[#0A0D14]/80 text-[10px] text-slate-500 flex justify-between">
-            <span>Versie: <strong class="text-slate-400">v0.105.0</strong></span>
+            <span>Versie: <strong class="text-slate-400">v0.108.21</strong></span>
             <span>Multi-Instance Laag 1</span>
         </div>
     </aside>
@@ -656,7 +656,7 @@
                                 <span class="flex items-center gap-1.5 text-slate-400"><span class="w-3 h-0.5 border-b border-slate-400 border-dashed"></span> Zonder Verwarming (°C)</span>
                                 <span class="flex items-center gap-1.5 text-slate-400/80"><span class="w-3 h-2 bg-slate-500/20 border border-slate-500/40 rounded-sm"></span> Marge Onverwarmd</span>
                                 <span class="flex items-center gap-1.5 text-red-400"><span class="w-3 h-0.5 border-b border-red-500 border-dashed"></span> Comfort 40°C</span>
-                                <span class="flex items-center gap-1.5 text-emerald-400"><span class="w-3 h-0.5 border-b border-emerald-500 border-dashed"></span> Doel 50°C</span>
+                                <span id="dhw-legend-target-label" class="flex items-center gap-1.5 text-emerald-400"><span class="w-3 h-0.5 border-b border-emerald-500 border-dashed"></span> Doel 50°C</span>
                                 <span class="flex items-center gap-1.5 text-sky-300"><span class="w-2.5 h-2.5 bg-sky-500/50 rounded-sm"></span> Warmtevraag (kWh)</span>
                                 <span class="flex items-center gap-1.5 text-red-400/90"><span class="w-3 h-2 bg-red-600/30 rounded-sm"></span> Spitsblok</span>
                             </div>
@@ -715,8 +715,8 @@
                                         <div class="flex items-center gap-1.5">
                                             <span>💡</span> <span id="dhw-comfort-card-title">Dispatch-Redenering &amp; Doeltemperatuur</span>
                                         </div>
-                                        <button onclick="showTab('tariffs'); setTimeout(() => document.getElementById('tab-dhw-margin-mode')?.scrollIntoView({behavior: 'smooth'}), 150)" class="text-[11px] font-sans font-medium text-teal-400 hover:text-teal-300 flex items-center gap-1 bg-teal-950/40 hover:bg-teal-900/60 border border-teal-800/60 rounded px-2 py-0.5 transition cursor-pointer" title="Wijzig de comfortmarge en minimumtemperatuur">
-                                            ⚙️ <span>Comfortmarge</span>
+                                        <button onclick="showTab('tariffs'); setTimeout(() => document.getElementById('dhw-policy-settings')?.scrollIntoView({behavior: 'smooth'}), 150)" class="text-[11px] font-sans font-medium text-teal-400 hover:text-teal-300 flex items-center gap-1 bg-teal-950/40 hover:bg-teal-900/60 border border-teal-800/60 rounded px-2 py-0.5 transition cursor-pointer" title="Wijzig de instellingen van de tapwatersturing">
+                                            ⚙️ <span>Instellingen</span>
                                         </button>
                                     </div>
                                     <p id="dhw-eval-comfort-text" class="text-slate-200">
@@ -754,9 +754,10 @@
                                 <span class="flex items-center gap-1.5 text-amber-200/80"><span class="w-3 h-2 bg-amber-400/20 border border-amber-400/40 rounded-sm"></span> Marge (P05–P95)</span>
                                 <span class="flex items-center gap-1.5 text-amber-400"><span class="w-3 h-2 bg-amber-500/30 rounded-sm"></span> Verwarmt</span>
                                 <span class="flex items-center gap-1.5 text-slate-400"><span class="w-3 h-0.5 border-b border-slate-400 border-dashed"></span> Zonder Verwarming (°C)</span>
+                                <span class="flex items-center gap-1.5 text-slate-300"><span class="w-3 h-0.5 border-b border-slate-300 border-dotted"></span> Zonder 2e Run (°C)</span>
                                 <span class="flex items-center gap-1.5 text-slate-400/80"><span class="w-3 h-2 bg-slate-500/20 border border-slate-500/40 rounded-sm"></span> Marge Onverwarmd</span>
-                                <span class="flex items-center gap-1.5 text-red-400"><span class="w-3 h-0.5 border-b border-red-500 border-dashed"></span> Comfort 19.6°C</span>
-                                <span class="flex items-center gap-1.5 text-emerald-400"><span class="w-3 h-0.5 border-b border-emerald-500 border-dashed"></span> Doel 20°C</span>
+                                <span class="flex items-center gap-1.5 text-red-400"><span class="w-3 h-0.5 border-b border-red-500 border-dashed"></span> <span id="heating-legend-comfort">Comfort 20.0°C</span></span>
+                                <span class="flex items-center gap-1.5 text-emerald-400"><span class="w-3 h-0.5 border-b border-emerald-500 border-dashed"></span> <span id="heating-legend-target">Doel 20.5°C</span></span>
                                 <span class="flex items-center gap-1.5 text-blue-300"><span class="w-3 h-1 bg-blue-400 rounded"></span> Buitentemp (°C)</span>
                                 <span class="flex items-center gap-1.5 text-sky-300"><span class="w-2.5 h-2.5 bg-sky-500/50 rounded-sm"></span> Warmteverlies (kWh)</span>
                                 <span class="flex items-center gap-1.5 text-red-400/90"><span class="w-3 h-2 bg-red-600/30 rounded-sm"></span> Spitsblok</span>
@@ -1078,6 +1079,12 @@
                                 <button id="btn-res-history-15m" data-res-group="history" data-res="15m" onclick="setPowerProducersResolution('15m')" class="px-2.5 py-1 rounded transition font-medium text-slate-400 hover:text-slate-200">15 Min</button>
                             </div>
 
+                            <!-- Voorspelling Overlay Toggle (op 1u of 15m basis) -->
+                            <button id="btn-history-forecast-overlay" type="button" onclick="toggleHistoryForecastOverlay()" aria-pressed="false" class="px-2.5 py-1 rounded-lg transition font-medium text-xs font-mono border border-slate-700 bg-slate-900 text-slate-300 hover:text-white hover:border-purple-500/60 flex items-center gap-1.5" title="Projecteer de voorspelde waarden als stippellijn-overlay over de historiegrafieken (op uur- of kwartierbasis)">
+                                <span id="history-forecast-overlay-check" class="w-3.5 h-3.5 rounded border border-slate-600 flex items-center justify-center text-[9px] text-transparent transition">✓</span>
+                                <span>Voorspelling overlay</span>
+                            </button>
+
                             <!-- Periode Selector -->
                             <select id="pp-range-select" onchange="onPowerProducersRangeChange()" class="bg-[#0B0F17] border border-slate-700 rounded-lg px-2.5 py-1 text-slate-200 text-xs font-medium focus:outline-none focus:border-blue-500 font-mono">
                                 <option value="today">Vandaag</option>
@@ -1312,6 +1319,8 @@
                         <div class="flex items-center gap-3 text-xs font-mono flex-wrap">
                             <span class="flex items-center gap-1.5 text-amber-300"><span class="w-3 h-1 bg-amber-400 rounded"></span> Binnentemperatuur (°C)</span>
                             <span class="flex items-center gap-1.5 text-blue-300"><span class="w-3 h-1 bg-blue-400 rounded"></span> Buitentemperatuur (°C)</span>
+                            <span class="flex items-center gap-1.5 text-emerald-400"><span class="w-3 h-0.5 border-b border-emerald-500 border-dashed"></span> Doel (°C)</span>
+                            <span class="flex items-center gap-1.5 text-red-400"><span class="w-3 h-0.5 border-b border-red-500 border-dashed"></span> Comfort</span>
                             <span class="flex items-center gap-1.5 text-amber-400"><span class="w-3 h-2 bg-amber-500/30 rounded-sm"></span> Verwarmt</span>
                             <span class="flex items-center gap-1.5 text-sky-300"><span class="w-2.5 h-2.5 bg-sky-500/50 rounded-sm"></span> Warmteverlies (kWh)</span>
                             <span class="flex items-center gap-1.5 text-red-400/90"><span class="w-3 h-2 bg-red-600/30 rounded-sm"></span> Spitsblok</span>
@@ -1778,36 +1787,27 @@
                     </div>
 
                     <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                        <!-- Baseload Setting -->
+                        <!-- Dynamic Baseload Indicator -->
                         <div class="bg-[#0B0F17] p-4 rounded-xl border border-slate-800 space-y-2">
                             <div class="flex justify-between items-center">
-                                <label for="tab-baseload-input" class="text-xs font-semibold text-slate-200">Continue Basislast (Sluip)</label>
-                                <span class="text-[10px] text-blue-400 font-mono">Standaard 300 W</span>
+                                <span class="text-xs font-semibold text-slate-200">Basislast (Sluipverbruik)</span>
+                                <span class="text-[10px] text-blue-400 font-mono bg-blue-950/60 px-2 py-0.5 rounded border border-blue-800">100% Dynamisch</span>
                             </div>
-                            <p class="text-[11px] text-slate-400">Continu achtergrondverbruik (router, koelkast, standby) gebruikt in 24h prognose.</p>
-                            <div class="flex items-center gap-2 pt-1">
-                                <input type="number" step="10" min="50" max="2000" id="tab-baseload-input" value="300" class="w-28 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-white font-mono text-xs font-bold focus:border-blue-500 focus:outline-none">
-                                <span class="text-slate-400 font-mono text-xs">Watt</span>
-                                <button onclick="saveSettingsFromTab()" class="ml-auto px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-lg shadow transition">
-                                    Opslaan
-                                </button>
+                            <p class="text-[11px] text-slate-400">Volgt het zelflerende 7×96 kwartierprofiel uit telemetrie; geen statische waarde meer nodig.</p>
+                            <div class="flex items-center gap-2 pt-1 font-mono text-xs text-blue-300">
+                                <span>Zelflerend profiel (Laag 2)</span>
                             </div>
                         </div>
 
-                        <!-- Solar LCOE Setting -->
+                        <!-- Dynamic Solar Valuation Indicator -->
                         <div class="bg-[#0B0F17] p-4 rounded-xl border border-slate-800 space-y-2">
                             <div class="flex justify-between items-center">
-                                <label for="tab-solar-cost-input" class="text-xs font-semibold text-slate-200">Zonnestroom Kostprijs</label>
-                                <span class="text-[10px] text-amber-400 font-mono">Standaard €0,060</span>
+                                <span class="text-xs font-semibold text-slate-200">Zonnestroom Rekenwaarde</span>
+                                <span class="text-[10px] text-amber-400 font-mono bg-amber-950/60 px-2 py-0.5 rounded border border-amber-800">100% Dynamisch</span>
                             </div>
-                            <p class="text-[11px] text-slate-400">Interne afschrijvingsprijs per opgewekte kWh van je zonnepanelen.</p>
-                            <div class="flex items-center gap-2 pt-1">
-                                <span class="text-slate-400 font-mono text-sm">€</span>
-                                <input type="number" step="0.005" min="0" max="0.5" id="tab-solar-cost-input" value="0.060" class="w-28 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-white font-mono text-xs font-bold focus:border-amber-500 focus:outline-none">
-                                <span class="text-slate-400 font-mono text-xs">/ kWh</span>
-                                <button onclick="saveSettingsFromTab()" class="ml-auto px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold rounded-lg shadow transition">
-                                    Opslaan
-                                </button>
+                            <p class="text-[11px] text-slate-400">Gelijkgesteld aan de actuele EPEX verkoopprijs (opportunity cost) per kwartier.</p>
+                            <div class="flex items-center gap-2 pt-1 font-mono text-xs text-amber-300">
+                                <span>EPEX Terugleverwaarde</span>
                             </div>
                         </div>
 
@@ -1824,51 +1824,59 @@
                         </div>
                     </div>
 
-                    <!-- DHW Comfort Margin Setting (WP4) -->
-                    <div class="bg-[#0B0F17] p-4 rounded-xl border border-slate-800 space-y-3 mt-4">
-                        <div class="flex justify-between items-center">
+                    <!-- Tapwatersturing: Daikin-first (ADR-006) -->
+                    <div id="dhw-policy-settings" class="bg-[#0B0F17] p-4 rounded-xl border border-slate-800 space-y-3 mt-4">
+                        <div class="flex justify-between items-start gap-3">
                             <div>
-                                <h4 class="text-xs font-semibold text-slate-200">Comfortmarge Warm Water (DHW Optimizer)</h4>
-                                <p class="text-[11px] text-slate-400">Bepaalt hoeveel graden het vat minimaal boven de comfortgrens van 40°C moet blijven als buffer tegen ochtendpieken.</p>
+                                <h4 class="text-xs font-semibold text-slate-200">Tapwatersturing (Daikin-first)</h4>
+                                <p class="text-[11px] text-slate-400">De Daikin regelt het boilervat zelf (stookt van 40 naar 50 °C). Open HEMS grijpt alleen in: voorverwarmen vóór een spitsblok, eerder stoken als warmte nu duidelijk goedkoper is, en doorstoken naar 60 °C bij goedkope of gratis stroom. Warmteprijs = stroomprijs gedeeld door het rendement van de warmtepomp.</p>
                             </div>
-                            <span class="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-teal-500/20 text-teal-300 border border-teal-500/40">DHW POLICY</span>
+                            <span class="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-teal-500/20 text-teal-300 border border-teal-500/40 whitespace-nowrap">TAPWATER</span>
                         </div>
-                        <div class="grid grid-cols-1 sm:grid-cols-5 gap-3 pt-1">
+                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
                             <div>
-                                <label for="tab-dhw-margin-mode" class="text-[10px] text-slate-400 block mb-1">Modus</label>
-                                <select id="tab-dhw-margin-mode" onchange="onDhwMarginModeChange()" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-sans text-xs focus:border-teal-500 focus:outline-none">
-                                    <option value="p95">P95 (Aankomst ~40°C bij zwaar verbruik)</option>
-                                    <option value="p50">P50 (Gemiddeld verbruik)</option>
-                                    <option value="fixed">Vast (Constante marge in °C)</option>
+                                <label for="tab-dhw-policy-engine" class="text-[10px] text-slate-400 block mb-1">Sturing</label>
+                                <select id="tab-dhw-policy-engine" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-sans text-xs focus:border-teal-500 focus:outline-none disabled:opacity-40">
+                                    <option value="daikin_first">Daikin-first (aanbevolen)</option>
+                                    <option value="dp">Oude optimizer (dynamische programmering) — terugvaloptie</option>
                                 </select>
                             </div>
                             <div>
-                                <label for="tab-dhw-min-run" class="text-[10px] text-slate-400 block mb-1">Minimale Runlengte</label>
-                                <select id="tab-dhw-min-run" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-sans text-xs focus:border-teal-500 focus:outline-none">
-                                    <option value="2">2 slots (30 min - voorkomt overschot)</option>
-                                    <option value="3">3 slots (45 min - langere run)</option>
-                                </select>
+                                <label for="tab-dhw-policy-preheat-margin" class="text-[10px] text-slate-400 block mb-1">Voorverwarmen als het vat in de spits onder 40 °C + … zakt (°C)</label>
+                                <input type="number" step="0.5" min="0" max="5" id="tab-dhw-policy-preheat-margin" value="1.0" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-mono text-xs focus:border-teal-500 focus:outline-none disabled:opacity-40">
                             </div>
-                            <div id="wrapper-dhw-margin-min">
-                                <label for="tab-dhw-margin-min" class="text-[10px] text-slate-400 block mb-1">Minimale Marge (°C)</label>
-                                <input type="number" step="0.1" min="0" max="5" id="tab-dhw-margin-min" value="0.5" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-mono text-xs focus:border-teal-500 focus:outline-none">
+                            <div>
+                                <label for="tab-dhw-policy-preheat-window" class="text-[10px] text-slate-400 block mb-1">Venster vóór de spits om voor te verwarmen (uren)</label>
+                                <input type="number" step="0.5" min="0.5" max="12" id="tab-dhw-policy-preheat-window" value="4" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-mono text-xs focus:border-teal-500 focus:outline-none disabled:opacity-40">
                             </div>
-                            <div id="wrapper-dhw-margin-factor">
-                                <label for="tab-dhw-margin-factor" class="text-[10px] text-slate-400 block mb-1">P95 Stress Factor</label>
-                                <input type="number" step="0.1" min="1.0" max="3.0" id="tab-dhw-margin-factor" value="1.5" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-mono text-xs focus:border-teal-500 focus:outline-none">
+                            <div>
+                                <label for="tab-dhw-policy-advance-margin" class="text-[10px] text-slate-400 block mb-1">
+                                    <input type="checkbox" id="tab-dhw-policy-advance-on" class="mr-1 align-middle accent-teal-500" checked onchange="onDhwPolicyToggle()">
+                                    Eerder stoken naar 50 °C als warmte … % goedkoper is
+                                </label>
+                                <input type="number" step="1" min="0" max="100" id="tab-dhw-policy-advance-margin" value="10" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-mono text-xs focus:border-teal-500 focus:outline-none disabled:opacity-40">
                             </div>
-                            <div id="wrapper-dhw-margin-horizon">
-                                <label for="tab-dhw-margin-horizon" class="text-[10px] text-slate-400 block mb-1">Stress Horizon (uren)</label>
-                                <input type="number" step="1" min="1" max="24" id="tab-dhw-margin-horizon" value="8" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-mono text-xs focus:border-teal-500 focus:outline-none">
+                            <div>
+                                <label for="tab-dhw-policy-advance-max" class="text-[10px] text-slate-400 block mb-1">Eerder stoken alleen als het vat hooguit … °C is</label>
+                                <input type="number" step="0.5" min="40" max="49" id="tab-dhw-policy-advance-max" value="47" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-mono text-xs focus:border-teal-500 focus:outline-none disabled:opacity-40">
                             </div>
-                            <div id="wrapper-dhw-margin-fixed" class="hidden">
-                                <label for="tab-dhw-margin-fixed" class="text-[10px] text-slate-400 block mb-1">Vaste Marge (°C)</label>
-                                <input type="number" step="0.5" min="0" max="10" id="tab-dhw-margin-fixed" value="2.0" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-mono text-xs focus:border-teal-500 focus:outline-none">
+                            <div>
+                                <label for="tab-dhw-policy-boost-max" class="text-[10px] text-slate-400 block mb-1">Doorstoken naar 60 °C alleen onder … °C</label>
+                                <input type="number" step="0.5" min="45" max="59" id="tab-dhw-policy-boost-max" value="57" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-mono text-xs focus:border-teal-500 focus:outline-none disabled:opacity-40">
+                            </div>
+                            <div>
+                                <label for="tab-dhw-policy-free-price" class="text-[10px] text-slate-400 block mb-1">
+                                    <input type="checkbox" id="tab-dhw-policy-free-on" class="mr-1 align-middle accent-teal-500" checked onchange="onDhwPolicyToggle()">
+                                    Gratis stroom: altijd naar 60 °C onder … €/kWh
+                                </label>
+                                <input type="number" step="0.01" min="-1" max="0.10" id="tab-dhw-policy-free-price" value="0.00" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-mono text-xs focus:border-teal-500 focus:outline-none disabled:opacity-40">
+                                <p class="text-[10px] text-slate-500 mt-1">Effectieve prijs, dus inclusief eigen zonnestroom die anders tegen een negatieve prijs zou worden teruggeleverd.</p>
                             </div>
                         </div>
+                        <p class="text-[10px] text-slate-500 mt-1">Overige instellingen (vangnet bij geforceerd aan zonder effect, marges) staan in de configuratie onder <span class="font-mono">dhw_policy</span>.</p>
                         <div class="flex justify-end pt-1">
-                            <button id="btn-save-dhw-margin" onclick="saveDhwMarginFromTab()" class="px-3.5 py-1.5 bg-teal-600 hover:bg-teal-500 text-white text-xs font-semibold rounded-lg shadow transition">
-                                Marge Opslaan
+                            <button id="btn-save-dhw-policy" onclick="saveDhwPolicyFromTab()" class="px-3.5 py-1.5 bg-teal-600 hover:bg-teal-500 text-white text-xs font-semibold rounded-lg shadow transition">
+                                Tapwatersturing opslaan
                             </button>
                         </div>
                     </div>
@@ -2483,7 +2491,7 @@ def predict_space_heating_w(dt: datetime, t_outdoor_c: float) -> dict:
                     <div class="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-4">
                         <div class="space-y-1.5">
                             <div class="flex items-center gap-2.5">
-                                <span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold tracking-wider uppercase bg-emerald-950 text-emerald-300 border border-emerald-800">Kennisbank v0.105.0</span>
+                                <span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold tracking-wider uppercase bg-emerald-950 text-emerald-300 border border-emerald-800">Kennisbank v0.108.21</span>
                                 <span class="text-xs text-slate-400 font-mono">OpenAPI 3.1.0 Compliant</span>
                             </div>
                             <h2 class="text-xl font-bold text-white tracking-wide">Open HEMS Systeemdocumentatie &amp; API Gids</h2>
@@ -3831,11 +3839,11 @@ def predict_space_heating_w(dt: datetime, t_outdoor_c: float) -> dict:
 
 
         <!-- MODULAR DOMAIN MODULES & CONTROLLERS -->
-    <script src="./js/i18n.js?v=0.105.0"></script>
-    <script src="./js/modules/modal_decision.js?v=0.105.0"></script>
-    <script src="./js/modules/modal_kpi_detail.js?v=0.105.0"></script>
-    <script src="./js/modules/modal_param_history.js?v=0.105.0"></script>
-    <script src="./js/modules/charts_thermal.js?v=0.105.0"></script>
-    <script src="./js/app.js?v=0.105.0"></script>
+    <script src="./js/i18n.js?v=0.108.21"></script>
+    <script src="./js/modules/modal_decision.js?v=0.108.21"></script>
+    <script src="./js/modules/modal_kpi_detail.js?v=0.108.21"></script>
+    <script src="./js/modules/modal_param_history.js?v=0.108.21"></script>
+    <script src="./js/modules/charts_thermal.js?v=0.108.21"></script>
+    <script src="./js/app.js?v=0.108.21"></script>
 </body>
 </html>
