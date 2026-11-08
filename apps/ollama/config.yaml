@@ -1,5 +1,5 @@
 name: "Ollama (Vulkan)"
-version: "0.8.0"
+version: "0.40.15"
 slug: "ollama_vulkan"
 description: "Ollama with Vulkan GPU support (Intel Arc/AMD). Optimized for private local LLM inference."
 url: "https://github.com/matthijsberg/HomeAssistant-Apps/tree/main/apps/ollama"

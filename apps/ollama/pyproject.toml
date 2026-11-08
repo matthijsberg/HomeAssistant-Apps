@@ -1,6 +1,6 @@
 [project]
 name = "ha-addon-ollama"
-version = "0.8.0"
+version = "0.40.15"
 description = "Ollama with Vulkan GPU support (Intel Arc/AMD) Home Assistant Add-on"
 readme = "README.md"
 requires-python = ">=3.11"

@@ -72,8 +72,17 @@ EOF
 chmod 644 /etc/clickhouse-server/users.d/01-memory.xml
 echo "[init-config] ClickHouse memory limits configured: ${CLICKHOUSE_MEM_MB} MB (server: ${CH_MEM_BYTES} B, query: ${CH_QUERY_MEM_BYTES} B)."
 
+# Ensure Prisma query engine links and environment variable for Debian
+PRISMA_ENGINE_FILE=$(find /opt/langfuse-web/node_modules -name "libquery_engine-rhel-openssl-3.0.x.so.node" 2>/dev/null | head -n 1)
+if [ -n "${PRISMA_ENGINE_FILE}" ] && [ -f "${PRISMA_ENGINE_FILE}" ]; then
+  PRISMA_DIR="$(dirname "${PRISMA_ENGINE_FILE}")"
+  ln -sf "libquery_engine-rhel-openssl-3.0.x.so.node" "${PRISMA_DIR}/libquery_engine-debian-openssl-3.0.x.so.node" 2>/dev/null || true
+  ln -sf "libquery_engine-rhel-openssl-3.0.x.so.node" "${PRISMA_DIR}/libquery_engine-linux-openssl-3.0.x.so.node" 2>/dev/null || true
+fi
+
 # Write environment file for Langfuse Web and Worker processes
 cat <<EOF > /run/langfuse.env
+PRISMA_QUERY_ENGINE_LIBRARY=${PRISMA_ENGINE_FILE}
 DATABASE_URL=postgresql://langfuse:${POSTGRES_PASSWORD}@127.0.0.1:5432/langfuse
 CLICKHOUSE_URL=http://127.0.0.1:8123
 CLICKHOUSE_MIGRATION_URL=clickhouse://127.0.0.1:9000

@@ -1,7 +1,7 @@
 build_from:
-  amd64: "ghcr.io/home-assistant/amd64-base:3.21"
-  aarch64: "ghcr.io/home-assistant/aarch64-base:3.21"
+  amd64: "ghcr.io/home-assistant/amd64-base-debian:trixie"
+  aarch64: "ghcr.io/home-assistant/aarch64-base-debian:trixie"
 args:
-  LANGFUSE_VERSION: "4.72.0"
+  LANGFUSE_VERSION: "4.76.0"
   CLICKHOUSE_VERSION: "26.3"
   SEAWEEDFS_VERSION: "3.79"

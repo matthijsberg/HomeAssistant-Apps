@@ -5,6 +5,43 @@ All notable changes to the `Langfuse` Home Assistant Add-on will be documented i
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.76.0] - 2026-11-08
+
+## What’s changed
+
+## ⬆️ Dependency updates
+
+- ⬆️ Update Langfuse upstream web and worker to v4.76.0
+- ⬆️ Update base image to Debian 13 Trixie (`ghcr.io/home-assistant/{arch}-base-debian:trixie`)
+- ⬆️ Update PostgreSQL to v16 via official Debian Trixie repository (`trixie-pgdg`)
+
+## 🚀 Features
+
+- 🚀 Chronological session list view and session tab in trace peek view
+- 🚀 Topics summaries, assignments and rules in public API and MCP
+- 🚀 Searchable organization, project, and model switchers
+- 🚀 Audit-log read-access events for tRPC traces, sessions, and scores
+
+## 🐛 Bug fixes
+
+- 🐛 Dynamic Prisma query engine library detection (`PRISMA_QUERY_ENGINE_LIBRARY`) resolving pnpm path shifts across versions
+- 🐛 Fixed `@langfuse/native-linux-x64-gnu` module resolution on glibc Debian runtime, eliminating worker crash loop and constant CPU load
+
+## 🧰 Maintenance
+
+- 🛡️ Verified clean security diff review via Mantis Security Agent (gemini-4-argon) [Job: rev_25bc18081f, Verdict: CLEAN]
+
+## [4.72.3] - 2026-11-04
+
+### Changed
+- Migrated base image to Debian 13 Trixie (`ghcr.io/home-assistant/{arch}-base-debian:trixie`) with native glibc 2.41 and OpenSSL 3.0 runtime.
+- Installed PostgreSQL 16 via official PostgreSQL Trixie repository (`trixie-pgdg`) to maintain 100% binary compatibility with existing `/data/postgres` data clusters.
+- Configured explicit Prisma Query Engine library loading (`PRISMA_QUERY_ENGINE_LIBRARY`) for Langfuse Web and Worker.
+
+### Fixed
+- Fixed high constant CPU consumption caused by `langfuse-worker` crash loop missing `@langfuse/native-linux-x64-musl`. Native module `langfuse-native.linux-x64-gnu.node` now loads cleanly.
+- Fixed HTTP 500 errors in `langfuse-web` caused by missing Prisma musl query engine.
+
 ## [4.72.2] - 2026-11-03
 
 ### Security

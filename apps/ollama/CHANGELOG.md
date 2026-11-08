@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.40.15] - 2026-11-08
+
+## What’s changed
+
+## ⬆️ Dependency updates
+
+- ⬆️ Update Ollama upstream inference engine to v0.40.15
+- ⬆️ Update Bashio to v0.19.0
+
+## 🧰 Maintenance
+
+- 🛡️ Verified clean security diff review via Mantis Security Agent (gemini-4-argon) [Job: rev_65167e1e86, Verdict: CLEAN]
+- 🏷️ Synchronized Web UI version badge and pyproject.toml to v0.40.15
+
 ## [0.8.0] - 2026-11-03
 
 ### Added

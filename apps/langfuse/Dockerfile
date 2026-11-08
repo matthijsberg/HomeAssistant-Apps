@@ -1,29 +1,37 @@
-ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base:3.21
-FROM ghcr.io/langfuse/langfuse:4 AS langfuse-web-source
-FROM ghcr.io/langfuse/langfuse-worker:4 AS langfuse-worker-source
+ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base-debian:trixie
+FROM ghcr.io/langfuse/langfuse:4.76.0 AS langfuse-web-source
+FROM ghcr.io/langfuse/langfuse-worker:4.76.0 AS langfuse-worker-source
 FROM chrislusf/seaweedfs:latest AS seaweedfs-source
 FROM clickhouse/clickhouse-server:26.3-alpine AS clickhouse-source
 
 FROM ${BUILD_FROM}
 
 ENV LANG=C.UTF-8
+ENV DEBIAN_FRONTEND=noninteractive
 
-# Install dependencies in Alpine: Node.js, PostgreSQL 16, Redis, Nginx, su-exec, tools
-RUN apk add --no-cache \
-    nodejs \
-    npm \
-    postgresql16 \
-    postgresql16-contrib \
-    redis \
-    nginx \
+# Install dependencies in Debian: Node.js, PostgreSQL 16 (via official pgdg repo), Redis, Nginx, gosu, tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    gnupg \
+    lsb-release \
+    ca-certificates \
     jq \
     openssl \
-    su-exec \
+    redis-server \
+    nginx \
+    gosu \
     bash \
-    ca-certificates \
-    libc6-compat \
-    gcompat
+    procps \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /etc/apt/trusted.gpg.d/postgresql.gpg \
+    && echo "deb http://apt.postgresql.org/pub/repos/apt/ trixie-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+    nodejs \
+    postgresql-16 \
+    postgresql-contrib-16 \
+    && ln -s /usr/sbin/gosu /usr/local/bin/su-exec \
+    && ln -s /usr/lib/postgresql/16/bin/* /usr/local/bin/ \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install golang-migrate CLI for ClickHouse migrations
 ARG TARGETARCH
@@ -36,16 +44,11 @@ RUN case "${TARGETARCH:-amd64}" in \
     && curl -fsSL "https://github.com/golang-migrate/migrate/releases/download/v4.18.2/migrate.linux-${arch}.tar.gz" | tar -xz -C /usr/local/bin migrate \
     && chmod +x /usr/local/bin/migrate
 
-# Copy binaries from Langfuse Web (includes dumb-init, etc.)
+# Copy binaries and global node modules (Prisma CLI) from Langfuse Web
 COPY --from=langfuse-web-source /usr/local/bin /usr/local/bin
+COPY --from=langfuse-web-source /usr/local/lib/node_modules /usr/local/lib/node_modules
 
-# Install global prisma to ensure exact path resolution in all shells
-RUN npm install -g prisma@5.22.0 || true
-
-# Copy ClickHouse binary & glibc donor runtime libraries from clickhouse-source
-COPY --from=clickhouse-source /lib/libc.so.6 /lib/libpthread.so.0 /lib/libdl.so.2 /lib/libm.so.6 /lib/librt.so.1 /lib/libresolv.so.2 /lib/
-COPY --from=clickhouse-source /lib/ld-*.so /lib/
-COPY --from=clickhouse-source /lib64 /lib64
+# Copy ClickHouse binary and config from clickhouse-source (native glibc binary)
 COPY --from=clickhouse-source /usr/bin/clickhouse /usr/bin/clickhouse
 RUN ln -s /usr/bin/clickhouse /usr/bin/clickhouse-server \
     && ln -s /usr/bin/clickhouse /usr/bin/clickhouse-client \
@@ -61,7 +64,7 @@ COPY --from=langfuse-web-source /app /opt/langfuse-web-pristine
 # Copy Langfuse Worker
 COPY --from=langfuse-worker-source /app /opt/langfuse-worker
 
-ENV PATH="/usr/local/bin:/opt/langfuse-web/node_modules/.bin:$PATH"
+ENV PATH="/usr/local/bin:/usr/lib/postgresql/16/bin:/opt/langfuse-web/node_modules/.bin:$PATH"
 
 # Setup directory structure
 RUN mkdir -p /data /opt/langfuse-web /run /var/log/nginx

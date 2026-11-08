@@ -14,7 +14,7 @@ RUN_SH_PATH = APP_ROOT / "run.sh"
 def test_config_yaml_manifest(config_yaml):
     assert config_yaml["name"] == "Ollama (Vulkan)"
     assert config_yaml["slug"] == "ollama_vulkan"
-    assert config_yaml["version"] == "0.8.0"
+    assert config_yaml["version"] == "0.40.15"
     assert "amd64" in config_yaml["arch"]
     assert config_yaml["startup"] == "application"
     assert config_yaml["boot"] == "auto"

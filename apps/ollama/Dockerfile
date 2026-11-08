@@ -1,7 +1,7 @@
 FROM ollama/ollama:latest
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG BASHIO_VERSION=v0.17.5
+ARG BASHIO_VERSION=v0.19.0
 
 # Install base tools and Mesa Vulkan drivers from PPA
 RUN apt-get update && apt-get install -y --no-install-recommends \
