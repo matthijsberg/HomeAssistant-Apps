@@ -1,7 +1,6 @@
 # Open HEMS: Analytics & Energy Telemetry Router
 import urllib
 import json
-import ssl
 import time
 import urllib.parse
 import urllib.request
@@ -16,6 +15,7 @@ from api.secrets_store import (
     CONFIG_FILE, load_json, load_secrets
 )
 from integrations.homeassistant.client import (
+    ha_ssl_context,
     get_ha_client_config, get_ha_states_map
 )
 from api.energy_feed import (
@@ -477,6 +477,214 @@ def load_historical_dhw_planned_windows(start_dt: datetime, end_dt: datetime) ->
     return windows
 
 
+def _get_cached_weather_history(cfg: dict) -> Tuple[Dict[str, float], Dict[str, float]]:
+    """Returns (radiation_map_w_m2, outdoor_temp_map_c) keyed by '%Y-%m-%dT%H:00' in Europe/Amsterdam."""
+    global _weather_history_cache
+    if '_weather_history_cache' not in globals() or (time.time() - _weather_history_cache.get('ts', 0) > 3600):
+        try:
+            from layer1_data_collection.geo_location import get_geo_coordinates
+            geo_lat, geo_lon = get_geo_coordinates(cfg)
+            om_url = (
+                f"https://api.open-meteo.com/v1/forecast?latitude={geo_lat}&longitude={geo_lon}"
+                f"&hourly=temperature_2m,shortwave_radiation_instant&past_days=7&timezone=Europe%2FAmsterdam"
+            )
+            with safe_urlopen(om_url, timeout=5) as r_om:
+                om_data = json.loads(r_om.read().decode())
+                h_data = om_data.get("hourly", {})
+                rad_m = {t: float(r or 0.0) for t, r in zip(h_data.get("time", []), h_data.get("shortwave_radiation_instant", []))}
+                temp_m = {t: float(tm if tm is not None else 12.0) for t, tm in zip(h_data.get("time", []), h_data.get("temperature_2m", []))}
+                _weather_history_cache = {'ts': time.time(), 'rad': rad_m, 'temp': temp_m}
+        except Exception:
+            if '_weather_history_cache' not in globals():
+                _weather_history_cache = {'ts': 0, 'rad': {}, 'temp': {}}
+    return _weather_history_cache.get('rad', {}), _weather_history_cache.get('temp', {})
+
+
+def _compute_historical_forecast_series(
+    slot_dts: List[datetime],
+    interval_h: float,
+    cfg: dict,
+    prices: Optional[List[float]] = None,
+    export_prices: Optional[List[float]] = None,
+    outdoor_temps_override: Optional[List[float]] = None,
+) -> Dict[str, List[float]]:
+    """
+    Computes historical predicted series (at 1h or 15m resolution) aligned 1:1 with `slot_dts`:
+    - predicted_verbruik_w: total predicted house power (W)
+    - predicted_solar_negative_w: predicted solar power (-W)
+    - predicted_net_w: predicted net grid power (W, >0 import, <0 export)
+    - predicted_net_cost_eur: predicted net slot cost (€)
+    - hp_plan_w: planned/predicted heat pump power (W)
+    - predicted_dhw_demand_kwh_th: predicted DHW thermal draw-off (kWh_th)
+    - predicted_cv_kwh_el: predicted CV electrical energy (kWh_el)
+    """
+    if not slot_dts:
+        return {
+            "predicted_verbruik_w": [],
+            "predicted_solar_negative_w": [],
+            "predicted_net_w": [],
+            "predicted_net_cost_eur": [],
+            "hp_plan_w": [],
+            "predicted_dhw_demand_kwh_th": [],
+            "predicted_cv_kwh_el": [],
+        }
+
+    rad_map, temp_map = _get_cached_weather_history(cfg)
+    sol_cfg = cfg.get("solar", {})
+    kwp = float(sol_cfg.get("kwp", 5.76))
+    inv_max_w = int(sol_cfg.get("inverter_max_w", 5500))
+    tilt = float(sol_cfg.get("tilt_degrees", 34.0))
+    azimuth = float(sol_cfg.get("azimuth_degrees", 225.0))
+    eff = float(sol_cfg.get("efficiency_factor", 0.88))
+
+    forecaster = None
+    grid_96: List[List[float]] = []
+    try:
+        from layer2_calibration.learned_forecaster import HybridForecastingModel
+        forecaster = HybridForecastingModel()
+        grid_96 = forecaster.profile.get("profile_96_quarters", [])
+        pr_pct = forecaster.params.get("solar", {}).get("performance_ratio_pct")
+        if pr_pct is not None and 50.0 <= float(pr_pct) <= 110.0:
+            eff = round(float(pr_pct) / 1000.0 * 10.0, 4)
+    except Exception:
+        grid_96 = []
+
+    active_plan = ensure_active_canonical_plan()
+    plan_slot_map = {}
+    if active_plan and active_plan.slots:
+        for s in active_plan.slots:
+            try:
+                s_dt = datetime.fromisoformat(s.dt_iso).astimezone(AMS_TZ)
+                plan_slot_map[(s_dt.date(), s_dt.hour, (s_dt.minute // 15) * 15)] = s
+            except Exception:
+                pass
+
+    hist_dhw_windows = load_historical_dhw_planned_windows(
+        slot_dts[0] - timedelta(days=1),
+        slot_dts[-1] + timedelta(hours=6),
+    )
+
+    n_quarters = max(1, int(round(interval_h / 0.25)))
+    pred_verbruik_w: List[float] = []
+    pred_solar_neg_w: List[float] = []
+    pred_net_w: List[float] = []
+    pred_net_cost_eur: List[float] = []
+    hp_plan_w: List[float] = []
+    pred_dhw_dem_kwh_th: List[float] = []
+    pred_cv_kwh_el: List[float] = []
+
+    for idx, dt_ams in enumerate(slot_dts):
+        h_str = dt_ams.strftime("%Y-%m-%dT%H:00")
+        ghi = float(rad_map.get(h_str, 0.0) or 0.0)
+        t_out = (
+            float(outdoor_temps_override[idx])
+            if (outdoor_temps_override and idx < len(outdoor_temps_override) and outdoor_temps_override[idx] is not None)
+            else float(temp_map.get(h_str, 12.0) or 12.0)
+        )
+
+        # Sub-step across the quarters in this slot (1 quarter for 15m, 4 quarters for 1h)
+        sol_kw_acc = 0.0
+        unalloc_w_acc = 0.0
+        dhw_w_acc = 0.0
+        cv_w_acc = 0.0
+        dhw_tap_kwh_acc = 0.0
+
+        for q_off in range(n_quarters):
+            sub_dt = dt_ams + timedelta(minutes=15 * q_off)
+            sub_h_str = sub_dt.strftime("%Y-%m-%dT%H:00")
+            sub_ghi = float(rad_map.get(sub_h_str, ghi) or 0.0)
+            p_sol_kw = calculate_poa_solar_kw(
+                sub_dt,
+                sub_ghi,
+                kwp=kwp,
+                tilt_deg=tilt,
+                azimuth_deg=azimuth,
+                inverter_limit_kw=inv_max_w / 1000.0,
+                eff=eff,
+            )
+            if sub_dt.hour >= 21 or sub_dt.hour < 6:
+                p_sol_kw = 0.0
+            sol_kw_acc += p_sol_kw
+
+            dow = sub_dt.weekday()
+            q_idx = sub_dt.hour * 4 + (sub_dt.minute // 15)
+            q_unalloc_w = (
+                float(grid_96[dow][q_idx])
+                if (grid_96 and len(grid_96) > dow and len(grid_96[dow]) > q_idx)
+                else 300.0
+            )
+            unalloc_w_acc += q_unalloc_w
+
+            tap_q = float(GLOBAL_DHW_MODEL.get_learned_tap_kwh_th(dow, q_idx) if GLOBAL_DHW_MODEL else 0.03)
+            dhw_tap_kwh_acc += tap_q
+
+            slot_key = (sub_dt.date(), sub_dt.hour, (sub_dt.minute // 15) * 15)
+            if slot_key in plan_slot_map:
+                q_dhw_w = float(plan_slot_map[slot_key].dhw_kw or 0.0) * 1000.0
+                q_cv_w = float(plan_slot_map[slot_key].heating_kw or 0.0) * 1000.0
+            else:
+                d_cur = sub_dt.strftime("%Y-%m-%d")
+                t_cur = sub_dt.strftime("%H:%M")
+                q_dhw_w = 0.0
+                for w in hist_dhw_windows:
+                    if w["date"] == d_cur and w["start_time"] <= t_cur < w["end_time"]:
+                        q_dhw_w = float(w["power_kw"]) * 1000.0
+                        break
+                if q_dhw_w == 0.0 and "01:30" <= t_cur < "02:15":
+                    q_dhw_w = 2400.0
+
+                if q_dhw_w > 0.0:
+                    q_cv_w = 0.0
+                elif forecaster is not None:
+                    try:
+                        cv_pred = forecaster.predict_space_heating_w(
+                            sub_dt, t_outdoor_c=t_out, solar_radiation_w_m2=sub_ghi
+                        )
+                        q_cv_w = float(cv_pred.get("electrical_w", 0.0) or 0.0)
+                    except Exception:
+                        q_cv_w = 0.0
+                else:
+                    q_cv_w = 0.0
+
+            dhw_w_acc += q_dhw_w
+            cv_w_acc += q_cv_w
+
+        avg_sol_w = (sol_kw_acc / n_quarters) * 1000.0
+        avg_unalloc_w = unalloc_w_acc / n_quarters
+        avg_dhw_w = dhw_w_acc / n_quarters
+        avg_cv_w = cv_w_acc / n_quarters
+        avg_hp_w = avg_dhw_w + avg_cv_w
+        avg_tot_w = avg_unalloc_w + avg_hp_w
+        avg_net_w = avg_tot_w - avg_sol_w
+
+        p_imp = float(prices[idx]) if (prices and idx < len(prices)) else 0.28
+        p_exp = (
+            float(export_prices[idx])
+            if (export_prices and idx < len(export_prices))
+            else max(0.0, p_imp / 1.21 - 0.11085 - 0.0121 - 0.00605)
+        )
+        net_kwh = (avg_net_w / 1000.0) * interval_h
+        slot_cost = net_kwh * (p_imp if net_kwh >= 0 else p_exp)
+
+        pred_verbruik_w.append(round(avg_tot_w))
+        pred_solar_neg_w.append(-round(avg_sol_w))
+        pred_net_w.append(round(avg_net_w))
+        pred_net_cost_eur.append(round(slot_cost, 3))
+        hp_plan_w.append(round(avg_hp_w))
+        pred_dhw_dem_kwh_th.append(round(dhw_tap_kwh_acc, 2))
+        pred_cv_kwh_el.append(round((avg_cv_w / 1000.0) * interval_h, 3))
+
+    return {
+        "predicted_verbruik_w": pred_verbruik_w,
+        "predicted_solar_negative_w": pred_solar_neg_w,
+        "predicted_net_w": pred_net_w,
+        "predicted_net_cost_eur": pred_net_cost_eur,
+        "hp_plan_w": hp_plan_w,
+        "predicted_dhw_demand_kwh_th": pred_dhw_dem_kwh_th,
+        "predicted_cv_kwh_el": pred_cv_kwh_el,
+    }
+
+
 def handle_get(handler, path: str, qp: dict) -> bool:
     if path == "/api/analytics":
         cfg = load_json(CONFIG_FILE)
@@ -501,9 +709,6 @@ def handle_get(handler, path: str, qp: dict) -> bool:
     # API: Layer 4 Hardware Control Status
     if path.startswith("/api/analytics/electricity_prices"):
         try:
-            cfg = load_json(CONFIG_FILE)
-            solar_cost = float(cfg.get("solar_cost_eur_kwh", 0.06))
-
             parsed_url = urllib.parse.urlparse(handler.path)
             qp = urllib.parse.parse_qs(parsed_url.query)
             res_mode = qp.get("resolution", ["15m"])[0]
@@ -627,7 +832,7 @@ def handle_get(handler, path: str, qp: dict) -> bool:
                 "export_prices": full_export_prices,
                 "price_sources": ["epex"] * len(hist_pts) + price_sources,
                 "solar_forecast_kw": hist_solar + solar_forecast_kw,
-                "solar_cost": solar_cost,
+                "solar_cost": round(full_export_prices[len(hist_pts)], 4) if len(full_export_prices) > len(hist_pts) else 0.0,
                 "history_count": len(hist_pts),
                 "forced_off_ranges": forced_off_ranges,
                 "advised_off_ranges": advised_off_ranges,
@@ -1035,6 +1240,9 @@ def handle_get(handler, path: str, qp: dict) -> bool:
             forced_off_ranges, advised_off_ranges = fetch_historical_overlay_ranges(
                 t_start_iso, t_end_iso, slot_dts, prices=series_prices, labels=labels, interval_h=interval_h
             )
+            hist_pred = _compute_historical_forecast_series(
+                slot_dts, interval_h, cfg, prices=series_prices, export_prices=series_export_prices
+            )
 
             res = {
                 "status": "success",
@@ -1045,6 +1253,11 @@ def handle_get(handler, path: str, qp: dict) -> bool:
                 "self_consumption": series_selfcons_pos,
                 "solar_negative": series_solar_neg,
                 "teruglevering_negative": series_terug_neg,
+                "predicted_verbruik": hist_pred["predicted_verbruik_w"],
+                "predicted_solar_negative": hist_pred["predicted_solar_negative_w"],
+                "predicted_net_w": hist_pred["predicted_net_w"],
+                "predicted_net_cost_eur": hist_pred["predicted_net_cost_eur"],
+                "hp_plan": hist_pred["hp_plan_w"],
                 "prices": series_prices,
                 "export_prices": series_export_prices,
                 "forced_off_ranges": forced_off_ranges,
@@ -1091,6 +1304,7 @@ def handle_get(handler, path: str, qp: dict) -> bool:
             GROUP BY time({bucket_sz}) fill(linear);
             SELECT mean("power_w") as dhw_w FROM "energy_telemetry" WHERE "device_id" = 'daikin_heat_pump' AND "mode" = 'dhw' AND time >= '{t_start}' AND time <= '{t_end}' GROUP BY time({bucket_sz}) fill(0);
             SELECT mean("power_w") as cv_w FROM "energy_telemetry" WHERE "device_id" = 'daikin_heat_pump' AND "mode" = 'heating' AND time >= '{t_start}' AND time <= '{t_end}' GROUP BY time({bucket_sz}) fill(0);
+            SELECT mean("outdoor_temp_c") as tout_c FROM "weather_forecast" WHERE time >= '{t_start}' AND time <= '{t_end}' GROUP BY time({bucket_sz}) fill(linear);
             """
             url = f"http://a0d7b954-influxdb:8086/query?u=openhems&p={pwd}&db=openhems&q={urllib.parse.quote(q_telemetry)}"
             with safe_urlopen(url, timeout=5) as r:
@@ -1100,9 +1314,12 @@ def handle_get(handler, path: str, qp: dict) -> bool:
             dhw_pts = influx_res['results'][1].get('series', [{}])[0].get('values', [])
             cv_series_list = influx_res['results'][2].get('series', [])
             cv_pts = cv_series_list[0].get('values', []) if cv_series_list else []
+            tout_series_list = influx_res['results'][3].get('series', []) if len(influx_res.get('results', [])) > 3 else []
+            tout_pts = tout_series_list[0].get('values', []) if tout_series_list else []
 
             dhw_map = {p[0]: (p[1] or 0.0) for p in dhw_pts}
             cv_map = {p[0]: (p[1] or 0.0) for p in cv_pts}
+            tout_influx_map = {p[0]: p[1] for p in tout_pts if p[1] is not None}
 
             # 2. Get Weather Data (with in-memory 1h caching)
             global _weather_history_cache
@@ -1136,6 +1353,9 @@ def handle_get(handler, path: str, qp: dict) -> bool:
                 from layer2_calibration.learned_forecaster import HybridForecastingModel
                 forecaster = HybridForecastingModel()
                 grid_96 = forecaster.profile.get("profile_96_quarters", [])
+                pr_pct = forecaster.params.get("solar", {}).get("performance_ratio_pct")
+                if pr_pct is not None and 50.0 <= float(pr_pct) <= 110.0:
+                    eff = round(float(pr_pct) / 100.0, 4)
             except Exception:
                 grid_96 = []
 
@@ -1144,6 +1364,9 @@ def handle_get(handler, path: str, qp: dict) -> bool:
             act_dhw, pred_dhw, pred_dhw_demand = [], [], []
             act_cv, pred_cv = [], []
             act_total, pred_total = [], []
+            sorted_ts_val = [p[0] for p in gen_pts]
+            val_t_map = {}
+            val_hp_el_map = {}
 
             # Retrieve active CanonicalDispatchPlan for authoritative lockstep forward alignment
             active_plan = ensure_active_canonical_plan()
@@ -1160,6 +1383,7 @@ def handle_get(handler, path: str, qp: dict) -> bool:
             hist_dhw_windows = load_historical_dhw_planned_windows(now.astimezone(AMS_TZ) - timedelta(days=days + 1), now.astimezone(AMS_TZ))
 
             prev_dt = None
+            prev_tank_t = None
             for i, p in enumerate(gen_pts):
                 ts_str = p[0]
                 dt_ams = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).astimezone(AMS_TZ)
@@ -1176,8 +1400,12 @@ def handle_get(handler, path: str, qp: dict) -> bool:
                 # Actuals
                 s_w = p[1] or 0.0
                 tot_w = p[2] or 0.0
+                tank_t = p[5] if len(p) > 5 and p[5] is not None else None
                 d_w = dhw_map.get(ts_str, 0.0)
                 c_w = cv_map.get(ts_str, 0.0)
+
+                val_t_map[ts_str] = tank_t
+                val_hp_el_map[ts_str] = (d_w / 1000.0) * interval_h
 
                 act_solar.append(round(max(0.0, s_w / 1000.0), 3))
                 act_dhw.append(round(max(0.0, d_w / 1000.0), 3))
@@ -1215,7 +1443,19 @@ def handle_get(handler, path: str, qp: dict) -> bool:
                     if p_dhw_kw == 0.0 and "01:30" <= t_cur < "02:30":
                         p_dhw_kw = 3.0
 
-                    p_cv_kw = 0.0
+                    # Historical CV model prediction (reconstruct expected space heating electrical demand)
+                    if p_dhw_kw > 0.0:
+                        p_cv_kw = 0.0
+                    else:
+                        t_out_hist = tout_influx_map.get(ts_str, temp_map.get(h_str, 14.0))
+                        ghi_hist = ghi if ghi > 0.0 else (s_w / max(1.0, kwp * eff))
+                        try:
+                            cv_pred = forecaster.predict_space_heating_w(
+                                dt_ams, t_outdoor_c=float(t_out_hist), solar_radiation_w_m2=float(ghi_hist)
+                            )
+                            p_cv_kw = round(cv_pred.get("electrical_w", 0.0) / 1000.0, 3)
+                        except Exception:
+                            p_cv_kw = 0.0
 
                 pred_dhw.append(p_dhw_kw)
 
@@ -1228,6 +1468,15 @@ def handle_get(handler, path: str, qp: dict) -> bool:
 
                 # Total House Prediction (in exact lockstep with DHW and CV models)
                 pred_total.append(round(p_unalloc_kw + p_dhw_kw + p_cv_kw, 3))
+
+            from layer2_calibration.dhw_thermal_model import DhwThermalModel
+            act_dhw_demand_kwh = DhwThermalModel.compute_historical_draw_offs(
+                sorted_timestamps=sorted_ts_val,
+                temperature_map=val_t_map,
+                heatpump_el_kwh_map=val_hp_el_map,
+                interval_h=interval_h,
+            )
+            act_dhw_demand = [round(q / interval_h, 3) for q in act_dhw_demand_kwh]
 
             from layer2_calibration.model_validator import ModelValidator
             metrics = {
@@ -1247,6 +1496,7 @@ def handle_get(handler, path: str, qp: dict) -> bool:
                     "all": act_total,
                     "solar": act_solar,
                     "dhw": act_dhw,
+                    "dhw_demand": act_dhw_demand,
                     "cv": act_cv
                 },
                 "predicted": {
@@ -1343,11 +1593,34 @@ def handle_get(handler, path: str, qp: dict) -> bool:
             hist_dhw_windows = load_historical_dhw_planned_windows(t_start_dt, t_end_dt)
             planned_heating_ranges = fetch_planned_dhw_ranges_from_db(slot_dts, hist_dhw_windows, interval_h=interval_h)
 
+            cfg_dhw = load_json(CONFIG_FILE) if CONFIG_FILE.exists() else {}
+            hist_pred_dhw = _compute_historical_forecast_series(slot_dts, interval_h, cfg_dhw)
+            pred_demand_kwh_th = hist_pred_dhw["predicted_dhw_demand_kwh_th"]
+            planned_slot_idxs = set()
+            for pr in planned_heating_ranges:
+                for idx_p in range(pr.get("start_idx", 0), min(len(slot_dts), pr.get("end_idx", 0) + 1)):
+                    planned_slot_idxs.add(idx_p)
+
+            pred_temps_c: List[float] = []
+            sim_t = temps[0] if temps else 50.0
+            c_tank_kwh_per_k = 0.407
+            loss_k_per_h = 0.21
+            for i_s, dt_s in enumerate(slot_dts):
+                if i_s == 0 or (dt_s.hour == 0 and dt_s.minute == 0 and i_s < len(temps)):
+                    sim_t = temps[i_s]
+                pred_temps_c.append(round(sim_t, 1))
+                tap_th = pred_demand_kwh_th[i_s] if i_s < len(pred_demand_kwh_th) else 0.05
+                q_in_th = (2.2 * 2.2 * interval_h) if (i_s in planned_slot_idxs or sim_t < 43.0) else 0.0
+                d_temp = ((q_in_th - tap_th) / c_tank_kwh_per_k) - (loss_k_per_h * max(0.3, (sim_t - 20.0) / 30.0) * interval_h)
+                sim_t = max(35.0, min(60.5, sim_t + d_temp))
+
             handler._send_json({
                 "status": "success",
                 "labels": labels,
                 "temperatures_c": temps,
                 "demand_kwh_th": demands_kwh_th,
+                "predicted_temperatures_c": pred_temps_c,
+                "predicted_demand_kwh_th": pred_demand_kwh_th,
                 "forced_off_ranges": forced_off_ranges,
                 "advised_off_ranges": advised_off_ranges,
                 "heating_ranges": heating_ranges,
@@ -1377,10 +1650,8 @@ def handle_get(handler, path: str, qp: dict) -> bool:
 
             # Query HA history for indoor and outdoor temperatures
             base_url, token = get_ha_client_config()
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            ha_url = f"{base_url}/api/history/period/{t_start.strftime('%Y-%m-%dT%H:00:00Z')}?end_time={t_end.strftime('%Y-%m-%dT%H:00:00Z')}&filter_entity_id=sensor.hc_sensors_temperature_room,sensor.wittboy_gw2000a_weather_station_gw2000a_outdoor_temperature"
+            ctx = ha_ssl_context(base_url)
+            ha_url = f"{base_url}/api/history/period/{t_start.strftime('%Y-%m-%dT%H:00:00Z')}?end_time={t_end.strftime('%Y-%m-%dT%H:00:00Z')}&filter_entity_id=sensor.hc_sensors_temperature_room,sensor.wittboy_gw2000a_weather_station_gw2000a_outdoor_temperature,sensor.hc_room_room_heating_setpoint"
             headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
             req = urllib.request.Request(ha_url, headers=headers)
             try:
@@ -1391,16 +1662,22 @@ def handle_get(handler, path: str, qp: dict) -> bool:
 
             room_pts = []
             out_pts = []
+            sp_pts = []
             for ent in ha_data:
                 if not ent: continue
                 e_id = ent[0].get("entity_id", "")
-                if "room" in e_id:
+                if "room_heating_setpoint" in e_id:
+                    sp_pts = ent
+                elif "room" in e_id:
                     room_pts = ent
                 elif "outdoor" in e_id:
                     out_pts = ent
 
+            step_mins = 15 if bucket_sz == "15m" else 60
+            start_min = (t_start.minute // step_mins) * step_mins
+            t_start_round = t_start.replace(minute=start_min, second=0, microsecond=0)
             slots = []
-            cur = t_start
+            cur = t_start_round
             while cur <= t_end:
                 slots.append(cur)
                 cur += timedelta(minutes=step_mins)
@@ -1423,14 +1700,24 @@ def handle_get(handler, path: str, qp: dict) -> bool:
 
             r_sampled = sample_series(room_pts, slots, 21.5)
             o_sampled = sample_series(out_pts, slots, 16.0)
+            sp_sampled = sample_series(sp_pts, slots, 20.0)
+
+            valid_sps = [v for v in sp_sampled if v is not None and 10.0 <= v <= 25.0]
+            baseline_c = 20.0
+            if valid_sps:
+                min_sp = min(valid_sps)
+                baseline_c = min_sp if min_sp <= 20.5 else 20.0
+            comfort_threshold_c = round(baseline_c - 0.5, 1)
 
             # Query InfluxDB for space heating electrical power
             sec = load_secrets()
-            pwd = sec.get("influxdb", {}).get("openhems_db", "") or sec.get("influx_password", "")
+            cfg_ic = load_json(CONFIG_FILE)
+            active_ic = cfg_ic.get("influxdb_connections", [{}])[0]
+            pwd = sec.get("influxdb", {}).get(active_ic.get("id"), "") or sec.get("influxdb", {}).get("local_ha_influxdb", "") or sec.get("influxdb", {}).get("openhems_db", "") or sec.get("influx_password", "")
             q = f"""
             SELECT mean("power_w")/1000.0 * {interval_h} as cv_kwh_el
             FROM "energy_telemetry"
-            WHERE "mode" = 'heating' AND time >= '{t_start.strftime("%Y-%m-%dT%H:00:00Z")}' AND time <= '{t_end.strftime("%Y-%m-%dT%H:00:00Z")}'
+            WHERE "mode" = 'heating' AND time >= '{t_start_round.strftime("%Y-%m-%dT%H:%M:00Z")}' AND time <= '{t_end.strftime("%Y-%m-%dT%H:%M:00Z")}'
             GROUP BY time({bucket_sz}) fill(0);
             """
             cv_map = {}
@@ -1449,14 +1736,14 @@ def handle_get(handler, path: str, qp: dict) -> bool:
             # Demand in kWh thermal = UA * max(0, T_room - T_out) * interval_h
             from layer3_scheduling.space_heating_policy import SpaceHeatingPolicy
             act_p = SpaceHeatingPolicy.get_active_parameters()
-            UA = act_p.get("ua_kw_per_k", 0.3211)
+            UA = act_p.get("ua_kw_per_k", 0.3100)
             demand_kwh_th = [round(UA * max(0.0, r - o) * interval_h, 2) for r, o in zip(r_sampled, o_sampled)]
 
             # Detect price peaks across historical timeline
             # Historical space heating telemetry: retrieve actual recorded hardware lockouts from database
             slot_dts = [s_dt.astimezone(AMS_TZ) for s_dt in slots]
             forced_off_ranges, advised_off_ranges = fetch_historical_overlay_ranges(
-                t_start, t_end, slot_dts, labels=labels, interval_h=interval_h
+                t_start_round, t_end, slot_dts, labels=labels, interval_h=interval_h
             )
             spits_indices = set()
             for r in forced_off_ranges:
@@ -1470,7 +1757,8 @@ def handle_get(handler, path: str, qp: dict) -> bool:
             for i, s_dt in enumerate(slots):
                 iso_key = s_dt.strftime("%Y-%m-%dT%H:%M:00Z")
                 kwh_val = cv_map.get(iso_key, 0.0)
-                is_active = (kwh_val > 0.02) and (i not in spits_indices)
+                # Active compressor heating is > 0.08 kWh (> 320W); standby idle pump is ~130W (0.032 kWh)
+                is_active = (kwh_val > 0.08) and (i not in spits_indices)
                 if is_active and not in_heat:
                     in_heat = True
                     start_h = i
@@ -1491,13 +1779,57 @@ def handle_get(handler, path: str, qp: dict) -> bool:
                     "end_label": labels[-1],
                     "name": "VERWARMT"
                 })
+            if in_heat:
+                heating_ranges.append({
+                    "start_idx": start_h,
+                    "end_idx": len(slots) - 1,
+                    "start_label": labels[start_h],
+                    "end_label": labels[-1],
+                    "name": "VERWARMT"
+                })
+
+            cfg_cv = load_json(CONFIG_FILE) if CONFIG_FILE.exists() else {}
+            rad_map_cv, temp_map_cv = _get_cached_weather_history(cfg_cv)
+            hist_pred_cv = _compute_historical_forecast_series(
+                slot_dts, interval_h, cfg_cv, outdoor_temps_override=o_sampled
+            )
+            pred_cv_el = hist_pred_cv["predicted_cv_kwh_el"]
+            from layer3_scheduling.space_heating_policy import SpaceHeatingPolicy
+            pred_indoor_c: List[float] = []
+            pred_demand_cv_th: List[float] = []
+            sim_room_c = r_sampled[0] if r_sampled else baseline_c
+            sim_floor_c = sim_room_c + 0.5
+            for i_s, dt_s in enumerate(slot_dts):
+                if i_s == 0 or (dt_s.hour == 0 and dt_s.minute == 0 and i_s < len(r_sampled)):
+                    sim_room_c = r_sampled[i_s]
+                    sim_floor_c = sim_room_c + 0.5
+                pred_indoor_c.append(round(sim_room_c, 1))
+                h_str = dt_s.strftime("%Y-%m-%dT%H:00")
+                t_out_p = float(temp_map_cv.get(h_str, o_sampled[i_s] if i_s < len(o_sampled) else 12.0))
+                ghi_p = float(rad_map_cv.get(h_str, 0.0) or 0.0)
+                loss_th = UA * max(0.0, sim_room_c - t_out_p) * interval_h
+                pred_demand_cv_th.append(round(loss_th, 2))
+                cop_cv = SpaceHeatingPolicy.calculate_cop(t_out_p)
+                p_el = (pred_cv_el[i_s] if i_s < len(pred_cv_el) else 0.0)
+                q_cv_th_kw = p_el * cop_cv / max(0.25, interval_h)
+                q_sol_kw = (ghi_p / 1000.0) * SpaceHeatingPolicy.SOLAR_APERTURE_M2
+                q_gain_kw = SpaceHeatingPolicy.INTERNAL_GAINS_KW + q_sol_kw
+                sim_room_c, sim_floor_c = SpaceHeatingPolicy._advance_thermal_state(
+                    sim_room_c, sim_floor_c, q_cv_th_kw, q_gain_kw, t_out_p, UA, interval_h
+                )
 
             handler._send_json({
                 "status": "success",
                 "labels": labels,
                 "indoor_temperatures_c": r_sampled,
                 "outdoor_temperatures_c": o_sampled,
+                "target_temperatures_c": sp_sampled,
+                "comfort_temperatures_c": [comfort_threshold_c] * len(slots),
+                "comfort_temp_c": comfort_threshold_c,
+                "baseline_temp_c": baseline_c,
                 "demand_kwh_th": demand_kwh_th,
+                "predicted_indoor_temperatures_c": pred_indoor_c,
+                "predicted_demand_kwh_th": pred_demand_cv_th,
                 "heating_kwh_el": [cv_map.get(s_dt.strftime("%Y-%m-%dT%H:%M:00Z"), 0.0) for s_dt in slots],
                 "forced_off_ranges": forced_off_ranges,
                 "advised_off_ranges": advised_off_ranges,
@@ -1716,7 +2048,8 @@ def handle_get(handler, path: str, qp: dict) -> bool:
             # Residual demand in kW
             cfg = load_json(CONFIG_FILE) if CONFIG_FILE.exists() else {}
             spec = BatterySpec.from_config(cfg)
-            baseload_w = float(cfg.get("baseload_watts", 300))
+            # Use dynamic learned baseload floor
+            baseload_w = float(spec.unallocated_baseload_w if hasattr(spec, "unallocated_baseload_w") else 300.0)
 
             residual_kw = []
             for ts_str in sorted_ts:
@@ -1731,14 +2064,13 @@ def handle_get(handler, path: str, qp: dict) -> bool:
                 res_w = unalloc + hp - sol
                 residual_kw.append(round(res_w / 1000.0, 3))
 
-            # Initial SOC from HA sensor if available
-            init_soc = 50.0
+            # Initial SOC from HA history if available; otherwise this is an explicit what-if with a
+            # configured simulation start SoC, labelled as such in the response (never presented as measured).
+            init_soc = None
             base_url, token = get_ha_client_config()
             if base_url and token:
                 try:
-                    ctx = ssl.create_default_context()
-                    ctx.check_hostname = False
-                    ctx.verify_mode = ssl.CERT_NONE
+                    ctx = ha_ssl_context(base_url)
                     ha_url = f"{base_url}/api/history/period/{t_start.strftime('%Y-%m-%dT%H:00:00Z')}?filter_entity_id=sensor.cyberspace_battery_test_virtual_test_matthijs_state_of_charge,sensor.battery_state_of_charge"
                     req = urllib.request.Request(ha_url, headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
                     with safe_urlopen(req, context=ctx, timeout=3) as r_ha:
@@ -1753,6 +2085,10 @@ def handle_get(handler, path: str, qp: dict) -> bool:
                 except Exception:
                     pass
 
+            soc_source = "measured" if init_soc is not None else "simulation_parameter"
+            if init_soc is None:
+                init_soc = float(load_json(CONFIG_FILE).get("battery", {}).get("simulation_initial_soc_pct", 50.0))
+
             from layer3_scheduling.battery_policy import BatteryPolicy
             summary = BatteryPolicy.optimize(
                 residual_demand_kw=residual_kw,
@@ -1762,6 +2098,20 @@ def handle_get(handler, path: str, qp: dict) -> bool:
                 initial_soc_pct=init_soc,
                 step_hours=interval_h
             )
+
+            hist_pred_bat = _compute_historical_forecast_series(
+                slot_dts, interval_h, cfg, prices=import_prices, export_prices=export_prices
+            )
+            pred_residual_kw = [round(w / 1000.0, 3) for w in hist_pred_bat["predicted_net_w"]]
+            pred_summary = BatteryPolicy.optimize(
+                residual_demand_kw=pred_residual_kw,
+                import_prices=import_prices,
+                export_prices=export_prices,
+                spec=spec,
+                initial_soc_pct=init_soc,
+                step_hours=interval_h
+            )
+            pred_soc_pct_list = [round(s.soc_pct, 1) for s in pred_summary.slots]
 
             soc_pct_list = [round(s.soc_pct, 1) for s in summary.slots]
             soc_kwh_list = [round(s.soc_kwh, 2) for s in summary.slots]
@@ -1776,9 +2126,11 @@ def handle_get(handler, path: str, qp: dict) -> bool:
                 "range": tf,
                 "resolution": bucket_sz,
                 "interval_h": interval_h,
+                "initial_soc_source": soc_source,
                 "labels": labels,
                 "trajectory": {
                     "soc_pct": soc_pct_list,
+                    "predicted_soc_pct": pred_soc_pct_list,
                     "soc_kwh": soc_kwh_list,
                     "power_kw": power_kw_list,
                     "discharge_kw": discharge_kw_list,

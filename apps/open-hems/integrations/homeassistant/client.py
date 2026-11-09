@@ -18,6 +18,22 @@ from integrations.daikin_altherma.actuator import DaikinActuator
 
 _WORKING_HA_BASE_URL: Optional[str] = None
 
+# Endpoints on the Home Assistant OS internal network present self-signed certificates.
+# Anything else (e.g. a public hostname) must be TLS-verified: the long-lived token travels along.
+_INTERNAL_HA_HOSTS = ("172.30.32.1", "homeassistant", "supervisor", "localhost", "127.0.0.1")
+
+CV_FORCED_OFF_KEY = "cv_master_forced_off_by_hems"
+
+
+def ha_ssl_context(url: Optional[str]) -> ssl.SSLContext:
+    """TLS context for a Home Assistant URL: verification is only relaxed for internal hosts."""
+    host = (urllib.parse.urlparse(url or "").hostname or "").lower()
+    ctx = ssl.create_default_context()
+    if host in _INTERNAL_HA_HOSTS:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
 
 def get_ha_client_config() -> Tuple[str, str]:
     """
@@ -63,15 +79,12 @@ def get_ha_client_config() -> Tuple[str, str]:
             seen.add(c)
             uniq_candidates.append(c)
 
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
     for candidate in uniq_candidates:
         try:
             req = urllib.request.Request(f"{candidate}/api/states/zone.home", headers=headers)
-            with urllib.request.urlopen(req, timeout=1.5, context=ctx) as r:
+            with urllib.request.urlopen(req, timeout=1.5, context=ha_ssl_context(candidate)) as r:
                 if r.status in [200, 201]:
                     _WORKING_HA_BASE_URL = str(candidate)
                     return _WORKING_HA_BASE_URL, token
@@ -89,9 +102,7 @@ def fetch_ha_entities() -> List[Dict[str, Any]]:
         return []
 
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    ctx = ha_ssl_context(ha_url)
 
     try:
         req = urllib.request.Request(f"{ha_url}/api/states", headers=headers)
@@ -101,14 +112,18 @@ def fetch_ha_entities() -> List[Dict[str, Any]]:
             for s in states:
                 eid = s.get("entity_id", "")
                 domain = eid.split(".")[0]
-                if domain in ["sensor", "switch", "climate", "binary_sensor", "input_boolean", "input_select", "weather"]:
-                    fname = s.get("attributes", {}).get("friendly_name") or eid
+                if domain in ["sensor", "switch", "climate", "binary_sensor", "input_boolean", "input_select", "select", "weather", "number"]:
+                    attrs = s.get("attributes", {}) or {}
+                    fname = attrs.get("friendly_name") or eid
                     filtered.append({
                         "entity_id": eid,
                         "friendly_name": fname,
                         "domain": domain,
-                        "unit": s.get("attributes", {}).get("unit_of_measurement"),
-                        "state": s.get("state")
+                        "unit": attrs.get("unit_of_measurement"),
+                        "state": s.get("state"),
+                        "attributes": attrs,
+                        "last_changed": s.get("last_changed"),
+                        "last_updated": s.get("last_updated")
                     })
             return sorted(filtered, key=lambda x: x["friendly_name"].lower())
     except Exception as e:
@@ -129,9 +144,7 @@ def call_ha_service_detailed(domain: str, service: str, service_data: dict) -> T
         return False, "Geen Home Assistant token geconfigureerd in options.json of environment"
 
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    ctx = ha_ssl_context(ha_url)
 
     url = f"{ha_url}/api/services/{domain}/{service}"
     try:
@@ -158,60 +171,112 @@ def call_ha_service(domain: str, service: str, service_data: dict) -> bool:
     return success
 
 
-def make_daikin_ha_actuator() -> DaikinActuator:
-    """Creates a configured DaikinActuator delegating select, switch and climate calls to Home Assistant Core."""
-    states_map = get_ha_states_map()
+def push_ha_state(entity_id: str, state: Any, attributes: Optional[Dict[str, Any]] = None) -> bool:
+    """Creates/updates a state object in Home Assistant (e.g. the dispatch heartbeat sensor)."""
+    ha_url, token = get_ha_client_config()
+    if not token:
+        return False
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    body = json.dumps({"state": state, "attributes": attributes or {}}).encode("utf-8")
+    try:
+        from api.http_client import safe_urlopen
+        req = urllib.request.Request(f"{ha_url}/api/states/{entity_id}", data=body, headers=headers, method="POST")
+        with safe_urlopen(req, timeout=5, context=ha_ssl_context(ha_url)) as r:
+            return r.status in (200, 201)
+    except Exception as e:
+        print(f"Warning pushing HA state {entity_id}: {e}")
+        return False
+
+
+def make_daikin_ha_actuator(
+    states_map: Optional[Dict[str, Dict[str, Any]]] = None,
+    dispatch_state: Optional[Any] = None,
+) -> DaikinActuator:
+    """
+    Creates a configured DaikinActuator delegating select, switch and climate calls to Home Assistant Core.
+
+    states_map: the tick's single HA snapshot (fetched if omitted).
+    dispatch_state: PersistentState used for CV-master ownership. Open HEMS only switches the CV
+      master back ON if Open HEMS itself switched it OFF (hydraulic DHW interlock). A CV master the
+      user switched off (summer, holiday) is never turned back on.
+    The returned actuator exposes `ha_writes`: the list of (entity_id, desired_state) written this tick.
+    """
+    states_map = dict(states_map) if states_map is not None else get_ha_states_map()
+    writes: List[Tuple[str, str]] = []
 
     def select_caller(option_name: str) -> bool:
         eid = "input_select.warmtepomp_smart_grid_modus"
         curr_opt = states_map.get(eid, {}).get("state")
-        if curr_opt == option_name:
-            # Idempotent guard: already in target state, do NOT fire redundant service calls
+
+        # Transition-only actuation & manual override protection:
+        # Open HEMS sets the option once upon a mode transition. Once successfully commanded,
+        # Open HEMS does not touch it again within the same mode window, respecting user overrides in HA.
+        last_dispatched = dispatch_state.get("last_dispatched_smart_grid_option") if dispatch_state else None
+        if last_dispatched == option_name:
             return True
+
+        if curr_opt == option_name:
+            # Already in target state: record as dispatched without redundant service calls
+            if dispatch_state:
+                dispatch_state.set("last_dispatched_smart_grid_option", option_name)
+            return True
+
         ok = call_ha_service("input_select", "select_option", {"entity_id": eid, "option": option_name})
         if not ok:
             raise RuntimeError(f"Home Assistant service call mislukt voor {eid} -> {option_name}")
         states_map[eid] = {"state": option_name}
+        writes.append((eid, option_name))
+        if dispatch_state:
+            dispatch_state.set("last_dispatched_smart_grid_option", option_name)
         return True
 
     def switch_caller(switch_name: str, state: bool):
+        # Strict Relay-Only Mandate: Open HEMS ONLY controls the physical Smart Grid relays (S10S / S11S).
+        # It must NEVER touch switch.hc_mode_altherma_on (cv_master) on the Daikin P1P2 bus.
+        if switch_name == "cv_master":
+            if dispatch_state:
+                dispatch_state.set(CV_FORCED_OFF_KEY, False)
+            return True
         entity_map = {
             "s10s": "switch.warmtepomp_smart_grid_1_s10s",
             "s11s": "switch.warmtepomp_smart_grid_2_s11s",
-            "cv_master": "switch.hc_mode_altherma_on"
         }
         eid = entity_map.get(switch_name)
-        if eid:
-            curr_state = (states_map.get(eid, {}).get("state") == "on")
-            if curr_state == state:
-                # Idempotent guard: switch already in desired state
+        if not eid:
+            return True
+        curr_raw = states_map.get(eid, {}).get("state")
+        curr_state = (curr_raw == "on")
+        if curr_state == state:
+            # Idempotent guard: switch already in desired state
+            if switch_name in ("s10s", "s11s") and dispatch_state:
+                dispatch_state.set(f"last_dispatched_{switch_name}", state)
+            return True
+        if switch_name in ("s10s", "s11s") and dispatch_state:
+            last_sw = dispatch_state.get(f"last_dispatched_{switch_name}")
+            if last_sw == state:
+                # Transition-only: already commanded once, respect user manual override
                 return True
-            service = "turn_on" if state else "turn_off"
-            ok = call_ha_service("switch", service, {"entity_id": eid})
-            if not ok:
-                raise RuntimeError(f"Home Assistant service call mislukt voor {eid} -> {service}")
-            states_map[eid] = {"state": "on" if state else "off"}
+        if curr_raw in (None, "unknown", "unavailable"):
+            raise RuntimeError(f"{eid} is {curr_raw}; schakelen overgeslagen")
+        service = "turn_on" if state else "turn_off"
+        ok = call_ha_service("switch", service, {"entity_id": eid})
+        if not ok:
+            raise RuntimeError(f"Home Assistant service call mislukt voor {eid} -> {service}")
+        states_map[eid] = {"state": "on" if state else "off"}
+        writes.append((eid, "on" if state else "off"))
+        if switch_name in ("s10s", "s11s") and dispatch_state:
+            dispatch_state.set(f"last_dispatched_{switch_name}", state)
         return True
 
     def climate_caller(climate_name: str, temp: float):
-        if climate_name == "dhw":
-            # Strict Relay-Only Mandate: Open HEMS must NEVER touch climate.hc_dhw_dhw_setpoint.
-            # Boost to 60°C is handled strictly via SG4 hardware contact.
-            return True
-
-        if climate_name == "room":
-            eid = "climate.woonkamer_climate_daikin"
-            ok = call_ha_service("climate", "set_temperature", {
-                "entity_id": eid,
-                "target_temp_low": temp,
-                "target_temp_high": temp + 3.0
-            })
-            return bool(ok)
-
+        # Strict Relay-Only Mandate: Open HEMS must NEVER write to any Daikin climate entity
+        # (neither climate.hc_dhw_dhw_setpoint nor climate.hc_room_room_heating).
         return True
 
-    return DaikinActuator(
+    actuator = DaikinActuator(
         switch_caller=switch_caller,
         climate_caller=climate_caller,
         select_caller=select_caller
     )
+    actuator.ha_writes = writes  # type: ignore[attr-defined]
+    return actuator

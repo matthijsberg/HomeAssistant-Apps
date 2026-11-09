@@ -63,6 +63,8 @@
                 solarArea: 'rgba(245, 158, 11, 0.22)', // Amber line area fill
                 price: '#06B6D4',              // Cyan 500: EPEX Stroomtarief referentie
                 priceLine: '#38BDF8',          // Sky 400: EPEX Stepped tarieflijn
+                priceForecast: '#94A3B8',      // Slate 400: Grijstint voor veronderstelde prognosedata
+                priceForecastExport: '#64748B',// Slate 500: Muted slate voor veronderstelde teruglevering
                 unallocated: '#3B82F6',        // Blue 500: Ongedefinieerd verbruik (7x24)
                 unallocatedBg: 'rgba(59, 130, 246, 0.75)',
                 unallocatedArea: 'rgba(59, 130, 246, 0.15)',
@@ -101,6 +103,39 @@
             fonts: {
                 mono: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
                 sans: 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+            },
+            getPriceLineSegment(priceSourcesArr) {
+                return {
+                    borderColor: ctx => {
+                        const i = ctx.p0DataIndex;
+                        const src = priceSourcesArr ? (priceSourcesArr[i] || priceSourcesArr[i + 1]) : null;
+                        if (src === 'stroomvoorspeller' || src === 'forecast') {
+                            return OpenHEMSTokens.colors.priceForecast;
+                        }
+                        return OpenHEMSTokens.colors.priceLine;
+                    },
+                    borderDash: ctx => {
+                        const i = ctx.p0DataIndex;
+                        const src = priceSourcesArr ? (priceSourcesArr[i] || priceSourcesArr[i + 1]) : null;
+                        if (src === 'stroomvoorspeller' || src === 'forecast') {
+                            return [5, 4];
+                        }
+                        return [];
+                    }
+                };
+            },
+            getExportPriceLineSegment(priceSourcesArr) {
+                return {
+                    borderColor: ctx => {
+                        const i = ctx.p0DataIndex;
+                        const src = priceSourcesArr ? (priceSourcesArr[i] || priceSourcesArr[i + 1]) : null;
+                        if (src === 'stroomvoorspeller' || src === 'forecast') {
+                            return OpenHEMSTokens.colors.priceForecastExport;
+                        }
+                        return OpenHEMSTokens.colors.price;
+                    },
+                    borderDash: ctx => [4, 4]
+                };
             }
         };
         window.OpenHEMSTokens = OpenHEMSTokens;
@@ -142,6 +177,75 @@
         window.OpenHEMSUI = OpenHEMSUI;
 
         // Universal Chart.js Shading Plugin for Open HEMS
+        const FORECAST_TO_HISTORY_CANVAS_MAP = {
+            'hemsChartAnalytics': 'powerProducersChart',
+            'electricityPricesChart': 'powerProducersChart',
+            'costForecastChart': 'costHistoryChart',
+            'chart-dhw-temperature': 'dhwHistoryChart',
+            'chart-heating-forecast': 'heatingHistoryChart',
+            'chart-battery-trajectory': 'batteryHistoryChart'
+        };
+
+        const HISTORY_TO_FORECAST_CANVAS_MAP = {
+            'powerProducersChart': 'hemsChartAnalytics',
+            'costHistoryChart': 'costForecastChart',
+            'dhwHistoryChart': 'chart-dhw-temperature',
+            'heatingHistoryChart': 'chart-heating-forecast',
+            'batteryHistoryChart': 'chart-battery-trajectory'
+        };
+
+        function navigateCrossChartSubject(sourceCanvasId) {
+            if (typeof showTab !== 'function') return;
+            const toHistoryId = FORECAST_TO_HISTORY_CANVAS_MAP[sourceCanvasId];
+            const toForecastId = HISTORY_TO_FORECAST_CANVAS_MAP[sourceCanvasId];
+            const targetCanvasId = toHistoryId || toForecastId;
+            const targetTab = toHistoryId ? 'history' : (toForecastId ? 'prediction' : null);
+            if (!targetCanvasId || !targetTab) return;
+
+            showTab(targetTab);
+            setTimeout(() => {
+                const targetCanvas = document.getElementById(targetCanvasId);
+                if (!targetCanvas) return;
+                const card = targetCanvas.closest('.glass-panel, .rounded-2xl, .rounded-xl') || targetCanvas;
+                card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                card.classList.add('ring-2', 'ring-purple-500/60', 'transition-shadow', 'duration-500');
+                setTimeout(() => {
+                    card.classList.remove('ring-2', 'ring-purple-500/60');
+                }, 1600);
+            }, 90);
+        }
+
+        function bindHistoryBadgeClick(chart) {
+            const canvas = chart?.canvas;
+            if (!canvas || canvas._openhemsHistBadgeBound) return;
+            canvas._openhemsHistBadgeBound = true;
+
+            function isInsideBadge(clientX, clientY) {
+                const rect = chart._openhemsHistoryBadgeRect;
+                if (!rect) return false;
+                const cRect = canvas.getBoundingClientRect();
+                const x = clientX - cRect.left;
+                const y = clientY - cRect.top;
+                return (x >= rect.x && x <= rect.x + rect.w && y >= rect.y && y <= rect.y + rect.h);
+            }
+
+            canvas.addEventListener('mousemove', (e) => {
+                if (isInsideBadge(e.clientX, e.clientY)) {
+                    canvas.style.cursor = 'pointer';
+                } else if (canvas.style.cursor === 'pointer') {
+                    canvas.style.cursor = '';
+                }
+            }, { passive: true });
+
+            canvas.addEventListener('click', (e) => {
+                if (isInsideBadge(e.clientX, e.clientY)) {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    navigateCrossChartSubject(canvas.id);
+                }
+            }, true);
+        }
+
         const OpenHEMSHistoryPlugin = {
             id: 'openhemsHistoryShading',
             beforeDraw(chart) {
@@ -158,11 +262,57 @@
 
                 const totalSlots = labels.length;
                 const isRightEnd = (histCount >= totalSlots - 2);
+                if (!isRightEnd) {
+                    const xNu = scales.x.getPixelForValue(histCount);
+                    const xPrev = scales.x.getPixelForValue(histCount - 1);
+                    const xBoundary = (xPrev !== undefined && !isNaN(xPrev) && xNu !== undefined && !isNaN(xNu)) ? (xPrev + xNu) / 2 : (xNu || chartArea.left);
+                    const histWidth = xBoundary - chartArea.left;
+                    if (histWidth > 0) {
+                        ctx.save();
+                        ctx.fillStyle = 'rgba(3, 7, 18, 0.70)';
+                        ctx.fillRect(chartArea.left, chartArea.top, histWidth, chartArea.height);
+                        ctx.restore();
+                    }
+                }
+            },
+            afterDatasetsDraw(chart) {
+                const { ctx, chartArea, scales } = chart;
+                if (!chartArea || !scales || !scales.x) return;
+
+                const labels = chart.data?.labels || [];
+                const totalSlots = labels.length;
+                if (totalSlots <= 0) {
+                    chart._openhemsHistoryBadgeRect = null;
+                    return;
+                }
+                const isMappedHistoryChart = Boolean(chart.canvas && HISTORY_TO_FORECAST_CANVAS_MAP[chart.canvas.id]);
+                let histCount = chart.options?.plugins?.openhemsHistory?.count;
+                if (histCount === undefined) {
+                    const nuIdx = labels.findIndex(l => typeof l === 'string' && l.startsWith('Nu'));
+                    if (nuIdx > 0) {
+                        histCount = nuIdx;
+                    } else if (isMappedHistoryChart) {
+                        histCount = totalSlots - 1;
+                    }
+                }
+                if (!histCount || histCount <= 0) {
+                    chart._openhemsHistoryBadgeRect = null;
+                    return;
+                }
+
+                const isRightEnd = isMappedHistoryChart || (histCount >= totalSlots - 2);
 
                 if (isRightEnd) {
-                    // === HISTORICAL CHART: "Nu" is at the right edge ===
-                    const xNu = scales.x.getPixelForValue(histCount);
-                    if (xNu === undefined || isNaN(xNu)) return;
+                    // === HISTORICAL CHART: "[ ◀ NU ] | [ ▶ ]" at the right edge ===
+                    const rawXNu = scales.x.getPixelForValue(histCount);
+                    if (rawXNu === undefined || isNaN(rawXNu)) return;
+
+                    const canNavigateToForecast = Boolean(chart.canvas && HISTORY_TO_FORECAST_CANVAS_MAP[chart.canvas.id]);
+                    const fBadgeW = 18;
+                    const fBadgeH = 16;
+                    const xNu = canNavigateToForecast
+                        ? Math.min(rawXNu, chartArea.right - fBadgeW - 6)
+                        : rawXNu;
 
                     ctx.save();
 
@@ -189,10 +339,38 @@
                     ctx.font = '700 8.5px ui-sans-serif, system-ui, sans-serif';
                     ctx.textAlign = 'center';
                     ctx.fillText('◀ NU', badgeX + (badgeW / 2), chartArea.top + 17.5);
+
+                    // Subtle clickable "▶" forecast navigation pill to the right of the line
+                    if (canNavigateToForecast) {
+                        bindHistoryBadgeClick(chart);
+                        const fBadgeX = xNu + 4;
+                        const fBadgeY = chartArea.top + 6;
+                        chart._openhemsHistoryBadgeRect = {
+                            x: fBadgeX - 6,
+                            y: fBadgeY - 6,
+                            w: fBadgeW + 12,
+                            h: fBadgeH + 12
+                        };
+
+                        ctx.fillStyle = 'rgba(168, 85, 247, 0.25)';
+                        ctx.strokeStyle = 'rgba(168, 85, 247, 0.55)';
+                        ctx.lineWidth = 1;
+                        ctx.beginPath();
+                        ctx.roundRect(fBadgeX, fBadgeY, fBadgeW, fBadgeH, 3);
+                        ctx.fill();
+                        ctx.stroke();
+
+                        ctx.fillStyle = '#E9D5FF';
+                        ctx.font = '700 8.5px ui-sans-serif, system-ui, sans-serif';
+                        ctx.textAlign = 'center';
+                        ctx.fillText('▶', fBadgeX + (fBadgeW / 2), chartArea.top + 17.5);
+                    } else {
+                        chart._openhemsHistoryBadgeRect = null;
+                    }
                     ctx.textAlign = 'start';
 
                     // If there are forecast slots extending to the right of Nu, shade them
-                    if (histCount < totalSlots - 1) {
+                    if (!canNavigateToForecast && histCount < totalSlots - 1) {
                         const rightWidth = chartArea.right - xNu;
                         if (rightWidth > 0) {
                             ctx.fillStyle = 'rgba(15, 23, 42, 0.45)';
@@ -209,13 +387,6 @@
 
                     ctx.save();
 
-                    // 1. Darker shaded background for historical zone on the left
-                    const histWidth = xBoundary - chartArea.left;
-                    if (histWidth > 0) {
-                        ctx.fillStyle = 'rgba(3, 7, 18, 0.70)';
-                        ctx.fillRect(chartArea.left, chartArea.top, histWidth, chartArea.height);
-                    }
-
                     // 2. Crisp dashed vertical divider at the boundary
                     ctx.beginPath();
                     ctx.strokeStyle = 'rgba(168, 85, 247, 0.65)';
@@ -228,21 +399,35 @@
                     // 3. Clean, non-colliding pill markers
                     ctx.setLineDash([]);
 
-                    // Historical label on the left of boundary if enough space
-                    if (histWidth >= 55) {
-                        ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
-                        ctx.strokeStyle = 'rgba(148, 163, 184, 0.30)';
-                        const hBadgeW = Math.min(68, histWidth - 10);
-                        const hBadgeX = xBoundary - hBadgeW - 4;
+                    // Subtle clickable "◀" history navigation pill to the left of boundary line
+                    const canNavigate = Boolean(chart.canvas && FORECAST_TO_HISTORY_CANVAS_MAP[chart.canvas.id]);
+                    if (canNavigate) {
+                        bindHistoryBadgeClick(chart);
+                        const hBadgeW = 18;
+                        const hBadgeH = 16;
+                        const hBadgeX = Math.max(chartArea.left + 1, xBoundary - hBadgeW - 4);
+                        const hBadgeY = chartArea.top + 6;
+                        chart._openhemsHistoryBadgeRect = {
+                            x: hBadgeX - 6,
+                            y: hBadgeY - 6,
+                            w: hBadgeW + 12,
+                            h: hBadgeH + 12
+                        };
+
+                        ctx.fillStyle = 'rgba(168, 85, 247, 0.25)';
+                        ctx.strokeStyle = 'rgba(168, 85, 247, 0.55)';
+                        ctx.lineWidth = 1;
                         ctx.beginPath();
-                        ctx.roundRect(hBadgeX, chartArea.top + 6, hBadgeW, 16, 3);
+                        ctx.roundRect(hBadgeX, hBadgeY, hBadgeW, hBadgeH, 3);
                         ctx.fill();
                         ctx.stroke();
 
-                        ctx.fillStyle = '#94A3B8';
+                        ctx.fillStyle = '#E9D5FF';
                         ctx.font = '700 8.5px ui-sans-serif, system-ui, sans-serif';
                         ctx.textAlign = 'center';
-                        ctx.fillText('◀ 1U HIST', hBadgeX + (hBadgeW / 2), chartArea.top + 17.5);
+                        ctx.fillText('◀', hBadgeX + (hBadgeW / 2), chartArea.top + 17.5);
+                    } else {
+                        chart._openhemsHistoryBadgeRect = null;
                     }
 
                     // "NU ▶" marker tag to the right of boundary line
@@ -1037,6 +1222,7 @@
                 loadValidationOverlayChart();
                 loadDhwHistoryChart();
                 loadHeatingHistoryChart();
+                if (typeof loadBatteryHistoryChart === 'function') loadBatteryHistoryChart();
             }
             if (tabId === 'decisions') {
                 loadDecisionAuditLog();
@@ -1727,19 +1913,77 @@
         }
 
         function positionTooltipCustom(chart, tooltip, tooltipEl) {
-            const canvasRect = chart.canvas.getBoundingClientRect();
-            let left = canvasRect.left + tooltip.caretX + 16;
-            let top = canvasRect.top + tooltip.caretY - 30;
-            if (left + 300 > window.innerWidth) {
-                left = canvasRect.left + tooltip.caretX - 310;
+            const canvas = chart.canvas;
+            const canvasRect = canvas.getBoundingClientRect();
+            if (!canvas._openhemsPointerTrackBound) {
+                canvas._openhemsPointerTrackBound = true;
+                canvas.addEventListener('mousemove', (ev) => {
+                    canvas._lastPointerClientX = ev.clientX;
+                    canvas._lastPointerClientY = ev.clientY;
+                }, { passive: true });
             }
-            if (left < 10) left = 10;
-            if (top + 280 > window.innerHeight) {
-                top = window.innerHeight - 290;
+
+            const tipRect = tooltipEl.getBoundingClientRect();
+            const tipW = Math.ceil(tipRect.width) || tooltipEl.offsetWidth || 325;
+            const tipH = Math.ceil(tipRect.height) || tooltipEl.offsetHeight || 260;
+
+            const caretScreenX = canvasRect.left + (tooltip.caretX || 0);
+            const caretScreenY = canvasRect.top + (tooltip.caretY || 0);
+            const pointerX = (typeof canvas._lastPointerClientX === 'number' &&
+                Math.abs(canvas._lastPointerClientX - caretScreenX) < 90)
+                ? canvas._lastPointerClientX
+                : caretScreenX;
+
+            const chartArea = chart.chartArea || { left: 0, right: canvasRect.width || 600 };
+            const numLabels = Math.max(1, (chart.data && chart.data.labels && chart.data.labels.length) || 24);
+            const slotW = Math.max(12, (chartArea.right - chartArea.left) / numLabels);
+            // Half bar width + clearance so the hovered bar and mouse cursor stay 100% uncovered
+            const barHalfW = Math.max(12, Math.ceil(slotW * 0.60));
+            const barLeftScreen = Math.min(caretScreenX - barHalfW, pointerX - 10);
+            const barRightScreen = Math.max(caretScreenX + barHalfW, pointerX + 10);
+            const margin = 16;
+
+            const rightCandidate = barRightScreen + margin;
+            const leftCandidate = barLeftScreen - margin - tipW;
+
+            const fitsRight = (rightCandidate + tipW <= window.innerWidth - 10);
+            const fitsLeft = (leftCandidate >= 10);
+            const chartMidScreenX = canvasRect.left + (chartArea.left + chartArea.right) / 2;
+
+            let left;
+            let top = caretScreenY - 30;
+
+            if (fitsRight && (caretScreenX <= chartMidScreenX || !fitsLeft)) {
+                left = rightCandidate;
+            } else if (fitsLeft) {
+                left = leftCandidate;
+            } else if (fitsRight) {
+                left = rightCandidate;
+            } else {
+                const spaceRight = (window.innerWidth - 10) - barRightScreen;
+                const spaceLeft = barLeftScreen - 10;
+                if (spaceLeft >= spaceRight) {
+                    left = Math.max(8, Math.min(leftCandidate, window.innerWidth - tipW - 8));
+                } else {
+                    left = Math.max(8, Math.min(rightCandidate, window.innerWidth - tipW - 8));
+                }
+                const overlapsBarHorizontally = (left < barRightScreen + 6) && (left + tipW > barLeftScreen - 6);
+                if (overlapsBarHorizontally) {
+                    if (caretScreenY - tipH - 20 >= 8) {
+                        top = caretScreenY - tipH - 20;
+                    } else if (canvasRect.bottom + 8 + tipH <= window.innerHeight - 8) {
+                        top = canvasRect.bottom + 8;
+                    }
+                }
+            }
+
+            if (top + tipH > window.innerHeight - 10) {
+                top = window.innerHeight - tipH - 10;
             }
             if (top < 10) top = 10;
-            tooltipEl.style.left = `${left}px`;
-            tooltipEl.style.top = `${top}px`;
+
+            tooltipEl.style.left = `${Math.round(left)}px`;
+            tooltipEl.style.top = `${Math.round(top)}px`;
             tooltipEl.style.opacity = '1';
         }
 
@@ -1952,7 +2196,7 @@
         }
 
         // 1.6. Cost History Tooltip
-        function customCostHistoryTooltipHandler(context, netKwArr, netCostArr, pricesArr, exportPricesArr, intervalH) {
+        function customCostHistoryTooltipHandler(context, netKwArr, netCostArr, pricesArr, exportPricesArr, intervalH, predNetKwArr, predNetCostArr) {
             const { chart, tooltip } = context;
             const tooltipEl = createOrGetTooltipEl(chart);
             if (tooltip.opacity === 0 || !tooltip.body || !tooltip.dataPoints || tooltip.dataPoints.length === 0) {
@@ -1974,6 +2218,13 @@
             const netCostVal = (netCostArr && netCostArr[dataIndex] !== undefined) ? Number(netCostArr[dataIndex]) : 0.0;
             const isProfit = netCostVal < 0;
 
+            const showOverlay = Boolean(window.historyShowForecastOverlay);
+            const hasPredCost = showOverlay && predNetCostArr && predNetCostArr[dataIndex] !== undefined;
+            const predCostVal = hasPredCost ? Number(predNetCostArr[dataIndex]) : 0.0;
+            const predIsProfit = predCostVal < 0;
+            const hasPredKw = showOverlay && predNetKwArr && predNetKwArr[dataIndex] !== undefined;
+            const predKwVal = hasPredKw ? Number(predNetKwArr[dataIndex]) : 0.0;
+
             renderCustomTooltip(context, {
                 dotColor: 'bg-cyan-400',
                 intervalStr: intervalStr,
@@ -1981,7 +2232,9 @@
                 headerBadge: `<span class="text-[10px] font-mono font-bold px-2 py-0.5 rounded border ${!isProfit ? 'bg-red-950/80 border-red-800 text-red-300' : 'bg-emerald-950/80 border-emerald-800 text-emerald-300'}">${!isProfit ? 'Netto Kosten: +€' : 'Netto Baten: -€'}${Math.abs(netCostVal).toFixed(2)}</span>`,
                 rows: [
                     { type: 'bar', color: '#F59E0B', label: 'Netto Kosten', labelClass: 'text-slate-300 font-medium', val: `${!isProfit ? '+€' : '-€'}${Math.abs(netCostVal).toFixed(2)}`, valClass: `font-bold font-mono ${!isProfit ? 'text-amber-400' : 'text-emerald-400'}` },
+                    hasPredCost ? { type: 'dashed-line', color: '#C084FC', label: 'Voorspelde Kosten', labelClass: 'text-purple-300/90', val: `${!predIsProfit ? '+€' : '-€'}${Math.abs(predCostVal).toFixed(2)}`, valClass: 'font-bold font-mono text-purple-300' } : null,
                     { type: 'line', height: 2, width: 14, color: '#EF4444', label: 'Netto Verbruik', labelClass: 'text-slate-300 font-medium', val: `${netKwVal >= 0 ? '+' : ''}${netKwVal.toFixed(2)} kW`, valClass: `${netKwVal >= 0 ? 'text-red-400' : 'text-emerald-400'} font-bold`, extraVal: `<span class="text-slate-400 text-[10px]">(${netKwVal >= 0 ? '+' : ''}${netKwhVal.toFixed(2)} kWh)</span>` },
+                    hasPredKw ? { type: 'dashed-line', color: '#FDBA74', label: 'Voorspeld Netto', labelClass: 'text-orange-200/90', val: `${predKwVal >= 0 ? '+' : ''}${predKwVal.toFixed(2)} kW`, valClass: 'font-bold font-mono text-orange-300' } : null,
                     { type: 'line', height: 2, width: 14, color: '#3B82F6', label: 'EPEX Inkoop All-in', labelClass: 'text-slate-400', val: `€${pBuy.toFixed(4)}/kWh`, valClass: 'font-bold text-blue-300 font-mono', borderTop: true },
                     { type: 'dashed-line', color: '#06B6D4', label: 'EPEX Teruglevering', labelClass: 'text-slate-400', val: `€${pSell.toFixed(4)}/kWh`, valClass: 'font-bold text-cyan-300 font-mono' }
                 ]
@@ -2143,13 +2396,13 @@
                 const lastPred = window.__lastPredictionData;
                 const curPrice = (lastPred && lastPred.datasets && lastPred.datasets.prices_eur && lastPred.datasets.prices_eur[0]) || 0.28;
 
-                // Extract live DHW temp from badge/summary or fallback 49.2°C
+                // Extract live DHW temp from badge/summary
                 const dhwTankText = document.getElementById('live-dhw-metrics-sub')?.innerText || '';
                 const dhwMatch = dhwTankText.match(/Boilervat:\s*([\d.]+)\s*°C/);
-                const curTankTemp = dhwMatch ? parseFloat(dhwMatch[1]) : 49.2;
+                const curTankTemp = dhwMatch ? parseFloat(dhwMatch[1]) : null;
                 const minDhwTemp = 40.0;
-                const usableDhwDelta = Math.max(0.0, curTankTemp - minDhwTemp);
-                const storedThKwh = (350 * 1.163 * usableDhwDelta) / 1000.0;
+                const usableDhwDelta = curTankTemp !== null ? Math.max(0.0, curTankTemp - minDhwTemp) : 0.0;
+                const storedThKwh = curTankTemp !== null ? (350 * 1.163 * usableDhwDelta) / 1000.0 : 0.0;
                 const storedElKwh = storedThKwh / 3.1;
 
                 if (!d) {
@@ -2269,8 +2522,7 @@
                 if (document.getElementById('banner-text')) document.getElementById('banner-text').innerText = adv;
                 if (document.getElementById('analytics-banner-text')) document.getElementById('analytics-banner-text').innerText = adv;
                 if (document.getElementById('battery-status-banner')) document.getElementById('battery-status-banner').innerText = data.battery_status_msg;
-                if (document.getElementById('prediction-baseload-badge')) document.getElementById('prediction-baseload-badge').innerText = `Basislast: ${data.baseload_watts || 300} W`;
-                if (document.getElementById('tab-baseload-input')) document.getElementById('tab-baseload-input').value = data.baseload_watts || 300;
+                if (document.getElementById('prediction-baseload-badge')) document.getElementById('prediction-baseload-badge').innerText = `Basislast: Dynamisch`;
 
 // Dual Polarity Stacked Engine (Power Producers Aligned):
                 // - Above 0 axis: All consumers stacked together (Basislast, SWW, CV, Accu Laden)
@@ -2550,25 +2802,27 @@
                         labels: labels,
                         datasets: (() => {
                             const exportPricesArr = data.export_prices_eur || [];
+                            const priceSourcesArr = data.price_sources || [];
                             const ds = [
                                 {
                                     label: 'EPEX Inkoop All-in (€/kWh)',
                                     data: pricesArr,
                                     type: 'line',
-                                    borderColor: '#3B82F6',
+                                    borderColor: OpenHEMSTokens.colors.priceLine,
                                     backgroundColor: 'transparent',
                                     borderWidth: 1.5,
                                     pointRadius: 0,
                                     pointHoverRadius: 4,
                                     yAxisID: 'y1',
                                     tension: 0,
-                                    order: 0
+                                    order: 0,
+                                    segment: OpenHEMSTokens.getPriceLineSegment(priceSourcesArr)
                                 },
                                 {
                                     label: 'EPEX Teruglevering (€/kWh)',
                                     data: exportPricesArr,
                                     type: 'line',
-                                    borderColor: '#06B6D4',
+                                    borderColor: OpenHEMSTokens.colors.price,
                                     borderDash: [4, 4],
                                     backgroundColor: 'transparent',
                                     borderWidth: 1.5,
@@ -2576,7 +2830,8 @@
                                     pointHoverRadius: 4,
                                     yAxisID: 'y1',
                                     tension: 0,
-                                    order: 0
+                                    order: 0,
+                                    segment: OpenHEMSTokens.getExportPriceLineSegment(priceSourcesArr)
                                 },
                                 {
                                     label: 'Netto Verbruik (kW)',
@@ -2811,6 +3066,7 @@
                     if (costForecastChartInstance) costForecastChartInstance.destroy();
 
                     const exportPricesArr = data.export_prices_eur || [];
+                    const priceSourcesArr = data.price_sources || [];
                     window.__lastPredictionNetKw = netKw;
 
                     // Calculate Net Cost / Revenue per slot:
@@ -2858,8 +3114,22 @@
                                     label: 'Netto Kosten (€)',
                                     data: netCostEurArr,
                                     type: 'bar',
-                                    backgroundColor: 'rgba(245, 158, 11, 0.75)', // Amber 500 bar
-                                    borderColor: '#D97706',
+                                    backgroundColor: ctx => {
+                                        const i = ctx.dataIndex;
+                                        const src = priceSourcesArr[i];
+                                        if (src === 'stroomvoorspeller' || src === 'forecast') {
+                                            return 'rgba(148, 163, 184, 0.45)'; // Muted slate voor prognosekosten
+                                        }
+                                        return 'rgba(245, 158, 11, 0.75)'; // Amber 500 voor harde EPEX
+                                    },
+                                    borderColor: ctx => {
+                                        const i = ctx.dataIndex;
+                                        const src = priceSourcesArr[i];
+                                        if (src === 'stroomvoorspeller' || src === 'forecast') {
+                                            return '#94A3B8';
+                                        }
+                                        return '#D97706';
+                                    },
                                     borderWidth: 1,
                                     borderRadius: 3,
                                     yAxisID: 'yEur',
@@ -2883,20 +3153,21 @@
                                     label: 'EPEX Inkoop (€/kWh)',
                                     data: pricesArr,
                                     type: 'line',
-                                    borderColor: '#3B82F6', // Blue 500
+                                    borderColor: OpenHEMSTokens.colors.priceLine,
                                     backgroundColor: 'transparent',
-                                    borderWidth: 1.5,
+                                    borderWidth: 1.75,
                                     pointRadius: 0,
                                     pointHoverRadius: 4,
                                     tension: 0,
                                     yAxisID: 'yEur',
-                                    order: 2
+                                    order: 2,
+                                    segment: OpenHEMSTokens.getPriceLineSegment(priceSourcesArr)
                                 },
                                 {
                                     label: 'EPEX Teruglevering (€/kWh)',
                                     data: exportPricesArr,
                                     type: 'line',
-                                    borderColor: '#06B6D4', // Cyan 500
+                                    borderColor: OpenHEMSTokens.colors.price,
                                     borderDash: [4, 4],
                                     backgroundColor: 'transparent',
                                     borderWidth: 1.5,
@@ -2904,7 +3175,8 @@
                                     pointHoverRadius: 4,
                                     tension: 0,
                                     yAxisID: 'yEur',
-                                    order: 3
+                                    order: 3,
+                                    segment: OpenHEMSTokens.getExportPriceLineSegment(priceSourcesArr)
                                 }
                             ]
                         },
@@ -4107,17 +4379,15 @@
 
         function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
 
-        function onDhwMarginModeChange() {
-            const mode = document.getElementById('tab-dhw-margin-mode')?.value || 'p95';
-            const wrapMin = document.getElementById('wrapper-dhw-margin-min');
-            const wrapFactor = document.getElementById('wrapper-dhw-margin-factor');
-            const wrapHorizon = document.getElementById('wrapper-dhw-margin-horizon');
-            const wrapFixed = document.getElementById('wrapper-dhw-margin-fixed');
-
-            if (wrapMin) wrapMin.classList.toggle('hidden', mode === 'fixed');
-            if (wrapFactor) wrapFactor.classList.toggle('hidden', mode !== 'p95');
-            if (wrapHorizon) wrapHorizon.classList.toggle('hidden', mode !== 'p95');
-            if (wrapFixed) wrapFixed.classList.toggle('hidden', mode !== 'fixed');
+        function onDhwPolicyToggle() {
+            const adv = document.getElementById('tab-dhw-policy-advance-on');
+            const free = document.getElementById('tab-dhw-policy-free-on');
+            const advInput = document.getElementById('tab-dhw-policy-advance-margin');
+            const advMax = document.getElementById('tab-dhw-policy-advance-max');
+            const freeInput = document.getElementById('tab-dhw-policy-free-price');
+            if (advInput) advInput.disabled = !(adv && adv.checked);
+            if (advMax) advMax.disabled = !(adv && adv.checked);
+            if (freeInput) freeInput.disabled = !(free && free.checked);
         }
 
         async function loadDhwSettingsFromApi() {
@@ -4125,30 +4395,22 @@
                 const res = await fetch('./api/settings');
                 const data = await res.json();
                 if (data.status === 'success') {
-                    if (document.getElementById('tab-baseload-input') && data.baseload_watts) {
-                        document.getElementById('tab-baseload-input').value = data.baseload_watts;
+                    const pol = data.dhw_policy || {};
+                    const setVal = (id, v) => { const el = document.getElementById(id); if (el && v !== undefined && v !== null) el.value = v; };
+                    setVal('tab-dhw-policy-engine', pol.engine);
+                    setVal('tab-dhw-policy-preheat-margin', pol.preheat_margin_c);
+                    setVal('tab-dhw-policy-preheat-window', pol.preheat_window_hours);
+                    setVal('tab-dhw-policy-advance-max', pol.advance_max_start_temp_c);
+                    setVal('tab-dhw-policy-boost-max', pol.boost_max_start_temp_c);
+                    const advOn = document.getElementById('tab-dhw-policy-advance-on');
+                    if (advOn) advOn.checked = pol.advance_margin !== null && pol.advance_margin !== undefined;
+                    if (pol.advance_margin !== null && pol.advance_margin !== undefined) {
+                        setVal('tab-dhw-policy-advance-margin', Math.round(pol.advance_margin * 100));
                     }
-                    if (document.getElementById('tab-solar-cost-input') && data.solar_cost_eur_kwh) {
-                        document.getElementById('tab-solar-cost-input').value = Number(data.solar_cost_eur_kwh).toFixed(3);
-                    }
-                    const opt = data.dhw_optimizer || {};
-                    const cm = opt.comfort_margin || {};
-                    const modeEl = document.getElementById('tab-dhw-margin-mode');
-                    if (modeEl && cm.mode) modeEl.value = cm.mode;
-                    if (document.getElementById('tab-dhw-margin-min') && cm.min_margin_c !== undefined) {
-                        document.getElementById('tab-dhw-margin-min').value = cm.min_margin_c;
-                    }
-                    if (document.getElementById('tab-dhw-margin-factor') && cm.tap_stress_factor !== undefined) {
-                        document.getElementById('tab-dhw-margin-factor').value = cm.tap_stress_factor;
-                    }
-                    if (document.getElementById('tab-dhw-margin-horizon') && cm.horizon_hours !== undefined) {
-                        document.getElementById('tab-dhw-margin-horizon').value = cm.horizon_hours;
-                    }
-                    if (document.getElementById('tab-dhw-margin-fixed') && cm.fixed_margin_c !== undefined) {
-                        document.getElementById('tab-dhw-margin-fixed').value = cm.fixed_margin_c;
-                    }
-                    if (document.getElementById('tab-dhw-min-run') && data.dhw_optimizer && data.dhw_optimizer.min_run_slots !== undefined) {
-                        document.getElementById('tab-dhw-min-run').value = data.dhw_optimizer.min_run_slots;
+                    const freeOn = document.getElementById('tab-dhw-policy-free-on');
+                    if (freeOn) freeOn.checked = pol.free_price_eur_per_kwh !== null && pol.free_price_eur_per_kwh !== undefined;
+                    if (pol.free_price_eur_per_kwh !== null && pol.free_price_eur_per_kwh !== undefined) {
+                        setVal('tab-dhw-policy-free-price', pol.free_price_eur_per_kwh);
                     }
                     const bat = data.battery || {};
                     if (document.getElementById('tab-battery-nom-ch') && bat.nominal_charge_kw !== undefined) {
@@ -4169,31 +4431,26 @@
                     if (document.getElementById('tab-battery-min-dis-thresh') && bat.min_discharge_threshold_w !== undefined) {
                         document.getElementById('tab-battery-min-dis-thresh').value = bat.min_discharge_threshold_w;
                     }
-                    onDhwMarginModeChange();
+                    onDhwPolicyToggle();
                 }
             } catch (err) {
                 console.error('Error loading settings:', err);
             }
         }
 
-        async function saveDhwMarginFromTab() {
-            const mode = document.getElementById('tab-dhw-margin-mode')?.value || 'p95';
-            const minRun = parseInt(document.getElementById('tab-dhw-min-run')?.value || 2, 10);
-            const minM = parseFloat(document.getElementById('tab-dhw-margin-min')?.value || 0.2);
-            const factor = parseFloat(document.getElementById('tab-dhw-margin-factor')?.value || 1.15);
-            const horizon = parseFloat(document.getElementById('tab-dhw-margin-horizon')?.value || 8.0);
-            const fixedM = parseFloat(document.getElementById('tab-dhw-margin-fixed')?.value || 2.0);
-
+        async function saveDhwPolicyFromTab() {
+            const num = (id) => parseFloat(document.getElementById(id)?.value);
+            const advOn = document.getElementById('tab-dhw-policy-advance-on')?.checked;
+            const freeOn = document.getElementById('tab-dhw-policy-free-on')?.checked;
             const payload = {
-                dhw_optimizer: {
-                    min_run_slots: minRun,
-                    comfort_margin: {
-                        mode: mode,
-                        min_margin_c: minM,
-                        tap_stress_factor: factor,
-                        horizon_hours: horizon,
-                        fixed_margin_c: fixedM
-                    }
+                dhw_policy: {
+                    engine: document.getElementById('tab-dhw-policy-engine')?.value || 'daikin_first',
+                    preheat_margin_c: num('tab-dhw-policy-preheat-margin'),
+                    preheat_window_hours: num('tab-dhw-policy-preheat-window'),
+                    advance_margin: advOn ? num('tab-dhw-policy-advance-margin') / 100 : null,
+                    advance_max_start_temp_c: num('tab-dhw-policy-advance-max'),
+                    boost_max_start_temp_c: num('tab-dhw-policy-boost-max'),
+                    free_price_eur_per_kwh: freeOn ? num('tab-dhw-policy-free-price') : null
                 }
             };
 
@@ -4205,7 +4462,7 @@
                 });
                 const data = await res.json();
                 if (data.status === 'success') {
-                    alert(`Comfortmarge succesvol opgeslagen: ${mode.toUpperCase()} (min: ${minM}°C)`);
+                    alert('Tapwatersturing opgeslagen; het schema wordt opnieuw berekend.');
                     await fetch('./api/schedule/recalculate', { method: 'POST' });
                     if (typeof loadChartData === 'function') await loadChartData();
                     if (typeof loadElectricityPricesChart === 'function') await loadElectricityPricesChart();
@@ -4215,7 +4472,7 @@
                     alert('Fout bij opslaan: ' + (data.message || 'Onbekende fout'));
                 }
             } catch (err) {
-                console.error('Error saving DHW margin:', err);
+                console.error('Error saving DHW policy:', err);
                 alert('Netwerkfout bij opslaan: ' + err.message);
             }
         }
@@ -4454,7 +4711,7 @@
                         borderColor: ctx => {
                             const i = ctx.p0DataIndex;
                             if (priceSources[i] === 'stroomvoorspeller' || priceSources[i + 1] === 'stroomvoorspeller') {
-                                return '#818CF8'; // Softer indigo for model forecast
+                                return '#94A3B8'; // Grijstint (Slate 400) voor veronderstelde data
                             }
                             return '#3B82F6'; // Solid blue for verified EPEX
                         },
@@ -4488,7 +4745,7 @@
                         borderColor: ctx => {
                             const i = ctx.p0DataIndex;
                             if (priceSources[i] === 'stroomvoorspeller' || priceSources[i + 1] === 'stroomvoorspeller') {
-                                return '#67E8F9'; // Light cyan for forecast export
+                                return '#64748B'; // Muted slate voor forecast export
                             }
                             return '#06B6D4'; // Dark cyan for verified EPEX
                         },
@@ -4744,19 +5001,34 @@
                 }
             ];
 
-            if (comp === 'dhw' && validationDataCache.predicted && validationDataCache.predicted.dhw_demand) {
-                chartDatasets.push({
-                    label: 'Verwachte Warmtevraag (Aftap kWh_th)',
-                    data: validationDataCache.predicted.dhw_demand,
-                    borderColor: 'rgba(251, 146, 60, 0.40)',
-                    backgroundColor: 'rgba(251, 146, 60, 0.08)',
-                    borderWidth: 1.5,
-                    borderDash: [2, 3],
-                    fill: true,
-                    tension: 0.3,
-                    pointRadius: 0,
-                    pointHoverRadius: 4
-                });
+            if (comp === 'dhw') {
+                if (validationDataCache.actual && validationDataCache.actual.dhw_demand) {
+                    chartDatasets.push({
+                        label: 'Werkelijk Tapwaterverbruik (Aftap kW_th)',
+                        data: validationDataCache.actual.dhw_demand,
+                        borderColor: '#38BDF8',
+                        backgroundColor: 'rgba(56, 189, 248, 0.20)',
+                        borderWidth: 2,
+                        fill: true,
+                        tension: 0.25,
+                        pointRadius: 0,
+                        pointHoverRadius: 4
+                    });
+                }
+                if (validationDataCache.predicted && validationDataCache.predicted.dhw_demand) {
+                    chartDatasets.push({
+                        label: 'Verwachte Warmtevraag (Aftap kW_th)',
+                        data: validationDataCache.predicted.dhw_demand,
+                        borderColor: 'rgba(251, 146, 60, 0.55)',
+                        backgroundColor: 'rgba(251, 146, 60, 0.08)',
+                        borderWidth: 1.5,
+                        borderDash: [2, 3],
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 0,
+                        pointHoverRadius: 4
+                    });
+                }
             }
 
             validationOverlayChartInstance = new Chart(ctx, {
@@ -4832,7 +5104,40 @@
             });
         }
 
+        window.historyShowForecastOverlay = (typeof localStorage !== 'undefined' && localStorage.getItem('openhems_history_forecast_overlay') === 'true');
+
+        function syncHistoryForecastOverlayButton() {
+            const btn = document.getElementById('btn-history-forecast-overlay');
+            const chk = document.getElementById('history-forecast-overlay-check');
+            const active = Boolean(window.historyShowForecastOverlay);
+            if (btn) {
+                btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+                btn.className = active
+                    ? 'px-2.5 py-1 rounded-lg transition font-medium text-xs font-mono border border-purple-500/80 bg-purple-950/70 text-purple-200 shadow flex items-center gap-1.5'
+                    : 'px-2.5 py-1 rounded-lg transition font-medium text-xs font-mono border border-slate-700 bg-slate-900 text-slate-300 hover:text-white hover:border-purple-500/60 flex items-center gap-1.5';
+            }
+            if (chk) {
+                chk.className = active
+                    ? 'w-3.5 h-3.5 rounded border border-purple-400 bg-purple-600 flex items-center justify-center text-[9px] text-white font-bold transition'
+                    : 'w-3.5 h-3.5 rounded border border-slate-600 flex items-center justify-center text-[9px] text-transparent transition';
+            }
+        }
+
+        function toggleHistoryForecastOverlay() {
+            window.historyShowForecastOverlay = !window.historyShowForecastOverlay;
+            try {
+                if (typeof localStorage !== 'undefined') {
+                    localStorage.setItem('openhems_history_forecast_overlay', window.historyShowForecastOverlay ? 'true' : 'false');
+                }
+            } catch (e) {}
+            syncHistoryForecastOverlayButton();
+            refreshAllHistoryCharts();
+        }
+        window.toggleHistoryForecastOverlay = toggleHistoryForecastOverlay;
+        window.syncHistoryForecastOverlayButton = syncHistoryForecastOverlayButton;
+
         async function loadPowerProducersChart() {
+            syncHistoryForecastOverlayButton();
             const canvas = document.getElementById('powerProducersChart');
             if (!canvas) return;
             
@@ -5008,40 +5313,6 @@
                         borderRadius: 2,
                         order: 4
                     });
-
-                    // 5. Geplande Zonne-forecast curve (Gele stippellijn)
-                    if (data.solar_forecast_negative && data.solar_forecast_negative.length > 0) {
-                        datasets.push({
-                            label: 'Zon Voorspelling (kW)',
-                            data: toKwNeg(data.solar_forecast_negative),
-                            type: 'line',
-                            borderColor: '#FACC15',
-                            borderDash: [5, 4],
-                            backgroundColor: 'transparent',
-                            borderWidth: 1.8,
-                            pointRadius: 0,
-                            pointHoverRadius: 4,
-                            tension: 0.25,
-                            order: 0
-                        });
-                    }
-
-                    // 6. Gepland Warmtepomp Stookprofiel (Cyaan getrapte contour)
-                    if (data.hp_plan && data.hp_plan.length > 0) {
-                        datasets.push({
-                            label: 'WP Gepland (kW)',
-                            data: toKw(data.hp_plan),
-                            type: 'line',
-                            borderColor: '#38BDF8',
-                            borderDash: [4, 4],
-                            stepped: true,
-                            backgroundColor: 'transparent',
-                            borderWidth: 1.8,
-                            pointRadius: 0,
-                            pointHoverRadius: 4,
-                            order: 0
-                        });
-                    }
                 } else {
                     // === LIJN (LINE / AREA) MODUS in kW ===
                     datasets = [
@@ -5100,6 +5371,80 @@
                             order: 5
                         }
                     ];
+                }
+
+                // === VOORSPELLING OVERLAY OP VERBRUIKSHISTORIE (1u of 15m) ===
+                const showForecastOverlay = Boolean(window.historyShowForecastOverlay);
+                const predVerbruikKw = toKw(data.predicted_verbruik);
+                const predNetKw = toKw(data.predicted_net_w);
+                const predSolarNegKw = toKwNeg(data.predicted_solar_negative || data.solar_forecast_negative);
+                const predHpPlanKw = toKw(data.hp_plan);
+
+                if (showForecastOverlay) {
+                    if (predVerbruikKw.length > 0) {
+                        datasets.push({
+                            id: 'hist_pred_verbruik',
+                            label: 'Voorspeld Verbruik (kW)',
+                            data: predVerbruikKw,
+                            type: 'line',
+                            borderColor: '#FDBA74',
+                            borderDash: [5, 4],
+                            backgroundColor: 'transparent',
+                            borderWidth: 2.0,
+                            pointRadius: 0,
+                            pointHoverRadius: 4,
+                            tension: 0.25,
+                            order: 0
+                        });
+                    }
+                    if (predNetKw.length > 0) {
+                        datasets.push({
+                            id: 'hist_pred_net',
+                            label: 'Voorspeld Netto (kW)',
+                            data: predNetKw,
+                            type: 'line',
+                            borderColor: '#C084FC',
+                            borderDash: [4, 4],
+                            backgroundColor: 'transparent',
+                            borderWidth: 1.8,
+                            pointRadius: 0,
+                            pointHoverRadius: 4,
+                            tension: 0.25,
+                            order: 0
+                        });
+                    }
+                    if (predSolarNegKw.length > 0) {
+                        datasets.push({
+                            id: 'hist_pred_solar',
+                            label: 'Zon Voorspelling (kW)',
+                            data: predSolarNegKw,
+                            type: 'line',
+                            borderColor: '#FACC15',
+                            borderDash: [5, 4],
+                            backgroundColor: 'transparent',
+                            borderWidth: 2.0,
+                            pointRadius: 0,
+                            pointHoverRadius: 4,
+                            tension: 0.25,
+                            order: 0
+                        });
+                    }
+                    if (predHpPlanKw.length > 0) {
+                        datasets.push({
+                            id: 'hist_pred_hp',
+                            label: 'WP Gepland (kW)',
+                            data: predHpPlanKw,
+                            type: 'line',
+                            borderColor: '#38BDF8',
+                            borderDash: [4, 4],
+                            stepped: true,
+                            backgroundColor: 'transparent',
+                            borderWidth: 1.8,
+                            pointRadius: 0,
+                            pointHoverRadius: 4,
+                            order: 0
+                        });
+                    }
                 }
 
                 // Symmetrische 0-as schaling in zuivere kW
@@ -5357,69 +5702,117 @@
                     }
 
                     // Symmetrical bounds
-                    let maxAbsCost = Math.max(...histNetCostEurArr.map(Math.abs), 0.10);
+                    const predNetCostEurArr = (data.predicted_net_cost_eur || []).map(v => Number(Number(v).toFixed(3)));
+                    let maxAbsCost = Math.max(
+                        ...histNetCostEurArr.map(Math.abs),
+                        ...(showForecastOverlay ? predNetCostEurArr.map(Math.abs) : []),
+                        0.10
+                    );
                     let maxAbsPrice = Math.max(...histPrices.map(Math.abs), ...histExportPrices.map(Math.abs), 0.30);
                     let maxUnifiedEur = Math.max(maxAbsCost, maxAbsPrice, 0.40);
                     maxUnifiedEur = Math.ceil(maxUnifiedEur * 10) / 10;
+
+                    const costHistDatasets = [
+                        {
+                            id: 'cost_hist_net_eur',
+                            label: 'Netto Kosten (€)',
+                            data: histNetCostEurArr,
+                            type: 'bar',
+                            backgroundColor: 'rgba(245, 158, 11, 0.75)', // Amber 500 bar
+                            borderColor: '#D97706',
+                            borderWidth: 1,
+                            borderRadius: 3,
+                            yAxisID: 'yEur',
+                            order: 4
+                        },
+                        {
+                            id: 'cost_hist_net_kw',
+                            label: 'Netto Verbruik (kW)',
+                            data: netKw,
+                            type: 'line',
+                            borderColor: '#EF4444', // Red 500
+                            backgroundColor: 'transparent',
+                            fill: false,
+                            borderWidth: 1.5,
+                            pointRadius: 0,
+                            pointHoverRadius: 4,
+                            tension: 0.25,
+                            yAxisID: 'y',
+                            order: 1
+                        },
+                        {
+                            id: 'cost_hist_epex_buy',
+                            label: 'EPEX Inkoop All-in (€/kWh)',
+                            data: histPrices,
+                            type: 'line',
+                            borderColor: '#3B82F6', // Blue 500
+                            backgroundColor: 'transparent',
+                            borderWidth: 1.5,
+                            pointRadius: 0,
+                            pointHoverRadius: 4,
+                            tension: 0,
+                            yAxisID: 'yEur',
+                            order: 2
+                        },
+                        {
+                            id: 'cost_hist_epex_sell',
+                            label: 'EPEX Teruglevering (€/kWh)',
+                            data: histExportPrices,
+                            type: 'line',
+                            borderColor: '#06B6D4', // Cyan 500
+                            borderDash: [4, 4],
+                            backgroundColor: 'transparent',
+                            borderWidth: 1.5,
+                            pointRadius: 0,
+                            pointHoverRadius: 4,
+                            tension: 0,
+                            yAxisID: 'yEur',
+                            order: 3
+                        }
+                    ];
+
+                    if (showForecastOverlay) {
+                        if (predNetCostEurArr.length > 0) {
+                            costHistDatasets.push({
+                                id: 'cost_hist_pred_eur',
+                                label: 'Voorspelde Kosten (€)',
+                                data: predNetCostEurArr,
+                                type: 'line',
+                                borderColor: '#C084FC',
+                                borderDash: [5, 4],
+                                backgroundColor: 'transparent',
+                                borderWidth: 2.0,
+                                pointRadius: 0,
+                                pointHoverRadius: 4,
+                                tension: 0.25,
+                                yAxisID: 'yEur',
+                                order: 0
+                            });
+                        }
+                        if (predNetKw.length > 0) {
+                            costHistDatasets.push({
+                                id: 'cost_hist_pred_kw',
+                                label: 'Voorspeld Netto (kW)',
+                                data: predNetKw,
+                                type: 'line',
+                                borderColor: '#FDBA74',
+                                borderDash: [4, 4],
+                                backgroundColor: 'transparent',
+                                borderWidth: 1.8,
+                                pointRadius: 0,
+                                pointHoverRadius: 4,
+                                tension: 0.25,
+                                yAxisID: 'y',
+                                order: 0
+                            });
+                        }
+                    }
 
                     const costHistConfig = {
                         type: 'bar',
                         data: {
                             labels: data.labels,
-                            datasets: [
-                                {
-                                    label: 'Netto Kosten (€)',
-                                    data: histNetCostEurArr,
-                                    type: 'bar',
-                                    backgroundColor: 'rgba(245, 158, 11, 0.75)', // Amber 500 bar
-                                    borderColor: '#D97706',
-                                    borderWidth: 1,
-                                    borderRadius: 3,
-                                    yAxisID: 'yEur',
-                                    order: 4
-                                },
-                                {
-                                    label: 'Netto Verbruik (kW)',
-                                    data: netKw,
-                                    type: 'line',
-                                    borderColor: '#EF4444', // Red 500
-                                    backgroundColor: 'transparent',
-                                    fill: false,
-                                    borderWidth: 1.5,
-                                    pointRadius: 0,
-                                    pointHoverRadius: 4,
-                                    tension: 0.25,
-                                    yAxisID: 'y',
-                                    order: 1
-                                },
-                                {
-                                    label: 'EPEX Inkoop All-in (€/kWh)',
-                                    data: histPrices,
-                                    type: 'line',
-                                    borderColor: '#3B82F6', // Blue 500
-                                    backgroundColor: 'transparent',
-                                    borderWidth: 1.5,
-                                    pointRadius: 0,
-                                    pointHoverRadius: 4,
-                                    tension: 0,
-                                    yAxisID: 'yEur',
-                                    order: 2
-                                },
-                                {
-                                    label: 'EPEX Teruglevering (€/kWh)',
-                                    data: histExportPrices,
-                                    type: 'line',
-                                    borderColor: '#06B6D4', // Cyan 500
-                                    borderDash: [4, 4],
-                                    backgroundColor: 'transparent',
-                                    borderWidth: 1.5,
-                                    pointRadius: 0,
-                                    pointHoverRadius: 4,
-                                    tension: 0,
-                                    yAxisID: 'yEur',
-                                    order: 3
-                                }
-                            ]
+                            datasets: costHistDatasets
                         },
                         options: {
                             responsive: true,
@@ -5430,7 +5823,7 @@
                                 tooltip: {
                                     enabled: false,
                                     external: function(context) {
-                                        customCostHistoryTooltipHandler(context, netKw, histNetCostEurArr, histPrices, histExportPrices, intervalH);
+                                        customCostHistoryTooltipHandler(context, netKw, histNetCostEurArr, histPrices, histExportPrices, intervalH, predNetKw, predNetCostEurArr);
                                     }
                                 }
                             },
@@ -5494,12 +5887,19 @@
                     window.costHistoryChartInstance = costHistoryChartInstance;
 
                     // Render standardized Legend Chips
-                    OpenHEMSUI.renderLegend('cost-history-legend', [
+                    const costHistLegendItems = [
                         { type: 'bar', color: '#F59E0B', label: 'Netto Kosten (€)' },
                         { type: 'line', color: '#EF4444', label: 'Netto Verbruik (kW)' },
                         { type: 'line', color: '#3B82F6', label: 'EPEX Inkoop All-in (€/kWh)' },
                         { type: 'dashed', color: '#22D3EE', label: 'EPEX Teruglevering (€/kWh)', bold: false }
-                    ]);
+                    ];
+                    if (showForecastOverlay) {
+                        costHistLegendItems.push(
+                            { type: 'dashed', color: '#C084FC', label: 'Voorspelde Kosten (€)', bold: false },
+                            { type: 'dashed', color: '#FDBA74', label: 'Voorspeld Netto (kW)', bold: false }
+                        );
+                    }
+                    OpenHEMSUI.renderLegend('cost-history-legend', costHistLegendItems);
                 }
             } catch (err) {
                 console.error('Failed to load power producers chart:', err);
@@ -6135,6 +6535,7 @@
                 const solarNegArr = data.datasets.solar_kw_neg || [];
                 const netPowerArr = data.datasets.net_power_kw || [];
                 const pricesArr = data.datasets.prices_eur || [];
+                const priceSourcesArr = data.price_sources || [];
 
                 // Calculate symmetric Y-axis boundary centered on zero
                 const maxCons = Math.max(0.1, ...unallocArr.map((u, i) => u + (heatingArr[i] || 0) + (boilerArr[i] || 0)));
@@ -6152,12 +6553,13 @@
                                 data: pricesArr,
                                 type: 'line',
                                 yAxisID: 'y1',
-                                borderColor: OpenHEMSTokens.colors.price,
+                                borderColor: OpenHEMSTokens.colors.priceLine,
                                 backgroundColor: 'transparent',
                                 borderWidth: 1.75,
                                 tension: 0.25,
                                 pointRadius: 0,
-                                order: 1
+                                order: 1,
+                                segment: OpenHEMSTokens.getPriceLineSegment(priceSourcesArr)
                             },
                             {
                                 label: 'Netto Netafname',

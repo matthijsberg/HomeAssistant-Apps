@@ -10,6 +10,98 @@ and this project adheres to our **4-Tier Semantic Versioning Specification**:
 
 ---
 
+## [0.108.22] - 2026-11-09
+
+## What’s changed
+
+## 🚀 Features
+- 🚀 Added actual DHW thermal draw-off (`Werkelijk Tapwaterverbruik (Aftap kW_th)`) overlay to the Model Validation (`#calibration` -> Tapwater) chart alongside expected thermal demand.
+- 🚀 Added automated daily calibration of the 7x96 DHW tap water demand matrix (`tap_demand_profile_96` and `dhw_profile_96_quarters`) inside `retrain_from_openhems()` using exponential recency weighting (3-week half-life) and a 2-to-3 week repetition streak boost (>80% adaptation after 3 consecutive weekly occurrences).
+
+## 🐛 Bug fixes
+- 🐛 Included the `"select"` domain in `fetch_ha_entities()` and prioritized `select.daily_energy_usage_sums_wp` as the primary deterministic state source in `DaikinP1P2StateClassifier` (eliminating power-threshold heuristics and preventing DHW runs from polluting CV heating telemetry).
+- 🐛 Extended MQTT state snapshot retention for `P1P2/*` topics to 3600s and normalized HA state dict extraction in `DaikinP1P2StateClassifier`.
+
+## 🧰 Maintenance
+- 🧰 Backfilled and deterministically re-classified 20,960 historical heat pump telemetry points in InfluxDB using `select.daily_energy_usage_sums_wp` state history.
+
+## [0.108.0] — 2026-10-13 (Ruimteverwarming: gefit gebouwmodel, Daikin in de lus, gemeten COP)
+
+De planner voorspelt nu wat de Daikin met het huis doet, in plaats van zelf een vermogensschema op te leggen. Onderbouwing en cijfers: [space-heating-model](knowledge/architecture/space-heating-model.md).
+
+- **Gebouwmodel gefit op winter 2025–26 (Madoka als kamer):** kamer 12,8 kWh/K, vloer 3,75 kWh/K, vloer→kamer 0,85 K/kW, 77 % van de warmte via de vloer (rest via de radiatoren), 0,68 kW interne warmte, zon via instraling. Voorheen vloer 13,2 kWh/K, lucht 3,2 kWh/K en 0,08 K/kW. Voorspelfout Madoka op 6 uur: 0,55 K (was 1,44 K).
+- **Daikin in de lus:** de warmteafgifte volgt uit buitentemperatuur, het verschil setpoint − Madoka en de vloertemperatuur (gefit in gesloten lus). Vervangen: de vermogenscurve met opstartboost en afbouw, de gesimuleerde thermostaat met 2 uur minimale looptijd, en de afknijping tot 0,85 kW bij zacht spitsadvies (fysiek is dat gewoon SG2).
+- **Gemeten COP:** warmte/stroom per buitentemperatuur inclusief ontdooien (2,4 bij −2 °C tot 5,5 bij 14 °C) in plaats van Carnot.
+- **Voorverwarmen per spitsblok:** de goedkoopste van 0–4 uur +1 K setpoint vooraf, met een comfortboete onder doel − 0,6 K; "niet voorverwarmen" doet altijd mee en wint tenzij voorverwarmen minstens € 0,05 bespaart. De vaste heuristieken (nachtdal 02:00–05:30, zon-kandidaten) zijn vervallen.
+- **Replay van de planner over de winter (100 plannen, 24 uur vooruit):** 26,2 kWh stroom per dag gepland tegen 26,4 kWh gemeten (oude policy 16,7 kWh); fout per plan 7,0 kWh (was 11,6).
+- **Grafiek- en integriteitscontract:** de maximale stookduur van 8 uur in een grafiekblok is vervallen; de Daikin stookt ook 9+ uur aan één stuk. Stoken binnen een spitsblok blijft verboden.
+- **Parameters:** de policy leest alleen nog `ua_base_w_per_k` en `c_wind_w_per_k_ms`; `floor_capacity_kwh_per_k`, `c_solar_pv_ratio` en `modulation_curve` worden genegeerd.
+
+## [0.107.7] — 2026-10-12 (Vloertoestand-schatter, wintervalidatie & kamersetpoint)
+
+Een eerste versie van de schatter en de numerieke fix zat al in 0.107.6; deze release kalibreert ze op winter 2025–26 en herstelt de CV-detectie.
+
+De planner start elke simulatie vanuit de vloertemperatuur. Die werd tot nu toe direct uit de verdelersensoren gehaald: tijdens het stoken is dat aanvoerwater (ruim 1 K te warm), daarbuiten werd hij opgetild naar `kamer − 0,2`. Hetzelfde huis gaf zo per minuut een ander plan. Onderbouwing: [floor-state-estimation](knowledge/architecture/floor-state-estimation.md).
+
+- **Vloertoestand-schatter (`layer2_calibration/floor_state_estimator.py`):** de verdelerpomp draait altijd, dus 60 minuten na de laatste CV-warmte leest de verdeler de dekvloer zelf. Tijdens het stoken wordt de wateroffset (0,18 K per kW warmte, mediaan van 114 stops afgelopen winter) eraf gehaald en uitgemiddeld; overgangen worden overbrugd met de vorige schatting, die zonder CV-warmte langzaam naar de Madoka-temperatuur afkoelt. Elke waarde draagt een kwaliteitsvlag. Replay winter 2025–26: gemiddelde afwijking +0,10 K (oude logica +0,28 K), 90 % van de fouten onder 0,26 K (was 0,46 K).
+- **Compressor beslist, niet de warmteafgifte:** de P1P2-warmteafgifte bleef afgelopen winter in 89 % van de stilstandminuten op een oude waarde staan (tot 23 uur op −3,7 kW). CV-warmte telt alleen als de compressor draait en de driewegklep op CV staat.
+- **Uitlezing (`read_floor_circuit` in `integrations/daikin_altherma/reader.py`):** gebruikt de driewegklep en niet de tapwatervraag om CV en tapwater te onderscheiden; de vraag stond in 9 % van de CV-minuten aan.
+- **Kamersetpoint via `climate.hc_room_room_heating`:** vloerbuffer-voorverwarming leest en schrijft het setpoint van het ruimteverwarmingscircuit van de Daikin (in stappen van 0,5 °C) in plaats van `climate.woonkamer_climate_daikin`. De kamertemperatuur komt alleen van de Madoka; de terugval op de SCO2-sensor (1,4 K lager) is verwijderd.
+- **Numerieke fix (`SpaceHeatingPolicy`):** de vloer/kamer-simulatie rekent met deelstappen van maximaal 10 % van de snelste tijdconstante en rondt de toestand niet meer af. Voorheen kon de kamer in één kwartier warmer worden dan de vloer die hem verwarmde, verdwenen warmtestromen onder ~0,26 kW, en verschilden 15-min en 1-uurs planning tot 3,9 K.
+- **Bekende beperking:** `R_FLOOR_AIR_K_PER_KW = 0,08` blijft voorlopig staan. Een warme vloer stroomt in het model daardoor nog binnen een kwartier de kamer in. Een fit op de winter (zie de knowledge-doc) geeft R ≈ 0,83 K/kW, vloer 3,9 kWh/K, kamer 12,5 kWh/K; die parameters moeten nog in de policy worden overgenomen.
+
+## [0.107.0] — 2026-10-11 (Daikin-first Tapwatersturing — ADR-006)
+
+De tapwatersturing is vereenvoudigd: de Daikin regelt het boilervat zelf (stookt van 40 naar 50 °C) en Open HEMS grijpt alleen in waar dat loont of nodig is, met precies twee doeltemperaturen (50 en 60 °C). Onderbouwing en backtest: [ADR-006](docs/adr/ADR-006-daikin-first-dhw-policy.md); wat niet werkte: [DHW_WAT_NIET_WERKTE.md](docs/DHW_WAT_NIET_WERKTE.md).
+
+- **Nieuwe planning (`layer3_scheduling/dhw_policy.py`):** één getal per kwartier, de warmteprijs (stroomprijs gedeeld door het rendement van de warmtepomp bij die buitentemperatuur). Regels: spitsblok, voorverwarmen vóór een spits als het vat anders onder 41 °C zakt, doorstoken naar 60 °C bij gratis of duidelijk goedkopere warmte, eerder stoken naar 50 °C als warmte nu minstens 10 % goedkoper is. Geen berekende tussendoelen meer.
+- **Planner (`CentralPlanner`):** gebruikt standaard Daikin-first. De oude optimizer (dynamische programmering) blijft als terugvaloptie via `dhw_policy.engine = "dp"` tot hij verdwijnt (WP5).
+- **Vangnet in de aansturing (`DhwRunSupervisor`):** de modus bepaalt het doel (geforceerd aan = 50 °C, maximaal aan = 60 °C); geen her-armen naar hogere plandoelen meer (dat gaf doelkruip). Nieuw: wordt na 10 minuten "geforceerd aan" (Smart Grid-stand 4) geen tapwaterverwarming gemeten, dan wordt losgelaten, de centrale verwarming hersteld en 60 minuten gewacht. Op 2026-10-10 bleef bij een voedingsstoring van de warmtepomp "geforceerd aan" met de centrale verwarming uit urenlang staan.
+- **Instellingen:** `/api/settings` kent nu `dhw_policy` (strenge controle: ongeldige waarden geven een foutmelding en worden niet opgeslagen); `dhw_optimizer` is verouderd. Webinterface: blok "Tapwatersturing (Daikin-first)" vervangt de comfortmarge.
+- **Uitleg:** één zin per beslissing met de warmteprijzen; runs op een volgende dag tonen "morgen".
+- **Backtest (`scripts/backtest_dhw_policies.py`):** closed-loop vergelijking op echte prijzen en telemetrie (sep–okt 2026, januari 2026).
+- **Tests:** de instellingentests schrijven niet meer in de live configuratie; golden snapshot 2026-09-12 bewust bijgewerkt (doel 60 °C om 12:00–13:00 op zonne-overschot in plaats van 58,5 °C om 10:15–11:45).
+
+## [0.106.1] — 2026-10-10 (Dynamische Basislast & Zonnestroom Waardering)
+
+- **Verwijder Statische Instellingen:** Handmatige configuratie van continue basislast ('baseload_watts') en zonnestroom afschrijvingsprijs ('solar_cost_eur_kwh') verwijderd uit GUI en configuratie.
+- **100% Dynamische Basislast:** Achtergrondbelasting volgt nu structureel het zelflerende 7x96 profiel (Laag 2 calibratie).
+- **100% Dynamische Zonnestroom Waardering:** Zonnestroomwaarde gelijkgesteld aan actuele EPEX verkoopwaarde (opportunity cost per kwartier).
+- **Tariefformule Gecorrigeerd:** Uitsluiten van dubbele btw op belasting en opslag voor Stroomvoorspeller feed.
+
+## [0.106.0] — 2026-10-10 (Control Logic Overhaul & Layer 4 State Supervision)
+
+Comprehensive resolution of findings documented in [Control Logic Review (2026-10-09)](docs/reviews/2026-10-09-control-logic-review.md):
+
+### Concurrency & Planning Architecture
+- **Single-Writer Planning Lock (`api/context.py`):** Serialized planning lock covering full compute and publish cycles; non-blocking HTTP GET readers consume current PlanStore; cache age verified via monotonic clocks (`time.monotonic()`).
+- **PlanStore Immutability (`layer3_scheduling/plan_store.py`):** Published plans stored and returned via deep-copies to eliminate in-place mutations by presentation layers.
+- **Purely Observable Evaluator (`layer3_scheduling/plan_decision_evaluator.py`):** Stripped of actuator mutations; Layer 3 strictly observes and plans.
+
+### Layer 4 Control Supervision
+- **In-Flight Run Supervisor (`layer4_control/dhw_run_supervisor.py`):** Single designated owner of in-flight DHW state, enforcing per-slot DP target temperatures, telemetry-only run detection (3-way valve + compressor power, zero relay state feedback), bounded expiry (45–180 min), and immediate release at target temperature.
+- **Fail-Safe Dispatch Guard (`layer4_control/dispatch_guard.py`):** Timestamp-based slot matching, safe-mode fallback to SG2 upon stale plans (>15 min) or missing sensor data, and heartbeat pulse generation.
+- **Actuator State Ownership (`layer4_control/dispatch_state.py`):** Persisted ownership flags in `/config/open_hems_dispatch_state.json`. CV master switch is only restored if Open HEMS forced it off; user thermostat setpoints are adopted as new baselines.
+- **Heartbeat & Dead-Man Automation (`ha/automations/openhems_dispatch_deadman.yaml`):** High-reliability fail-safe automation alerting and reverting relays to SG2 if daemon heartbeat stops for >10 minutes.
+
+### Physical Model & Calibration Hardening
+- **Rank-Checked Multi-Variable Regression (`layer2_calibration/learned_forecaster.py`):** Replaced degenerate 3D OLS with robust `[ΔT, E_pv, 1]` fit; zero synthetic constants; atomic locked parameter updates via `layer2_calibration/params_store.py`.
+- **OKF v0.2 Knowledge Bundle (`knowledge/`):** Added complete formal documentation and invariant specs validated via `scripts/validate.sh`.
+
+---
+
+## [0.105.1] — 2026-10-09 (Powerpeers Dynamisch Contract & Tariefpariteit)
+
+### Tarieven & Energieprijzen (1-op-1 Pariteit met Powerpeers App)
+- **Dynamische Leveranciersopslag / Inkoopvergoeding Geïntegreerd**:
+  - Open HEMS voegt nu automatisch de Powerpeers inkoopvergoeding (`€0,0100/kWh`) toe aan de EnergyZero publieke Day-Ahead feed (`all_in_with_vat`).
+  - Eerder toonde Open HEMS de kale EnergyZero feed (spotprijs + wettelijke energiebelasting zonder marge), waardoor er een systematisch verschil van exact ~1 cent/kWh zat tussen Open HEMS en de Powerpeers app.
+  - Prijzen in Open HEMS matchen nu exact met de factuur en de Powerpeers app (bijv. 04:00-04:15: exact €0,218/kWh, daggemiddelde: €0,23/kWh, piek 08:00: €0,33/kWh, dal 15:00: €0,17/kWh).
+- **Consistente Stroomvoorspeller & EPEX Tariefformule**:
+  - `fetch_stroomvoorspeller_tariffs_cached()` en `get_epex_tariffs_cached()` hanteren dezelfde berekening: `(spot * 1.21) + statutory_tax + supplier_markup`.
+
+---
+
 ## [0.105.0] — 2026-10-09 (Definitieve Relay-Only Hardening voor Boilervat DHW)
 
 ### Besturing & Architectuur (Strikte Relais-Only Invariant)

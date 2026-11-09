@@ -8,11 +8,12 @@ AMS_TZ = ZoneInfo("Europe/Amsterdam")
 from pathlib import Path
 
 from api.context import (
-    ensure_active_canonical_plan, GLOBAL_MODEL
+    ensure_active_canonical_plan, GLOBAL_MODEL, GLOBAL_DHW_MODEL
 )
 from api.secrets_store import (
     PARAMS_FILE, load_json, save_json
 )
+from layer2_calibration.params_store import update_params
 
 def handle_get(handler, path: str, qp: dict) -> bool:
     if path == "/api/model/recommendations":
@@ -71,6 +72,12 @@ def handle_get(handler, path: str, qp: dict) -> bool:
                             r["current_value"] = act
                             r["proposed_value"] = act
                             r["drift_pct"] = 0.0
+                    elif pid == "c_solar_pv_ratio":
+                        act = p_active.get("building", {}).get("c_solar_pv_ratio")
+                        if act is not None:
+                            r["current_value"] = act
+                            r["proposed_value"] = act
+                            r["drift_pct"] = 0.0
             handler._send_json(recs_dict)
         else:
             handler._send_json({"status": "empty", "recommendations": []})
@@ -107,6 +114,9 @@ def handle_get(handler, path: str, qp: dict) -> bool:
         days = 120
         try:
             res = GLOBAL_MODEL.retrain_from_openhems(days_history=days)
+            if GLOBAL_DHW_MODEL:
+                GLOBAL_DHW_MODEL.profile = GLOBAL_DHW_MODEL._load_profile()
+            ensure_active_canonical_plan(force_refresh=True)
             handler._send_json(res)
         except Exception as e:
             handler._send_json({"status": "error", "message": str(e)}, 500)
@@ -184,16 +194,16 @@ def handle_get(handler, path: str, qp: dict) -> bool:
 def handle_post(handler, path: str, body: dict) -> bool:
     if path == "/api/model/algorithm-config":
         try:
-            params = load_json(PARAMS_FILE) if PARAMS_FILE.exists() else {}
-            if "learning_rate_ewma" in body:
-                params["learning_rate_ewma"] = round(float(body["learning_rate_ewma"]), 3)
-            if "rolling_window_days" in body:
-                params["rolling_window_days"] = int(body["rolling_window_days"])
-            if "auto_accept_max_drift_pct" in body:
-                params["auto_accept_max_drift_pct"] = round(float(body["auto_accept_max_drift_pct"]), 1)
-            save_json(PARAMS_FILE, params)
+            def _apply_algo_cfg(params):
+                if "learning_rate_ewma" in body:
+                    params["learning_rate_ewma"] = round(float(body["learning_rate_ewma"]), 3)
+                if "rolling_window_days" in body:
+                    params["rolling_window_days"] = int(body["rolling_window_days"])
+                if "auto_accept_max_drift_pct" in body:
+                    params["auto_accept_max_drift_pct"] = round(float(body["auto_accept_max_drift_pct"]), 1)
+            params = update_params(_apply_algo_cfg, PARAMS_FILE)
             if GLOBAL_MODEL:
-                GLOBAL_MODEL.params = params
+                GLOBAL_MODEL.reload_params()
             handler._send_json({"status": "success", "message": "Algoritme instellingen opgeslagen", "params": params})
         except Exception as e:
             handler._send_json({"status": "error", "message": str(e)}, 500)
@@ -206,67 +216,13 @@ def handle_post(handler, path: str, body: dict) -> bool:
                 handler._send_json({"status": "error", "message": "Geen aanbevelingen gevonden"}, 404)
                 return True
             recs_data = load_json(recs_file)
-            params = load_json(PARAMS_FILE) if PARAMS_FILE.exists() else {}
-
-            for r in recs_data.get("recommendations", []):
-                r["auto_applied"] = True
-                p_id = r.get("id")
-                prop_v = r.get("proposed_value")
-                if p_id == "building_ua":
-                    val = float(prop_v) if prop_v is not None else float(params.get("building", {}).get("ua_base_w_per_k", 292.5))
-                    params.setdefault("building", {})["ua_base_w_per_k"] = val
-                    r["current_value"] = val
-                    r["proposed_value"] = val
-                    r["drift_pct"] = 0.0
-                elif p_id == "heating_modulation":
-                    curve_str = str(prop_v) if prop_v is not None else "2840 - 92·T"
-                    params.setdefault("heat_pump", {})["modulation_curve"] = curve_str
-                    r["current_value"] = curve_str
-                    r["proposed_value"] = curve_str
-                    r["drift_pct"] = 0.0
-                elif p_id == "night_baseload":
-                    val = float(prop_v) if prop_v is not None else float(params.get("unallocated", {}).get("night_baseload_floor_w", 299.4))
-                    params.setdefault("unallocated", {})["night_baseload_floor_w"] = val
-                    r["current_value"] = val
-                    r["proposed_value"] = val
-                    r["drift_pct"] = 0.0
-                elif p_id == "dhw_standby":
-                    val = float(prop_v) if prop_v is not None else float(params.get("dhw_tank", {}).get("standby_loss_w_per_k", 2.38))
-                    params.setdefault("dhw_tank", {})["standby_loss_w_per_k"] = val
-                    r["current_value"] = val
-                    r["proposed_value"] = val
-                    r["drift_pct"] = 0.0
-                elif p_id == "pv_yield_ratio":
-                    val = float(prop_v) if prop_v is not None else float(params.get("solar", {}).get("performance_ratio_pct", 95.0))
-                    params.setdefault("solar", {})["performance_ratio_pct"] = val
-                    r["current_value"] = val
-                    r["proposed_value"] = val
-                    r["drift_pct"] = 0.0
-                elif p_id == "floor_capacity":
-                    val = float(prop_v) if prop_v is not None else float(params.get("building", {}).get("floor_capacity_kwh_per_k", 14.5))
-                    params.setdefault("building", {})["floor_capacity_kwh_per_k"] = val
-                    r["current_value"] = val
-                    r["proposed_value"] = val
-                    r["drift_pct"] = 0.0
-                elif p_id == "c_wind":
-                    val = float(prop_v) if prop_v is not None else float(params.get("building", {}).get("c_wind_w_per_k_ms", 0.208))
-                    params.setdefault("building", {})["c_wind_w_per_k_ms"] = val
-                    r["current_value"] = val
-                    r["proposed_value"] = val
-                    r["drift_pct"] = 0.0
-                elif p_id == "c_solar":
-                    val = float(prop_v) if prop_v is not None else float(params.get("building", {}).get("c_solar_passive", 0.056))
-                    params.setdefault("building", {})["c_solar_passive"] = val
-                    r["current_value"] = val
-                    r["proposed_value"] = val
-                    r["drift_pct"] = 0.0
+            params = update_params(lambda p_disk: _accept_recommendations_into(p_disk, recs_data), PARAMS_FILE)
 
             recs_data["status"] = "accepted"
             recs_data["accepted_at"] = datetime.now(AMS_TZ).isoformat()
             save_json(recs_file, recs_data)
-            save_json(PARAMS_FILE, params)
             if GLOBAL_MODEL:
-                GLOBAL_MODEL.params = params
+                GLOBAL_MODEL.reload_params()
 
             # Force immediate recalculation of canonical dispatch plan with newly accepted parameters
             ensure_active_canonical_plan(force_refresh=True)
@@ -296,6 +252,9 @@ def handle_post(handler, path: str, body: dict) -> bool:
         try:
             days = int(body.get("days", 120)) if body else 120
             res = GLOBAL_MODEL.retrain_from_openhems(days_history=days)
+            if GLOBAL_DHW_MODEL:
+                GLOBAL_DHW_MODEL.profile = GLOBAL_DHW_MODEL._load_profile()
+            ensure_active_canonical_plan(force_refresh=True)
             handler._send_json(res)
         except Exception as e:
             handler._send_json({"status": "error", "message": str(e)}, 500)
@@ -305,3 +264,65 @@ def handle_post(handler, path: str, body: dict) -> bool:
     # INFRASTRUCTURE: Test Home Assistant Core
 
     return False
+
+
+def _accept_recommendations_into(params: dict, recs_data: dict) -> None:
+    """Applies every recommendation in recs_data to params in place (runs under the params lock)."""
+    for r in recs_data.get("recommendations", []):
+        r["auto_applied"] = True
+        p_id = r.get("id")
+        prop_v = r.get("proposed_value")
+        if p_id == "building_ua":
+            val = float(prop_v) if prop_v is not None else float(params.get("building", {}).get("ua_base_w_per_k", 292.5))
+            params.setdefault("building", {})["ua_base_w_per_k"] = val
+            r["current_value"] = val
+            r["proposed_value"] = val
+            r["drift_pct"] = 0.0
+        elif p_id == "heating_modulation":
+            curve_str = str(prop_v) if prop_v is not None else "2840 - 92·T"
+            params.setdefault("heat_pump", {})["modulation_curve"] = curve_str
+            r["current_value"] = curve_str
+            r["proposed_value"] = curve_str
+            r["drift_pct"] = 0.0
+        elif p_id == "night_baseload":
+            val = float(prop_v) if prop_v is not None else float(params.get("unallocated", {}).get("night_baseload_floor_w", 299.4))
+            params.setdefault("unallocated", {})["night_baseload_floor_w"] = val
+            r["current_value"] = val
+            r["proposed_value"] = val
+            r["drift_pct"] = 0.0
+        elif p_id == "dhw_standby":
+            val = float(prop_v) if prop_v is not None else float(params.get("dhw_tank", {}).get("standby_loss_w_per_k", 2.38))
+            params.setdefault("dhw_tank", {})["standby_loss_w_per_k"] = val
+            r["current_value"] = val
+            r["proposed_value"] = val
+            r["drift_pct"] = 0.0
+        elif p_id == "pv_yield_ratio":
+            val = float(prop_v) if prop_v is not None else float(params.get("solar", {}).get("performance_ratio_pct", 95.0))
+            params.setdefault("solar", {})["performance_ratio_pct"] = val
+            r["current_value"] = val
+            r["proposed_value"] = val
+            r["drift_pct"] = 0.0
+        elif p_id == "floor_capacity":
+            val = float(prop_v) if prop_v is not None else float(params.get("building", {}).get("floor_capacity_kwh_per_k", 14.5))
+            params.setdefault("building", {})["floor_capacity_kwh_per_k"] = val
+            r["current_value"] = val
+            r["proposed_value"] = val
+            r["drift_pct"] = 0.0
+        elif p_id == "c_wind":
+            val = float(prop_v) if prop_v is not None else float(params.get("building", {}).get("c_wind_w_per_k_ms", 0.208))
+            params.setdefault("building", {})["c_wind_w_per_k_ms"] = val
+            r["current_value"] = val
+            r["proposed_value"] = val
+            r["drift_pct"] = 0.0
+        elif p_id == "c_solar_pv_ratio":
+            val = float(prop_v) if prop_v is not None else float(params.get("building", {}).get("c_solar_pv_ratio", 1.15))
+            params.setdefault("building", {})["c_solar_pv_ratio"] = val
+            r["current_value"] = val
+            r["proposed_value"] = val
+            r["drift_pct"] = 0.0
+        elif p_id == "c_solar":
+            val = float(prop_v) if prop_v is not None else float(params.get("building", {}).get("c_solar_passive", 0.056))
+            params.setdefault("building", {})["c_solar_passive"] = val
+            r["current_value"] = val
+            r["proposed_value"] = val
+            r["drift_pct"] = 0.0

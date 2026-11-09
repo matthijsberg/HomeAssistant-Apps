@@ -23,6 +23,7 @@ from typing import Dict, Any, Optional
 import urllib.request
 import urllib.parse
 import statistics
+import numpy as np
 
 AMSTERDAM_TZ = ZoneInfo("Europe/Amsterdam")
 
@@ -58,6 +59,40 @@ def save_json(path: str, data: Dict[str, Any]):
                 pass
 
 
+# Keys this model owns in heatpump_model_parameters.json. Only these are merged back to disk, so
+# calibration results never overwrite parameters written by other owners (API, calibration scripts).
+FORECASTER_OWNED_KEYS = (
+    "building.ua_base_w_per_k",
+    "building.c_solar_pv_ratio",
+    "building.floor_capacity_kwh_per_k",
+    "unallocated.night_baseload_floor_w",
+    "solar.performance_ratio_pct",
+    "last_trained",
+    "metrics",
+)
+
+
+def _persist_params(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Reload-merge-write of the forecaster-owned keys under the parameter-store lock."""
+    from layer2_calibration.params_store import merge_owned_keys
+    return merge_owned_keys(params, FORECASTER_OWNED_KEYS, PARAMS_FILE)
+
+
+def _add_missing_param_blocks(defaults: Dict[str, Any]) -> Dict[str, Any]:
+    """Adds missing top-level blocks only (never overwrites existing values)."""
+    from layer2_calibration.params_store import update_params
+
+    def _mut(data: Dict[str, Any]) -> bool:
+        changed = False
+        for k, v in defaults.items():
+            if k not in data:
+                data[k] = v
+                changed = True
+        return changed
+
+    return update_params(_mut, PARAMS_FILE)
+
+
 class HybridForecastingModel:
     def __init__(self):
         self.config = load_json(CONFIG_FILE)
@@ -66,9 +101,10 @@ class HybridForecastingModel:
         self.profile = load_json(PROFILE_FILE)
         self._ensure_defaults()
 
-    def _ensure_defaults(self):
+    def _ensure_defaults(self, persist: bool = True):
         if not isinstance(self.params, dict):
             self.params = {}
+        keys_before = set(self.params.keys())
 
         # Merge legacy parameters if present
         legacy_ua = float(self.params.get("ua_base", 7.02)) * 1000.0 / 24.0  # kWh/deg/day to W/K approx
@@ -123,9 +159,14 @@ class HybridForecastingModel:
                 "mape_pct": 14.8
             }
 
-        self.params["version"] = "1.0.0"
+        self.params.setdefault("version", "1.0.0")
         self.params["learning_rate_ewma"] = self.params.get("learning_rate_ewma", 0.05)
-        save_json(PARAMS_FILE, self.params)
+        added = {k: self.params[k] for k in self.params if k not in keys_before}
+        if persist and added:
+            try:
+                _add_missing_param_blocks(added)
+            except Exception as e:
+                print(f"[WARN] Could not persist default parameter blocks: {e}")
 
         if not self.profile or "profile_96_quarters" not in self.profile:
             # Initialize 7x96 with standard empirical baseline
@@ -286,8 +327,18 @@ class HybridForecastingModel:
     # -------------------------------------------------------------------------
     # 4. Periodic Retraining & Calibration Loop (from InfluxDB)
     # -------------------------------------------------------------------------
-    def retrain_from_openhems(self, days_history: Optional[int] = None) -> Dict[str, Any]:
+    def reload_params(self) -> None:
+        """Re-reads the parameter file (other owners may have written it since startup)."""
+        from layer2_calibration.params_store import read_params
+        fresh = read_params(PARAMS_FILE)
+        if fresh:
+            self.params = fresh
+            self._ensure_defaults(persist=False)
+
+    def retrain_from_openhems(self, days_history: Optional[int] = None, reload_params: bool = True) -> Dict[str, Any]:
         """Queries the dedicated 'openhems' InfluxDB database and recalibrates the 7x96 profile and building UA with recommendations governance."""
+        if reload_params:
+            self.reload_params()
         if days_history is None:
             days_history = int(self.params.get("rolling_window_days", 90))
         pwd = self.secrets.get("influxdb", {}).get("local_ha_influxdb", "")
@@ -297,10 +348,12 @@ class HybridForecastingModel:
         # Query 15m unallocated consumption across history
         t_start = (datetime.now(timezone.utc) - timedelta(days=days_history)).strftime("%Y-%m-%dT%H:%M:%SZ")
         q = f"""
-SELECT mean(unallocated_w) as unalloc_w FROM "energy_telemetry" WHERE time >= '{t_start}' GROUP BY time(15m) fill(none);
+SELECT mean(unallocated_w) as unalloc_w, mean(heatpump_w) as hp_w, stddev(heatpump_w) as hp_std FROM "energy_telemetry" WHERE time >= '{t_start}' GROUP BY time(15m) fill(none);
 SELECT sum(power_w)/60000.0 as cv_kwh FROM "energy_telemetry" WHERE "device_id" = 'daikin_heat_pump' AND "mode" = 'heating' AND time >= '{t_start}' GROUP BY time(1d) fill(0);
 SELECT mean(temperature_c) as tout_c FROM "energy_telemetry" WHERE "device_id" = 'outdoor_weather' AND time >= '{t_start}' GROUP BY time(1d) fill(linear);
-SELECT sum(power_w)/60000.0 as pv_kwh FROM "energy_telemetry" WHERE "device_id" = 'rooftop_solar' AND time >= '{t_start}' GROUP BY time(1d) fill(none)
+SELECT sum(power_w)/60000.0 as pv_kwh FROM "energy_telemetry" WHERE "device_id" = 'rooftop_solar' AND time >= '{t_start}' GROUP BY time(1d) fill(none);
+SELECT mean(temperature_c) as tank_temp FROM "energy_telemetry" WHERE "device_id" = 'dhw_tank' AND time >= '{t_start}' GROUP BY time(15m) fill(linear);
+SELECT mean(power_w)/1000.0 * 0.25 as dhw_kwh_el FROM "energy_telemetry" WHERE "device_id" = 'daikin_heat_pump' AND "mode" = 'dhw' AND time >= '{t_start}' GROUP BY time(15m) fill(0)
 """
         params = {"u": "openhems", "p": pwd, "db": "openhems", "q": q, "epoch": "s"}
         url = f"http://a0d7b954-influxdb:8086/query?{urllib.parse.urlencode(params)}"
@@ -316,16 +369,24 @@ SELECT sum(power_w)/60000.0 as pv_kwh FROM "energy_telemetry" WHERE "device_id" 
         if not results or not results[0].get("series"):
             return {"status": "error", "message": "Geen telemetrie data gevonden in openhems"}
 
-        # 1. Update 7x96 Activity Matrix using Robust Median
+        # 1. Update 7x96 Activity Matrix using P0-P95 Trimmed Mean (with historical frozen-meter filter)
         unalloc_series = results[0]["series"][0].get("values", [])
         grid = [[[] for _ in range(96)] for _ in range(7)]
-        for ts, val in unalloc_series:
-            if val is None or val < 50.0:
+        night_raw_grid = [[] for _ in range(16)]
+        for row in unalloc_series:
+            ts = row[0]
+            val = row[1] if len(row) > 1 else None
+            if val is None or val < 50.0 or val > 5500.0:
+                continue
+            # Historical model filter: exclude quarters where heatpump Modbus meter froze (>50W with 0 stddev while unalloc >1000W)
+            if len(row) >= 4 and row[3] is not None and row[3] == 0.0 and (row[2] or 0.0) > 50.0 and val > 1000.0:
                 continue
             dt = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(AMSTERDAM_TZ)
             dow = dt.weekday()
             q_idx = dt.hour * 4 + dt.minute // 15
             grid[dow][q_idx].append(val)
+            if dow == 0 and 4 <= q_idx < 20:
+                night_raw_grid[q_idx - 4].append(val)
 
         ewma_alpha = float(self.params.get("learning_rate_ewma", 0.05))
         existing_grid = self.profile.get("profile_96_quarters", [])
@@ -336,28 +397,142 @@ SELECT sum(power_w)/60000.0 as pv_kwh FROM "energy_telemetry" WHERE "device_id" 
             for q in range(96):
                 sample_list = grid[dow][q]
                 if sample_list:
-                    new_median = float(statistics.median(sample_list))
+                    sorted_samples = sorted(sample_list)
+                    n_s = len(sorted_samples)
+                    cutoff = max(1, n_s - int(n_s * 0.05))
+                    core_samples = sorted_samples[:cutoff]
+                    new_expected = float(sum(core_samples) / len(core_samples))
                     if existing_grid and len(existing_grid) > dow and len(existing_grid[dow]) > q:
                         old_val = existing_grid[dow][q]
-                        blended = (1.0 - ewma_alpha) * old_val + ewma_alpha * new_median
+                        blended = (1.0 - ewma_alpha) * old_val + ewma_alpha * new_expected
                     else:
-                        blended = new_median
+                        blended = new_expected
                 else:
                     blended = existing_grid[dow][q] if existing_grid else 300.0
                 day_quarters.append(round(blended, 1))
             updated_grid.append(day_quarters)
 
         self.profile["profile_96_quarters"] = updated_grid
+
+        # 1b. Update 7x96 DHW Tap Demand Matrix with Recency Weighting & Repetition Streak Boost
+        if len(results) > 4 and results[4].get("series"):
+            from layer2_calibration.dhw_thermal_model import DhwThermalModel
+            tank_series = results[4]["series"][0].get("values", [])
+            dhw_el_series = (
+                results[5]["series"][0].get("values", [])
+                if (len(results) > 5 and results[5].get("series"))
+                else []
+            )
+            t_map = {str(r[0]): r[1] for r in tank_series if r and len(r) > 1 and r[1] is not None}
+            d_map = {str(r[0]): r[1] for r in dhw_el_series if r and len(r) > 1 and r[1] is not None}
+
+            sorted_t_keys = sorted(t_map.keys(), key=lambda x: float(x))
+            if len(sorted_t_keys) >= 96:
+                draw_offs = DhwThermalModel.compute_historical_draw_offs(
+                    sorted_timestamps=sorted_t_keys,
+                    temperature_map=t_map,
+                    heatpump_el_kwh_map=d_map,
+                    interval_h=0.25,
+                )
+                tap_grid = [[[] for _ in range(96)] for _ in range(7)]
+                max_ts = float(sorted_t_keys[-1])
+                for ts_k, q_tap_kwh in zip(sorted_t_keys, draw_offs):
+                    ts_f = float(ts_k)
+                    dt_t = datetime.fromtimestamp(ts_f, tz=timezone.utc).astimezone(AMSTERDAM_TZ)
+                    dow_t = dt_t.weekday()
+                    q_t = dt_t.hour * 4 + dt_t.minute // 15
+                    tap_grid[dow_t][q_t].append((ts_f, float(q_tap_kwh)))
+
+                existing_tap = self.profile.get("tap_demand_profile_96", [])
+                existing_dhw_w = self.profile.get("dhw_profile_96_quarters", [])
+                updated_tap = []
+                updated_dhw_w = []
+                halflife_weeks = 3.0
+                decay_lambda = math.log(2.0) / halflife_weeks
+
+                for dow in range(7):
+                    day_tap = []
+                    day_dhw_w = []
+                    for q in range(96):
+                        samples = tap_grid[dow][q]
+                        old_tap = (
+                            float(existing_tap[dow][q])
+                            if (existing_tap and len(existing_tap) > dow and len(existing_tap[dow]) > q)
+                            else 0.015
+                        )
+                        if samples:
+                            # Sort chronologically (oldest -> newest)
+                            samples.sort(key=lambda x: x[0])
+                            # Exponential recency weighting by weeks ago (3-week half-life)
+                            w_sum = 0.0
+                            val_w_sum = 0.0
+                            for ts_s, val_s in samples:
+                                weeks_ago = max(0.0, (max_ts - ts_s) / (7.0 * 86400.0))
+                                w = math.exp(-decay_lambda * weeks_ago)
+                                w_sum += w
+                                val_w_sum += w * val_s
+                            recency_target = val_w_sum / w_sum if w_sum > 0 else old_tap
+
+                            # Streak / Repetition detector on the last 2-3 occurrences of this weekday/quarter
+                            recent_vals = [v for _, v in samples[-3:]]
+                            recent_2 = [v for _, v in samples[-2:]]
+                            is_new_active_streak = (
+                                len(recent_2) >= 2 and all(v >= 0.08 for v in recent_2)
+                            )
+                            is_new_quiet_streak = (
+                                len(recent_vals) >= 3 and all(v < 0.03 for v in recent_vals) and old_tap >= 0.08
+                            )
+
+                            if len(recent_vals) >= 3 and all(v >= 0.08 for v in recent_vals):
+                                # 3 weeks in a row of active showering in this slot -> >80% adaptation
+                                streak_mean = sum(recent_vals) / len(recent_vals)
+                                eff_alpha = max(ewma_alpha, 0.82)
+                                blended_tap = (1.0 - eff_alpha) * old_tap + eff_alpha * streak_mean
+                            elif is_new_active_streak:
+                                # 2 weeks in a row of active showering -> ~55% adaptation
+                                streak_mean = sum(recent_2) / len(recent_2)
+                                eff_alpha = max(ewma_alpha, 0.55)
+                                blended_tap = (1.0 - eff_alpha) * old_tap + eff_alpha * streak_mean
+                            elif is_new_quiet_streak:
+                                # 3 weeks in a row without showering where there used to be a peak -> fast decay
+                                eff_alpha = max(ewma_alpha, 0.65)
+                                blended_tap = (1.0 - eff_alpha) * old_tap + eff_alpha * recency_target
+                            else:
+                                # Standard recency-weighted adaptation (min 20% weight on recency-weighted target)
+                                eff_alpha = max(ewma_alpha, 0.20)
+                                blended_tap = (1.0 - eff_alpha) * old_tap + eff_alpha * recency_target
+                        else:
+                            blended_tap = old_tap
+
+                        blended_tap = round(max(0.0, blended_tap), 3)
+                        day_tap.append(blended_tap)
+                        # Electrical equivalent W for UI profile view (kWh_th * 4000 / COP ~2.8)
+                        old_w = (
+                            float(existing_dhw_w[dow][q])
+                            if (existing_dhw_w and len(existing_dhw_w) > dow and len(existing_dhw_w[dow]) > q)
+                            else round((blended_tap * 4000.0) / 2.8, 1)
+                        )
+                        calc_w = round((blended_tap * 4000.0) / 2.8, 1)
+                        day_dhw_w.append(calc_w if samples else round(old_w, 1))
+                    updated_tap.append(day_tap)
+                    updated_dhw_w.append(day_dhw_w)
+
+                self.profile["tap_demand_profile_96"] = updated_tap
+                self.profile["dhw_profile_96_quarters"] = updated_dhw_w
+
         self.profile["last_updated"] = datetime.now(AMSTERDAM_TZ).isoformat()
         save_json(PROFILE_FILE, self.profile)
+        # Keep add-on data profile synchronized as well
+        addon_prof = "/config/addons/open-hems/data/unallocated_load_profile.json"
+        if os.path.exists(os.path.dirname(addon_prof)):
+            save_json(addon_prof, self.profile)
 
         # 2. Recalibrate Building UA using OLS on Heating Days
         old_ua = float(self.params.get("building", {}).get("ua_base_w_per_k", 321.1))
         calibrated_ua = old_ua
-        old_c_wind = float(self.params.get("building", {}).get("c_wind_w_per_k_ms", 0.208))
-        calibrated_c_wind = old_c_wind
-        old_c_solar = float(self.params.get("building", {}).get("c_solar_passive", 0.056))
+        old_c_solar = float(self.params.get("building", {}).get("c_solar_pv_ratio", 1.15))
         calibrated_c_solar = old_c_solar
+        has_2d = False
         r_squared = 0.0
         mae_w = None
         rmse_w = None
@@ -369,7 +544,7 @@ SELECT sum(power_w)/60000.0 as pv_kwh FROM "energy_telemetry" WHERE "device_id" 
             cv_days = {v[0]: v[1] for v in results[1]["series"][0].get("values", []) if v[1] is not None}
             tout_days = {v[0]: v[1] for v in results[2]["series"][0].get("values", []) if v[1] is not None}
             common = sorted(set(cv_days.keys()) & set(tout_days.keys()))
-            x_dt, y_th_kwh = [], []
+            x_dt, y_th_kwh, used_ts = [], [], []
             from models.physics import calculate_carnot_cop
 
             for ts in common:
@@ -381,6 +556,7 @@ SELECT sum(power_w)/60000.0 as pv_kwh FROM "energy_telemetry" WHERE "device_id" 
                     kwh_th = kwh_el * cop_day
                     x_dt.append(dt_k)
                     y_th_kwh.append(kwh_th)
+                    used_ts.append(ts)
             n_stookdagen = len(x_dt)
             if n_stookdagen >= 14:
                 slope_th, intercept = statistics.linear_regression(x_dt, y_th_kwh)
@@ -389,31 +565,34 @@ SELECT sum(power_w)/60000.0 as pv_kwh FROM "energy_telemetry" WHERE "device_id" 
                 # Convert kWh_th/day per degree directly to W/K: (slope_th * 1000 / 24)
                 calibrated_ua_1d = round((slope_th * 1000.0 / 24.0), 1)
 
-                # Attempt 3D OLS regression if PV or weather data exists
-                has_3d = False
+                # 2-regressor model with intercept when PV telemetry exists:
+                #   Q_th,day = UA·24/1000 · ΔT + c_pv · E_pv,day + b
+                # (PV energy is the observable proxy for passive solar gain; there is no wind series in
+                #  this query, so the wind coefficient is NOT identifiable and is not recalibrated here.)
+                has_2d = False
+                calibrated_ua = None
                 if len(results) > 3 and results[3].get("series"):
                     pv_map = {v[0]: v[1] for v in results[3]["series"][0].get("values", []) if v[1] is not None}
-                    x_3d = []
-                    for ts_val, dt_val in zip(common, x_dt):
-                        pv_kwh = pv_map.get(ts_val, 0.0) or 0.0
-                        x_3d.append([dt_val, dt_val * 0.1, pv_kwh / 10.0])
-                    if len(x_3d) >= 14:
-                        from layer2_calibration.calibrator import ModelCalibrationEngine
-                        cal_engine = ModelCalibrationEngine()
-                        beta = cal_engine.solve_ols_3x3(x_3d, y_th_kwh)
-                        calibrated_ua_3d = round(beta[0] * 1000.0 / 24.0, 1)
-                        if 180.0 <= calibrated_ua_3d <= 450.0:
-                            calibrated_ua = calibrated_ua_3d
-                            calibrated_c_wind = round(max(0.05, min(0.35, beta[1] * 1000.0 / 24.0)), 3)
-                            calibrated_c_solar = round(max(0.02, min(2.50, beta[2])), 3)
-                            has_3d = True
+                    rows = [(dt_v, float(pv_map[ts_v]), y_v) for ts_v, dt_v, y_v in zip(used_ts, x_dt, y_th_kwh) if pv_map.get(ts_v) is not None]
+                    if len(rows) >= 14:
+                        X = np.array([[r[0], r[1], 1.0] for r in rows], dtype=float)
+                        Y = np.array([r[2] for r in rows], dtype=float)
+                        beta, _, rank, _ = np.linalg.lstsq(X, Y, rcond=None)
+                        if rank == 3 and np.all(np.isfinite(beta)):
+                            calibrated_ua_2d = round(float(beta[0]) * 1000.0 / 24.0, 1)
+                            if 180.0 <= calibrated_ua_2d <= 450.0:
+                                calibrated_ua = calibrated_ua_2d
+                                # Passive gain per PV kWh is the negative PV coefficient (sun reduces heat demand)
+                                calibrated_c_solar = round(max(0.0, min(2.50, -float(beta[1]))), 3)
+                                has_2d = True
 
-                if not has_3d:
+                if not has_2d and 180.0 <= calibrated_ua_1d <= 450.0:
                     calibrated_ua = calibrated_ua_1d
-                    if not (180.0 <= calibrated_ua <= 450.0):
-                        calibrated_ua = 318.5
 
-                has_sufficient_ua_data = True
+                # Never substitute a constant for a failed fit: no plausible estimate -> no recommendation
+                has_sufficient_ua_data = calibrated_ua is not None
+                if calibrated_ua is None:
+                    calibrated_ua = old_ua
 
                 # Compute empirical regression residuals
                 residuals = [(y - (slope_th * x + intercept)) for x, y in zip(x_dt, y_th_kwh)]
@@ -437,62 +616,44 @@ SELECT sum(power_w)/60000.0 as pv_kwh FROM "energy_telemetry" WHERE "device_id" 
             auto_apply_ua = abs(ua_drift_pct) <= auto_accept_threshold
             recs.append({
                 "id": "building_ua",
-                "name": "Gebouw Warmteverlies (3D Schilmodel)",
+                "name": "Gebouw Warmteverlies (Schilmodel)",
                 "current_value": old_ua,
                 "proposed_value": calibrated_ua,
                 "unit": "W/K",
                 "drift_pct": ua_drift_pct,
                 "auto_applied": auto_apply_ua,
-                "evidence": f"3D OLS regressie (T_buiten, wind, zon) over {n_stookdagen} stookdagen (R² = {r_squared})"
+                "evidence": f"OLS regressie (T_buiten{', PV' if has_2d else ''}) over {n_stookdagen} stookdagen (R² = {r_squared})"
             })
             if auto_apply_ua:
                 self.params.setdefault("building", {})["ua_base_w_per_k"] = round(
                     (1.0 - ewma_alpha) * old_ua + ewma_alpha * calibrated_ua, 1
                 )
 
-            # Wind sensitivity sub-parameter
-            old_c_wind = float(self.params.get("building", {}).get("c_wind_w_per_k_ms", 0.208))
-            wind_drift_pct = round(((calibrated_c_wind - old_c_wind) / old_c_wind) * 100.0, 1) if old_c_wind > 0 else 0.0
-            auto_apply_wind = abs(wind_drift_pct) <= auto_accept_threshold
-            recs.append({
-                "id": "c_wind",
-                "parent_id": "building_ua",
-                "name": "↳ Windtoeslag Gevel (c_wind)",
-                "current_value": round(old_c_wind, 3),
-                "proposed_value": round(calibrated_c_wind, 3),
-                "unit": "W/(K·m/s)",
-                "drift_pct": wind_drift_pct,
-                "auto_applied": auto_apply_wind,
-                "evidence": f"Convectie- en tochtverlies per m/s wind over {n_stookdagen} stookdagen"
-            })
-            if auto_apply_wind:
-                self.params.setdefault("building", {})["c_wind_w_per_k_ms"] = round(
-                    (1.0 - ewma_alpha) * old_c_wind + ewma_alpha * calibrated_c_wind, 3
-                )
-
-            # Passive solar gain sub-parameter
-            old_c_solar = float(self.params.get("building", {}).get("c_solar_passive", 0.056))
-            solar_drift_pct = round(((calibrated_c_solar - old_c_solar) / old_c_solar) * 100.0, 1) if old_c_solar > 0 else 0.0
-            auto_apply_solar = abs(solar_drift_pct) <= auto_accept_threshold
-            recs.append({
-                "id": "c_solar",
-                "parent_id": "building_ua",
-                "name": "↳ Passieve Zonnewinst (c_solar)",
-                "current_value": round(old_c_solar, 3),
-                "proposed_value": round(calibrated_c_solar, 3),
-                "unit": "factor",
-                "drift_pct": solar_drift_pct,
-                "auto_applied": auto_apply_solar,
-                "evidence": f"Gratis opwarming via glasoppervlak over {n_stookdagen} stookdagen"
-            })
-            if auto_apply_solar:
-                self.params.setdefault("building", {})["c_solar_passive"] = round(
-                    (1.0 - ewma_alpha) * old_c_solar + ewma_alpha * calibrated_c_solar, 3
-                )
+            # Passive solar gain per PV kWh (SpaceHeatingPolicy: building.c_solar_pv_ratio, dimensionless)
+            if has_2d:
+                old_c_solar = float(self.params.get("building", {}).get("c_solar_pv_ratio", 1.15))
+                solar_drift_pct = round(((calibrated_c_solar - old_c_solar) / old_c_solar) * 100.0, 1) if old_c_solar > 0 else 0.0
+                auto_apply_solar = abs(solar_drift_pct) <= auto_accept_threshold
+                recs.append({
+                    "id": "c_solar_pv_ratio",
+                    "parent_id": "building_ua",
+                    "name": "↳ Passieve Zonnewinst per PV-kWh (c_solar_pv_ratio)",
+                    "current_value": round(old_c_solar, 3),
+                    "proposed_value": round(calibrated_c_solar, 3),
+                    "unit": "kWh_th/kWh_pv",
+                    "drift_pct": solar_drift_pct,
+                    "auto_applied": auto_apply_solar,
+                    "evidence": f"Regressie (ΔT, PV-opbrengst, intercept) over {n_stookdagen} stookdagen"
+                })
+                if auto_apply_solar:
+                    self.params.setdefault("building", {})["c_solar_pv_ratio"] = round(
+                        (1.0 - ewma_alpha) * old_c_solar + ewma_alpha * calibrated_c_solar, 3
+                    )
 
         # 3b. Night baseload drift (strictly from empirical 7x96 night quarters median)
         if self.profile.get("profile_96_quarters") and len(self.profile["profile_96_quarters"]) > 0:
-            night_samples = self.profile["profile_96_quarters"][0][4:20]
+            raw_night_medians = [float(statistics.median(qs)) for qs in night_raw_grid if qs]
+            night_samples = raw_night_medians if raw_night_medians else self.profile["profile_96_quarters"][0][4:20]
             if night_samples:
                 night_median_new = round(statistics.median(night_samples), 1)
                 old_night = float(self.params.get("unallocated", {}).get("night_baseload_floor_w", 265.0))
@@ -513,14 +674,56 @@ SELECT sum(power_w)/60000.0 as pv_kwh FROM "energy_telemetry" WHERE "device_id" 
                         (1.0 - ewma_alpha) * old_night + ewma_alpha * night_median_new, 1
                     )
 
-        # 3c. PV Yield Ratio (k_pv in %) from rooftop_solar telemetry
+        # 3c. PV Yield Ratio (k_pv in %) from rooftop_solar telemetry against season-aware POA clear-sky reference
         if len(results) > 3 and results[3].get("series"):
-            pv_days = [v[1] for v in results[3]["series"][0].get("values", []) if v[1] is not None and v[1] >= 12.0]
-            if len(pv_days) >= 7:
-                med_pv = float(statistics.median(pv_days))
-                # Baseline clear-sky reference for 5.76 kWp ZW dak is ~28.5 kWh/day peak
-                calibrated_k_pv = round(max(80.0, min(105.0, (med_pv / 28.5) * 100.0)), 1)
-                old_k_pv = float(self.params.get("solar", {}).get("performance_ratio_pct", 100.0))
+            from api.energy_feed import calculate_poa_solar_kw
+            sol_cfg = self.config.get("solar", {})
+            s_kwp = float(sol_cfg.get("kwp", 5.76))
+            s_tilt = float(sol_cfg.get("tilt_degrees", 34.0))
+            s_az = float(sol_cfg.get("azimuth_degrees", 225.0))
+            s_inv = float(sol_cfg.get("inverter_max_w", 5500.0)) / 1000.0
+            lat_r = math.radians(float(self.config.get("house", {}).get("latitude", 51.9537)))
+            lon_deg = float(self.config.get("house", {}).get("longitude", 5.2320))
+
+            cs_ratios = []
+            sunny_kwhs = []
+            for row_pv in results[3]["series"][0].get("values", []):
+                if not row_pv or len(row_pv) < 2 or row_pv[1] is None:
+                    continue
+                ts_pv, pv_kwh = float(row_pv[0]), float(row_pv[1])
+                if pv_kwh < 3.5:
+                    continue
+                dt_day = datetime.fromtimestamp(ts_pv, tz=timezone.utc).astimezone(AMSTERDAM_TZ)
+                doy = dt_day.timetuple().tm_yday
+                decl = math.radians(23.45 * math.sin(math.radians(360.0 * (284.0 + doy) / 365.0)))
+                b_ang = math.radians(360.0 * (doy - 81) / 364.0)
+                eot = 9.87 * math.sin(2 * b_ang) - 7.53 * math.cos(b_ang) - 1.5 * math.sin(b_ang)
+                utcoff = dt_day.utcoffset()
+                tz_off = utcoff.total_seconds() / 3600.0 if utcoff is not None else 2.0
+                cs_100 = 0.0
+                for h_cs in range(5, 22):
+                    dt_h = dt_day.replace(hour=h_cs, minute=30, second=0, microsecond=0)
+                    sol_h = h_cs + 0.5 + (4.0 * lon_deg + eot) / 60.0 - tz_off
+                    omega = math.radians((sol_h - 12.0) * 15.0)
+                    sin_a = math.sin(lat_r) * math.sin(decl) + math.cos(lat_r) * math.cos(decl) * math.cos(omega)
+                    if sin_a <= 0.035:
+                        continue
+                    ghi_cs = 1098.0 * sin_a * math.exp(-0.059 / sin_a)
+                    cs_100 += calculate_poa_solar_kw(
+                        dt_h, ghi_cs, kwp=s_kwp, tilt_deg=s_tilt, azimuth_deg=s_az, inverter_limit_kw=s_inv, eff=1.0
+                    )
+                if cs_100 >= 4.0 and pv_kwh >= max(3.5, 0.55 * cs_100):
+                    r_pct = (pv_kwh / cs_100) * 100.0
+                    if 50.0 <= r_pct <= 115.0:
+                        cs_ratios.append(r_pct)
+                        sunny_kwhs.append(pv_kwh)
+
+            if len(cs_ratios) >= 5:
+                sorted_r = sorted(cs_ratios)
+                top_q = sorted_r[max(0, int(0.75 * len(sorted_r))):]
+                calibrated_k_pv = round(max(75.0, min(105.0, sum(top_q) / len(top_q))), 1)
+                med_pv = float(statistics.median(sunny_kwhs))
+                old_k_pv = float(self.params.get("solar", {}).get("performance_ratio_pct", 88.0))
                 pv_drift_pct = round(((calibrated_k_pv - old_k_pv) / old_k_pv) * 100.0, 1) if old_k_pv > 0 else 0.0
                 auto_apply_pv = abs(pv_drift_pct) <= auto_accept_threshold
                 recs.append({
@@ -531,7 +734,7 @@ SELECT sum(power_w)/60000.0 as pv_kwh FROM "energy_telemetry" WHERE "device_id" 
                     "unit": "%",
                     "drift_pct": pv_drift_pct,
                     "auto_applied": auto_apply_pv,
-                    "evidence": f"Mediaan over {len(pv_days)} zonnedagen ({round(med_pv, 1)} kWh/dag vs 5,76 kWp ZW model)"
+                    "evidence": f"POA clear-sky kalibratie over {len(cs_ratios)} zonnedagen (mediaan {round(med_pv, 1)} kWh/dag)"
                 })
                 if auto_apply_pv:
                     self.params.setdefault("solar", {})["performance_ratio_pct"] = round(
@@ -569,7 +772,7 @@ SELECT sum(power_w)/60000.0 as pv_kwh FROM "energy_telemetry" WHERE "device_id" 
             "mae_w": mae_w,
             "mape_pct": mape_pct
         }
-        save_json(PARAMS_FILE, self.params)
+        _persist_params(self.params)
 
         # Save recommendations to file
         recs_payload = {

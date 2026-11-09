@@ -56,9 +56,73 @@ class DaikinP1P2StateClassifier:
         ha_states = ha_states or {}
         p_tot = max(0.0, float(total_power_w))
 
-        # 1. Check standby threshold first
-        # If total electrical power is below standby threshold, compressor is idle
-        if p_tot < cls.STANDBY_THRESHOLD_W:
+        # 1. Extract MQTT P1P2 Signals & Home Assistant Signals (supports both raw string and state dict)
+        def _clean_mqtt(val: Any) -> str:
+            if val is None:
+                return ""
+            if isinstance(val, float) and val.is_integer():
+                return str(int(val))
+            return str(val).strip()
+
+        def _clean_ha(eid: str) -> str:
+            raw = ha_states.get(eid)
+            if isinstance(raw, dict):
+                raw = raw.get("state")
+            if raw is None:
+                return ""
+            return str(raw).strip().lower()
+
+        p1p2_action = _clean_mqtt(mqtt_cache.get("P1P2/P/P1P2MQTT/bridge0/C/9/Action_Heating_Cooling_Auto_Off")).lower()
+        p1p2_compressor = _clean_mqtt(mqtt_cache.get("P1P2/P/P1P2MQTT/bridge0/S/1/Compressor"))
+        p1p2_dhw_demand = _clean_mqtt(mqtt_cache.get("P1P2/P/P1P2MQTT/bridge0/S/1/DHW_Demand"))
+        p1p2_valve_dhw = _clean_mqtt(mqtt_cache.get("P1P2/P/P1P2MQTT/bridge0/S/1/Valve_DHW_Tank"))
+        p1p2_climate_heat = _clean_mqtt(mqtt_cache.get("P1P2/P/P1P2MQTT/bridge0/S/1/Climate_Heating"))
+        p1p2_climate_cool = _clean_mqtt(mqtt_cache.get("P1P2/P/P1P2MQTT/bridge0/S/1/Climate_Cooling"))
+
+        ha_select = _clean_ha("select.daily_energy_usage_sums_wp")
+        ha_compressor = _clean_ha("binary_sensor.hc_mode_compressor")
+        ha_dhw_valve = _clean_ha("binary_sensor.hc_dhw_valve_dhw_tank")
+        ha_dhw_demand = _clean_ha("binary_sensor.hc_dhw_dhw_demand")
+        ha_heat_mode = _clean_ha("binary_sensor.hc_mode_climate_heating")
+        ha_cool_mode = _clean_ha("binary_sensor.hc_mode_climate_cooling")
+
+        # 2. Primary Deterministic State Resolution via HA Utility Meter Selector (`select.daily_energy_usage_sums_wp`)
+        #    Driven by HA automation 'Heatpump - MQTT - Publish selected ACTION' using pure binary sensors:
+        #    - compressor == 'off' -> 'standby'
+        #    - compressor == 'on' and valve_dhw == 'on' -> 'dhw'
+        #    - compressor == 'on' and climate_heating == 'on' and valve_dhw == 'off' -> 'heating'
+        #    - compressor == 'on' and climate_cooling == 'on' and valve_dhw == 'off' -> 'cooling'
+        if ha_select in ("standby", "dhw", "heating", "cooling"):
+            mode_upper = ha_select.upper()
+            return HeatPumpDisaggregation(
+                mode=mode_upper,
+                total_power_w=p_tot,
+                dhw_w=p_tot if mode_upper == "DHW" else 0.0,
+                heating_w=p_tot if mode_upper == "HEATING" else 0.0,
+                cooling_w=p_tot if mode_upper == "COOLING" else 0.0,
+                standby_w=p_tot if mode_upper == "STANDBY" else 0.0,
+                confidence=1.0,
+                source="ha_entities"
+            )
+
+        # 3. Direct Deterministic Binary State Evaluation (when select entity is absent from snapshot):
+        #    Check compressor OFF first (pure state, no power thresholds needed when compressor state is known)
+        comp_known = (p1p2_compressor in ("0", "1")) or (ha_compressor in ("on", "off")) or (p1p2_action in ("idle", "off", "fan", "heating", "cooling"))
+        if comp_known:
+            is_comp_off = (p1p2_compressor == "0") or (ha_compressor == "off") or (p1p2_action in ("idle", "off"))
+            if is_comp_off:
+                return HeatPumpDisaggregation(
+                    mode="STANDBY",
+                    total_power_w=p_tot,
+                    dhw_w=0.0,
+                    heating_w=0.0,
+                    cooling_w=0.0,
+                    standby_w=p_tot,
+                    confidence=0.98,
+                    source="mqtt_p1p2" if (p1p2_compressor or p1p2_action) else "ha_entities"
+                )
+        elif p_tot < cls.STANDBY_THRESHOLD_W:
+            # Fallback only when no binary compressor state is provided at all
             return HeatPumpDisaggregation(
                 mode="STANDBY",
                 total_power_w=p_tot,
@@ -70,28 +134,17 @@ class DaikinP1P2StateClassifier:
                 source="power_threshold"
             )
 
-        # 2. Extract MQTT P1P2 Signals (Highest Priority - direct from Daikin bus)
-        p1p2_action = str(mqtt_cache.get("P1P2/P/P1P2MQTT/bridge0/C/9/Action_Heating_Cooling_Auto_Off", "")).lower()
-        p1p2_dhw_demand = str(mqtt_cache.get("P1P2/P/P1P2MQTT/bridge0/S/1/DHW_Demand", "")).strip()
-        p1p2_valve_dhw = str(mqtt_cache.get("P1P2/P/P1P2MQTT/bridge0/S/1/Valve_DHW_Tank", "")).strip()
-        p1p2_climate_heat = str(mqtt_cache.get("P1P2/P/P1P2MQTT/bridge0/S/1/Climate_Heating", "")).strip()
-        p1p2_climate_cool = str(mqtt_cache.get("P1P2/P/P1P2MQTT/bridge0/S/1/Climate_Cooling", "")).strip()
-
-        # 3. Extract Home Assistant Fallback Signals
-        ha_select = str(ha_states.get("select.daily_energy_usage_sums_wp", "")).lower()
-        ha_compressor = str(ha_states.get("binary_sensor.hc_mode_compressor", "")).lower()
-        ha_dhw_demand = str(ha_states.get("binary_sensor.hc_dhw_dhw_demand", "")).lower()
-        ha_heat_mode = str(ha_states.get("binary_sensor.hc_mode_climate_heating", "")).lower()
-        ha_cool_mode = str(ha_states.get("binary_sensor.hc_mode_climate_cooling", "")).lower()
-
-        # Decision Tree:
-        # A. DHW Demand / Boiler Reheat Mode
-        is_dhw = (
-            p1p2_action == "fan" or
-            p1p2_dhw_demand == "1" or
-            ha_dhw_demand == "on" or
-            ha_select == "dhw"
-        )
+        # Decision Tree (Compressor is ON):
+        # A. DHW Tank Heating Mode: authoritative signal is the physical 3-way valve (Valve_DHW_Tank).
+        valve_known = (p1p2_valve_dhw in ("0", "1")) or (ha_dhw_valve in ("on", "off"))
+        if valve_known:
+            is_dhw = (p1p2_valve_dhw == "1") or (ha_dhw_valve == "on")
+        else:
+            is_dhw = (
+                p1p2_action == "fan" or
+                p1p2_dhw_demand == "1" or
+                ha_dhw_demand == "on"
+            )
         if is_dhw:
             return HeatPumpDisaggregation(
                 mode="DHW",

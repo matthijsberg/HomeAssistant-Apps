@@ -2,7 +2,7 @@
 """
 Open HEMS Framework & Management Console
 ========================================
-Version: 0.104.39
+Version: 0.108.22
 Generic Energy Management Platform:
   - Multi-Vector Telemetry & Optimization Daemon
   - Domain Router Dispatch to api/routes_*.py
@@ -19,6 +19,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -52,9 +53,31 @@ from layer3_scheduling.plan_decision_evaluator import (
     evaluate_and_log_night_boiler_decision
 )
 from layer3_scheduling.plan_store import PlanStore
-from layer4_control.room_thermostat_buffer import RoomThermostatBufferController
+from layer4_control.room_thermostat_buffer import (
+    RoomThermostatBufferController,
+    get_room_thermostat_buffer_controller,
+)
+from layer4_control.preflight.models import SubsystemLiveState, LockoutHorizon, GatekeeperDecision
+from layer4_control.preflight.coordinator import PreflightCoordinator
+from layer4_control.dispatch_state import get_dispatch_state
+from layer4_control.dhw_run_supervisor import DhwRunSupervisor, DHW_FORCE_MODES, normalize_mode
+from layer4_control.dispatch_guard import resolve_current_slot, count_run_minutes_from
+from integrations.daikin_altherma.reader import read_dhw_activity, read_room_climate, room_setpoint_service_call
+from integrations.homeassistant.client import push_ha_state, CV_FORCED_OFF_KEY
 
-GLOBAL_ROOM_BUFFER_CTRL = RoomThermostatBufferController(default_baseline_c=20.5)
+GLOBAL_ROOM_BUFFER_CTRL = get_room_thermostat_buffer_controller()
+def _build_dhw_supervisor() -> DhwRunSupervisor:
+    """Layer 4 DHW supervisor with the ADR-006 safety-net settings from cfg['dhw_policy'] (read at start-up)."""
+    try:
+        cfg = load_json(CONFIG_FILE) if CONFIG_FILE.exists() else {}
+    except Exception:
+        cfg = {}
+    return DhwRunSupervisor.from_config(PlanStore.get_instance(), cfg)
+
+
+DHW_SUPERVISOR = _build_dhw_supervisor()
+GLOBAL_PREFLIGHT_COORDINATOR = PreflightCoordinator()
+HEARTBEAT_ENTITY = "sensor.openhems_dispatch_heartbeat"
 
 class HemsApiHandler(BaseHTTPRequestHandler):
 
@@ -225,22 +248,101 @@ class HemsMqttSubscriberThread(threading.Thread):
     Background subscriber thread connecting directly to MQTT broker (Mosquitto)
     using configured credentials. Ingests high-frequency Modbus (MBMD) and device streams
     into an in-memory cache for zero-latency Layer 1 sampling.
+
+    Protocol hygiene: variable-length "remaining length" decoding, QoS-aware PUBLISH parsing,
+    PINGREQ keep-alive, socket closed on every reconnect. Every cached value carries a receive
+    timestamp; consumers must use get_fresh() so a silent feed can never freeze a reading.
     """
+    KEEPALIVE_S = 60
+    STALE_AFTER_S = 120.0
+
     def __init__(self, host="core-mosquitto", port=1883, user="openhems", pwd=""):
         super().__init__(daemon=True, name="HemsMqttSubscriber")
         self.host = host
         self.port = int(port)
         self.user = user
         self.pwd = pwd
-        self.cache = {}
+        self.cache: Dict[str, Any] = {}
+        self.cache_ts: Dict[str, float] = {}
         self.running = True
         self.connected = False
         self.last_msg_time = 0
 
+    # ------------------------------------------------------------ pure protocol helpers
+    @staticmethod
+    def encode_remaining_length(n: int) -> bytes:
+        out = bytearray()
+        while True:
+            byte = n % 128
+            n //= 128
+            if n > 0:
+                byte |= 0x80
+            out.append(byte)
+            if n == 0:
+                return bytes(out)
+
+    @staticmethod
+    def decode_remaining_length(buf: bytes, start: int = 1) -> Tuple[Optional[int], int]:
+        """Returns (value, n_bytes); (None, 0) when the header is incomplete. Raises on malformed input."""
+        multiplier, value = 1, 0
+        for i in range(4):
+            idx = start + i
+            if idx >= len(buf):
+                return None, 0
+            byte = buf[idx]
+            value += (byte & 0x7F) * multiplier
+            if not byte & 0x80:
+                return value, i + 1
+            multiplier *= 128
+        raise ValueError("Malformed MQTT remaining length")
+
+    @classmethod
+    def parse_packets(cls, buf: bytearray) -> Tuple[List[Tuple[str, bytes]], bytearray]:
+        """Extracts complete packets from buf. Returns (publishes as (topic, payload), remaining bytes)."""
+        publishes: List[Tuple[str, bytes]] = []
+        while len(buf) >= 2:
+            rem, n_len = cls.decode_remaining_length(buf, 1)
+            if rem is None:
+                break
+            total = 1 + n_len + rem
+            if len(buf) < total:
+                break
+            header = buf[0]
+            body = bytes(buf[1 + n_len:total])
+            buf = buf[total:]
+            if header >> 4 == 3 and len(body) >= 2:  # PUBLISH
+                t_len = (body[0] << 8) | body[1]
+                topic = body[2:2 + t_len].decode("utf-8", errors="ignore")
+                pos = 2 + t_len
+                if (header >> 1) & 0x03:  # QoS 1/2 carry a packet identifier
+                    pos += 2
+                publishes.append((topic, body[pos:]))
+        return publishes, buf
+
+    def get_fresh(self, topic: str, max_age_s: Optional[float] = None) -> Optional[Any]:
+        ts = self.cache_ts.get(topic)
+        if ts is None or (time.time() - ts) > (max_age_s or self.STALE_AFTER_S):
+            return None
+        return self.cache.get(topic)
+
+    def fresh_snapshot(self, max_age_s: Optional[float] = None) -> Dict[str, Any]:
+        limit = max_age_s or self.STALE_AFTER_S
+        now = time.time()
+        out = {}
+        for t, ts in list(self.cache_ts.items()):
+            if t not in self.cache:
+                continue
+            # P1P2 bus state topics only publish on state change (e.g. 3-way valve stays '1' for 45 min)
+            t_limit = max(limit, 3600.0) if t.startswith("P1P2/") else limit
+            if (now - ts) <= t_limit:
+                out[t] = self.cache[t]
+        return out
+
+    # ------------------------------------------------------------ connection loop
     def run(self):
         while self.running:
+            s = None
             try:
-                # Reload secrets if password was empty
                 if not self.pwd:
                     sec = load_secrets()
                     self.pwd = sec.get("mqtt", {}).get("local_mosquitto") or sec.get("mqtt", {}).get("openhems_mqtt") or ""
@@ -249,63 +351,67 @@ class HemsMqttSubscriberThread(threading.Thread):
                 s.settimeout(10)
                 s.connect((self.host, self.port))
 
-                proto = b"MQTT"
                 flags = 0x02
-                if self.user: flags |= 0x80
-                if self.pwd: flags |= 0x40
-                var_h = bytearray([0, 4]) + proto + bytearray([4, flags, 0, 60])
-                payload = bytearray([0, 15]) + b"openhems-stream"
+                if self.user:
+                    flags |= 0x80
+                if self.pwd:
+                    flags |= 0x40
+                var_h = bytearray([0, 4]) + b"MQTT" + bytearray([4, flags, 0, self.KEEPALIVE_S])
+                client_id = b"openhems-stream"
+                payload = bytearray([0, len(client_id)]) + client_id
                 if self.user:
                     u_b = self.user.encode()
                     payload += bytearray([0, len(u_b)]) + u_b
                 if self.pwd:
                     p_b = self.pwd.encode()
                     payload += bytearray([0, len(p_b)]) + p_b
-
-                pkt = bytearray([0x10, len(var_h) + len(payload)]) + var_h + payload
-                s.sendall(pkt)
+                body = var_h + payload
+                s.sendall(bytes([0x10]) + self.encode_remaining_length(len(body)) + body)
                 connack = s.recv(4)
-                if not (len(connack) >= 4 and connack[3] == 0):
+                if not (len(connack) >= 4 and connack[0] >> 4 == 2 and connack[3] == 0):
                     self.connected = False
                     time.sleep(5)
                     continue
 
                 self.connected = True
-                # Subscribe to mbmd/# and openhems/#
-                for sub_t in [b"mbmd/#", b"openhems/#", b"P1P2/#"]:
-                    sub_pkt = bytearray([0x82, 5 + len(sub_t), 0, 1, 0, len(sub_t)]) + sub_t + bytearray([0])
-                    s.sendall(sub_pkt)
-                    s.recv(5)
+                for pkt_id, sub_t in enumerate([b"mbmd/#", b"openhems/#", b"P1P2/#"], start=1):
+                    sub_body = bytearray([0, pkt_id, 0, len(sub_t)]) + sub_t + bytearray([0])
+                    s.sendall(bytes([0x82]) + self.encode_remaining_length(len(sub_body)) + sub_body)
 
                 buf = bytearray()
                 s.settimeout(2.0)
+                last_ping = time.time()
                 while self.running:
+                    if time.time() - last_ping >= self.KEEPALIVE_S / 2:
+                        s.sendall(b"\xc0\x00")  # PINGREQ
+                        last_ping = time.time()
                     try:
-                        chunk = s.recv(2048)
-                        if not chunk: break
-                        buf.extend(chunk)
-                        while len(buf) > 2:
-                            pkt_type = buf[0] >> 4
-                            if pkt_type == 3: # PUBLISH
-                                rem = buf[1]
-                                if len(buf) >= 2 + rem:
-                                    data = buf[2:2+rem]
-                                    buf = buf[2+rem:]
-                                    t_len = (data[0] << 8) | data[1]
-                                    top = data[2:2+t_len].decode("utf-8", errors="ignore")
-                                    val_str = data[2+t_len:].decode("utf-8", errors="ignore")
-                                    try:
-                                        self.cache[top] = float(val_str)
-                                    except ValueError:
-                                        self.cache[top] = val_str
-                                    self.last_msg_time = time.time()
-                                else: break
-                            else:
-                                buf = buf[1:]
+                        chunk = s.recv(4096)
                     except socket.timeout:
                         continue
-            except Exception as e:
+                    if not chunk:
+                        break
+                    buf.extend(chunk)
+                    publishes, buf = self.parse_packets(buf)
+                    now = time.time()
+                    for topic, raw in publishes:
+                        val_str = raw.decode("utf-8", errors="ignore")
+                        try:
+                            self.cache[topic] = float(val_str)
+                        except ValueError:
+                            self.cache[topic] = val_str
+                        self.cache_ts[topic] = now
+                        self.last_msg_time = now
+            except Exception:
+                pass
+            finally:
                 self.connected = False
+                if s is not None:
+                    try:
+                        s.close()
+                    except OSError:
+                        pass
+            if self.running:
                 time.sleep(5)
 
 
@@ -332,6 +438,7 @@ class HemsBackgroundCollector(threading.Thread):
         self.mqtt_sub = HemsMqttSubscriberThread()
         self.mqtt_sub.start()
         self.last_actuation = {}
+        self._last_retrain_date: Optional[str] = None
         self.live_balance = {
             "p1_import_w": 0.0,
             "p1_export_w": 0.0,
@@ -368,196 +475,292 @@ class HemsBackgroundCollector(threading.Thread):
                     self.push_ha_sensors()
                 except Exception as e_push:
                     print(f"[Open HEMS Collector] Error in push_ha_sensors: {e_push}", flush=True)
+                try:
+                    self.maybe_run_daily_retrain()
+                except Exception as e_ret:
+                    print(f"[Open HEMS Collector] Error in maybe_run_daily_retrain: {e_ret}", flush=True)
             time.sleep(self.sample_interval)
+
+    def maybe_run_daily_retrain(self) -> None:
+        """Runs self-learning model retraining automatically once per night (03:00 local) or when stale (>24h)."""
+        from api.context import GLOBAL_MODEL, GLOBAL_DHW_MODEL
+        if not GLOBAL_MODEL:
+            return
+        now_ams = datetime.now(AMS_TZ)
+        today_str = now_ams.strftime("%Y-%m-%d")
+        if self._last_retrain_date == today_str:
+            return
+
+        should_run = (now_ams.hour == 3)
+        if not should_run:
+            last_tr = GLOBAL_MODEL.params.get("last_trained")
+            if not last_tr:
+                should_run = True
+            else:
+                try:
+                    dt_tr = datetime.fromisoformat(str(last_tr))
+                    if (now_ams - dt_tr.astimezone(AMS_TZ)).total_seconds() > 86400 * 1.5:
+                        should_run = True
+                except Exception:
+                    should_run = True
+
+        if should_run:
+            self._last_retrain_date = today_str
+            res = GLOBAL_MODEL.retrain_from_openhems()
+            if GLOBAL_DHW_MODEL:
+                GLOBAL_DHW_MODEL.profile = GLOBAL_DHW_MODEL._load_profile()
+            print(f"[Open HEMS Self-Learning] Daily model retrain completed: {res.get('status')}", flush=True)
+
+    def _set_room_setpoint(self, setpoint_c: float) -> bool:
+        # Strict Relay-Only Mandate: Open HEMS NEVER writes to climate.hc_room_room_heating on the Daikin.
+        # All heat pump control happens strictly via the Smart Grid relays (SG1..SG4).
+        return True
+
+    def _log_failsafe(self, reason: Optional[str]) -> None:
+        """Logs the Elephant fail-safe once per distinct reason."""
+        if reason == getattr(self, "_failsafe_reason", None):
+            return
+        self._failsafe_reason = reason
+        if reason:
+            print(f"[Open HEMS Dispatcher] FAIL-SAFE: {reason} -> Elephant baseline (SG2)", flush=True)
+            log_technical_error(
+                domain="planning",
+                event_type="dispatch_failsafe",
+                reason="⚠️ Dispatch Fail-safe: Elephant baseline (SG2)",
+                explanation=f"Geen geldig actueel planslot ({reason}). Open HEMS valt terug op normaal bedrijf (SG2, 50°C).",
+                inputs={"reason": reason},
+                category="WARNING"
+            )
 
     def execute_live_dispatch(self):
         """
-        Active Layer 4 Dispatch Execution:
-        Takes the active CanonicalDispatchPlan, evaluates opportunistic mergers,
-        and enforces physical relay & setpoint actuation via DaikinActuator.
+        Active Layer 4 Dispatch Execution (one Home Assistant snapshot per tick):
+          1. Resolve the plan slot that covers *now* from a fresh plan; otherwise fall back to the
+             Elephant baseline (normal / SG2) instead of replaying a stale slot.
+          2. Observe-only assessments (opportunistic merge, night decision) for audit/UI.
+          3. DhwRunSupervisor (single owner of the in-flight run) decides the DHW mode and target.
+          4. Room thermostat floor buffer (ownership-aware), DHW climate watchdogs.
+          5. Actuate via DaikinActuator, verify every write, publish a heartbeat for the HA dead-man.
         """
-        global _LAST_LOGGED_ACTUATION
+        now_utc = datetime.now(timezone.utc)
+        effective_mode = None
         try:
-            plan = ensure_active_canonical_plan()
-            if not plan or not plan.slots:
-                return
+            plan = None
+            try:
+                plan = ensure_active_canonical_plan()
+            except Exception as e_plan:
+                print(f"[Open HEMS Dispatcher] Planning failed: {e_plan}", flush=True)
 
             states_map = get_ha_states_map()
-            dhw_st = states_map.get("sensor.hc_dhw_temperature_r5t_dhw_tank", {})
-            try:
-                t_live = float(dhw_st.get("state", 50.0))
-            except (ValueError, TypeError):
-                t_live = 50.0
+            if not states_map:
+                print("[Open HEMS Dispatcher] Home Assistant onbereikbaar: geen actuatie mogelijk deze tick", flush=True)
+                return
 
-            wp_st = states_map.get("sensor.warmtepomp_power", {})
-            try:
-                wp_power_val = float(wp_st.get("state", 0.0))
-            except (ValueError, TypeError):
-                wp_power_val = 0.0
+            dhw = read_dhw_activity(states_map)
+            t_live = dhw.tank_temp_c
+            wp_power_val = dhw.power_w or 0.0
 
-            cv_st = states_map.get("switch.hc_mode_altherma_on", {})
-            cv_active = (cv_st.get("state") == "on")
-
-            # 1. Run opportunistic run merger (e.g. if showering occurred)
-            merge_res = evaluate_and_apply_dhw_run_merger(plan, t_live)
-            evaluate_and_log_night_boiler_decision(plan, t_live)
-
-            # 2. Get current slot mode
-            cur_slot = plan.slots[0]
-            val = getattr(cur_slot.mode_code, "value", cur_slot.mode_code)
-            req_clean = str(val).strip().lower()
-            if req_clean.startswith("standardizedstate."):
-                req_clean = req_clean.split(".")[-1]
-            mode_to_execute = req_clean
-
-            # In-Flight Run Continuity Guard:
-            # If an active run is in flight and tank is below setpoint, protect against premature de-actuation
-            in_flight = PlanStore.get_instance().get_in_flight_run()
-            if in_flight:
-                target_in_flight = float(in_flight.get("target_temp_c", 50.0))
-                if t_live < target_in_flight - 0.2:
-                    in_flight_mode = in_flight.get("mode", "forced_on")
-                    if mode_to_execute in ["normal", "off", "standby"]:
-                        mode_to_execute = in_flight_mode
-                else:
-                    PlanStore.get_instance().clear_in_flight_run()
-                    in_flight = None
-                    # Run target reached: hardware relays return to SG2 (Normal 50°C natively).
-                    # Strictly NEVER touch climate.hc_dhw_dhw_setpoint via software.
-
-            # Space Heating: Floor buffer preheat via Room Thermostat (+1.0°C) with rate limiter
-            now_utc = datetime.now(timezone.utc)
-            room_cl = states_map.get("climate.woonkamer_climate_daikin", {})
-            room_attrs = room_cl.get("attributes", {})
-            try:
-                t_room_live = float(room_attrs.get("current_temperature", 20.5))
-            except (ValueError, TypeError):
-                t_room_live = 20.5
-            try:
-                t_room_setpoint = float(room_attrs.get("target_temp_low", room_attrs.get("temperature", 20.5)))
-            except (ValueError, TypeError):
-                t_room_setpoint = 20.5
-
-            if mode_to_execute == "advised_on":
-                elevated_t = GLOBAL_ROOM_BUFFER_CTRL.request_preheat(t_room_live, t_room_setpoint, now=now_utc)
-                if elevated_t is not None:
-                    call_ha_service("climate", "set_temperature", {
-                        "entity_id": "climate.woonkamer_climate_daikin",
-                        "target_temp_low": elevated_t,
-                        "target_temp_high": elevated_t + 3.0
-                    })
-                    write_hems_annotation(
-                        event_type="space_heating_preheat",
-                        title=f"♨️ Vloerbuffer Pre-Heat (+1.0°C) -> {elevated_t}°C",
-                        description=f"Kamerthermostaat verhoogd naar {elevated_t}°C (basis {t_room_setpoint}°C) voor betonbuffer vóór piek.",
-                        state_code="advised_on",
-                        power_kw=1.5,
-                        target_temp_c=elevated_t
-                    )
-                # Keep physical relays in normal (SG2); room thermostat handles heat pump activation cleanly
-                mode_to_execute = "normal"
+            # 1. Current slot (by timestamp) from a fresh plan, else fail-safe
+            cur_slot, stale_reason = resolve_current_slot(plan, now_utc)
+            if cur_slot is None:
+                requested_mode = "normal"
+                slot_target = None
+                run_minutes = None
+                self._log_failsafe(stale_reason)
             else:
-                restored_t = GLOBAL_ROOM_BUFFER_CTRL.request_release(now=now_utc)
-                if restored_t is not None:
-                    call_ha_service("climate", "set_temperature", {
-                        "entity_id": "climate.woonkamer_climate_daikin",
-                        "target_temp_low": restored_t,
-                        "target_temp_high": restored_t + 3.0
-                    })
+                requested_mode = normalize_mode(cur_slot.mode_code)
+                slot_target = getattr(cur_slot, "target_temp_c", None)
+                run_minutes = count_run_minutes_from(plan, cur_slot, DHW_FORCE_MODES)
+                self._log_failsafe(None)
 
-            # Watchdog 1: Room Thermostat Failsafe
-            wd_room = GLOBAL_ROOM_BUFFER_CTRL.watchdog_check(t_room_setpoint, now=now_utc)
-            if wd_room is not None:
-                call_ha_service("climate", "set_temperature", {
-                    "entity_id": "climate.woonkamer_climate_daikin",
-                    "target_temp_low": wd_room,
-                    "target_temp_high": wd_room + 3.0
-                })
+            # Planning engine of the current plan: plans without the key were made by the DP (ADR-004)
+            dhw_engine = str((getattr(plan, "metadata", None) or {}).get("dhw_engine", "dp")) if plan is not None else "daikin_first"
 
-            # Watchdog 2: DHW Elephant Baseline Invariant (ensure standard 50°C baseline and 'heat' state)
-            dhw_cl_state = states_map.get("climate.hc_dhw_dhw_setpoint", {}).get("state")
-            dhw_cl_temp = states_map.get("climate.hc_dhw_dhw_setpoint", {}).get("attributes", {}).get("temperature")
-            
-            # P1P2 Bridge Write Budget Watchdog: respect hardware EEPROM protection.
-            # Escalate instead of automatically refilling tokens (user preference).
-            bridge_budget = states_map.get("number.hc_bridge_write_budget", {}).get("state")
-            if bridge_budget is not None:
+            # 2. Observe-only assessments for the DP engine (never actuate, never mutate the plan).
+            #    Daikin-first (ADR-006) has no merger or night decision.
+            if plan is not None and dhw_engine == "dp":
                 try:
-                    if float(bridge_budget) <= 1.0:
-                        log_technical_error(
-                            domain="hardware",
-                            event_type="p1p2_write_budget_depleted",
-                            reason="⚠️ P1P2 Write Budget Bijna Leeg",
-                            explanation=f"P1P2 bridge tokensaldo is {bridge_budget}. Schrijfacties naar Daikin worden geweigerd ter bescherming van EEPROM. Escalatie naar gebruiker vereist.",
-                            inputs={"budget": bridge_budget},
-                            category="WARNING"
-                        )
+                    evaluate_and_apply_dhw_run_merger(plan, t_live, dhw_power_w=wp_power_val, dhw_valve_on=dhw.valve_on)
+                except Exception as e_obs:
+                    print(f"[Open HEMS Dispatcher] Merge assessment error: {e_obs}", flush=True)
+                if t_live is not None:
+                    try:
+                        evaluate_and_log_night_boiler_decision(plan, t_live)
+                    except Exception as e_night:
+                        print(f"[Open HEMS Dispatcher] Night decision log error: {e_night}", flush=True)
+
+            # 3. DHW run supervision (single owner of the in-flight commitment); settings may change at runtime
+            try:
+                DHW_SUPERVISOR.apply_config(load_json(CONFIG_FILE) if CONFIG_FILE.exists() else {})
+            except Exception as e_cfg:
+                print(f"[Open HEMS Dispatcher] Supervisor settings not refreshed: {e_cfg}", flush=True)
+            decision = DHW_SUPERVISOR.decide(
+                requested_mode, slot_target, t_live, now=now_utc, planned_run_minutes=run_minutes,
+                dhw_heating_observed=dhw.compressor_heating_dhw, engine=dhw_engine
+            )
+            mode_to_execute = decision.mode
+            target_t = decision.target_temp_c
+            if decision.in_flight_action in ("armed", "cleared", "rearmed", "upgraded", "released_no_effect"):
+                print(f"[Open HEMS Dispatcher] DHW run {decision.in_flight_action}: mode={mode_to_execute} "
+                      f"target={target_t}°C tank={t_live}°C {decision.reason or ''}", flush=True)
+                DecisionAuditLogger.log_decision(
+                    domain="dhw",
+                    decision_type=f"dhw_run_{decision.in_flight_action}",
+                    chosen_mode=mode_to_execute,
+                    target_temp_c=target_t,
+                    inputs={"tank_temp_c": t_live, "planned_mode": requested_mode, "slot_target_c": slot_target,
+                            "planned_run_minutes": run_minutes, "dhw_heating_observed": dhw.compressor_heating_dhw,
+                            "dhw_engine": dhw_engine},
+                    reason=f"DHW run {decision.in_flight_action}",
+                    explanation=decision.reason or f"Planslot {requested_mode} → {mode_to_execute} (doel {target_t}°C).",
+                    category="WARNING" if decision.in_flight_action == "released_no_effect" else "ACTION"
+                )
+
+            # 3b. Pre-Flight Gatekeeper Pipeline (modular multi-subsystem pre-check)
+            room_clim = read_room_climate(states_map)
+            t_room_val = room_clim.room_temp_c if room_clim.room_temp_c is not None else 20.0
+            sp_room_val = room_clim.setpoint_c if room_clim.setpoint_c is not None else 20.0
+            t_out_val = None
+            for o_ent in ("sensor.wittboy_gw2000a_weather_station_gw2000a_outdoor_temperature", "sensor.altherma_outdoor_temperature"):
+                st_o = states_map.get(o_ent, {}).get("state")
+                try:
+                    if st_o not in (None, "unavailable", "unknown"):
+                        t_out_val = float(st_o)
+                        break
                 except (ValueError, TypeError):
                     pass
+            if t_out_val is None:
+                t_out_val = 10.0
 
-            # If boiler climate was forced 'off' in HA, immediately restore to 'heat'
-            if dhw_cl_state == "off":
-                call_ha_service("climate", "set_hvac_mode", {
-                    "entity_id": "climate.hc_dhw_dhw_setpoint",
-                    "hvac_mode": "heat"
-                })
+            batt_soc_val = 50.0
+            st_b = states_map.get("sensor.battery_state_of_charge", {}).get("state")
+            try:
+                if st_b not in (None, "unavailable", "unknown"):
+                    batt_soc_val = float(st_b)
+            except (ValueError, TypeError):
+                pass
+
+            subsystem_live_state = SubsystemLiveState(
+                dhw_temp_c=t_live if t_live is not None else 50.0,
+                outdoor_temp_c=t_out_val,
+                room_temp_c=t_room_val,
+                room_setpoint_c=sp_room_val,
+                battery_soc_pct=batt_soc_val,
+                compressor_dwell_active=False
+            )
+
+            try:
+                preflight_results = GLOBAL_PREFLIGHT_COORDINATOR.evaluate_all(
+                    subsystem_live_state,
+                    plan,
+                    now=now_utc,
+                    is_heating_active=(wp_power_val > 500 and not dhw.valve_on)
+                )
+                dhw_pf = preflight_results.get("dhw")
+                heat_pf = preflight_results.get("heating")
+
+                # Gatekeeper enforcement for DHW: deferral when lockout is too close
+                if dhw_pf and dhw_pf.is_deferred and mode_to_execute in DHW_FORCE_MODES:
+                    if not (decision and decision.in_flight_action in ("armed", "rearmed", "upgraded")):
+                        print(f"[Open HEMS Dispatcher] Pre-Flight DHW DEFER: {dhw_pf.reason}", flush=True)
+                        mode_to_execute = "normal"
+                        DecisionAuditLogger.log_decision(
+                            domain="dhw",
+                            decision_type="preflight_dhw_defer",
+                            chosen_mode="normal",
+                            target_temp_c=target_t,
+                            inputs={"tank_temp_c": t_live, "planned_mode": requested_mode, "metrics": dhw_pf.metrics},
+                            reason="Pre-Flight Uitstel Boilervat",
+                            explanation=dhw_pf.reason,
+                            category="DECISION"
+                        )
+                elif dhw_pf and dhw_pf.action == "EMERGENCY" and mode_to_execute not in DHW_FORCE_MODES:
+                    print(f"[Open HEMS Dispatcher] Pre-Flight DHW EMERGENCY: {dhw_pf.reason}", flush=True)
+                    mode_to_execute = dhw_pf.target_mode
+                    target_t = dhw_pf.target_temp_c or 50.0
+
+                # Gatekeeper enforcement for Space Heating: preheat before lockout or defer short run
+                if heat_pf and heat_pf.action == "PREHEAT" and mode_to_execute == "normal" and not dhw.valve_on:
+                    mode_to_execute = "advised_on"
+                    print(f"[Open HEMS Dispatcher] Pre-Flight CV PREHEAT: {heat_pf.reason}", flush=True)
+                elif heat_pf and heat_pf.is_deferred and mode_to_execute == "advised_on":
+                    mode_to_execute = "normal"
+                    print(f"[Open HEMS Dispatcher] Pre-Flight CV DEFER: {heat_pf.reason}", flush=True)
+
+            except Exception as e_pf:
+                print(f"[Open HEMS Dispatcher] Preflight evaluation error: {e_pf}", flush=True)
+
+            # 3c. SG3 (advised_on / Pre-Heat) Anti-Chatter & Minimum Hold Time (30 min)
+            # Prevents 1-5 minute relay flapping caused by 60s plan re-evaluations or sensor jitter
+            dispatch_st = get_dispatch_state()
+            sg3_started_iso = dispatch_st.get("sg3_advised_on_started_at")
+            if mode_to_execute == "advised_on":
+                if not sg3_started_iso:
+                    dispatch_st.set("sg3_advised_on_started_at", now_utc.isoformat())
+            elif mode_to_execute == "normal" and sg3_started_iso:
+                try:
+                    t_sg3 = datetime.fromisoformat(str(sg3_started_iso).replace("Z", "+00:00"))
+                    hold_elapsed_mins = (now_utc - t_sg3).total_seconds() / 60.0
+                    if hold_elapsed_mins < 30.0:
+                        mode_to_execute = "advised_on"
+                    else:
+                        dispatch_st.set("sg3_advised_on_started_at", None)
+                except Exception:
+                    dispatch_st.set("sg3_advised_on_started_at", None)
+            elif mode_to_execute in ("forced_off", "forced_on", "max_on"):
+                # Safety lockouts or DHW always override and clear SG3 hold
+                dispatch_st.set("sg3_advised_on_started_at", None)
+
+            # 4a. Space heating pre-heat: Strict Relay-Only Mandate.
+            # Open HEMS NEVER writes to climate.hc_room_room_heating or switch.hc_mode_altherma_on.
+            # When mode_to_execute == "advised_on", DaikinActuator switches the Smart Grid relay to
+            # "Geadviseerd aan" (SG3: S10S=on, S11S=off).
+            if GLOBAL_ROOM_BUFFER_CTRL.is_buffering:
+                GLOBAL_ROOM_BUFFER_CTRL.request_release(now=now_utc, force=True)
+
+            # Watchdog 2: DHW Setpoint Read-Only Monitor (uit = uit: Open HEMS NEVER forces climate.hc_dhw_dhw_setpoint on or writes its setpoint)
+            dhw_cl_temp = states_map.get("climate.hc_dhw_dhw_setpoint", {}).get("attributes", {}).get("temperature")
 
             # User Mandate: Strict Relay-Only Policy for DHW. Open HEMS NEVER writes to climate.hc_dhw_dhw_setpoint.
-            # Stoken naar 60°C gebeurt zuiver via relais SG4; normaal bedrijf is 50°C via SG2.
             if dhw_cl_temp is not None:
                 try:
-                    if abs(float(dhw_cl_temp) - 50.0) > 0.5:
+                    cfg_dhw = load_json(CONFIG_FILE).get("dhw_boiler", {})
+                    expected_sp = float(cfg_dhw.get("fallback_setpoint_temp", 48.0))
+                    if abs(float(dhw_cl_temp) - expected_sp) > 0.5:
                         log_technical_error(
                             domain="hardware",
                             event_type="dhw_setpoint_anomaly",
                             reason="⚠️ Boilervat Thermostaat Setpoint Afwijking",
-                            explanation=f"Boilervat thermostaat staat op {dhw_cl_temp}°C i.p.v. 50.0°C. Open HEMS raakt dit setpoint niet softwarematig aan (relais-only beleid).",
-                            inputs={"setpoint": dhw_cl_temp},
+                            explanation=f"Boilervat thermostaat staat op {dhw_cl_temp}°C i.p.v. {expected_sp}°C. Open HEMS raakt dit setpoint niet softwarematig aan (relais-only beleid).",
+                            inputs={"setpoint": dhw_cl_temp, "expected": expected_sp},
                             category="WARNING"
                         )
                 except (ValueError, TypeError):
                     pass
 
-            # Determine continuous lockout duration from HA state
+            # Continuous lockout duration (SG1 = S10S off, S11S on)
             cur_lockout_mins = 0.0
             s10_st = states_map.get("switch.warmtepomp_smart_grid_1_s10s", {})
             s11_st = states_map.get("switch.warmtepomp_smart_grid_2_s11s", {})
-            s10_on = (s10_st.get("state") == "on")
-            s11_on = (s11_st.get("state") == "on")
-            if not s10_on and s11_on:
+            if s10_st.get("state") != "on" and s11_st.get("state") == "on":
                 lc_str = s11_st.get("last_changed")
                 if lc_str:
                     try:
                         lc_dt = datetime.fromisoformat(lc_str.replace("Z", "+00:00"))
-                        cur_lockout_mins = max(0.0, (datetime.now(timezone.utc) - lc_dt).total_seconds() / 60.0)
+                        cur_lockout_mins = max(0.0, (now_utc - lc_dt).total_seconds() / 60.0)
                     except Exception:
                         pass
 
-            # 3. Instantiate DaikinActuator and execute mode
-            actuator = make_daikin_ha_actuator()
-            if in_flight:
-                target_t = float(in_flight.get("target_temp_c", 50.0))
-            elif mode_to_execute in ["max_on", "forced_on", "forced_solar_boost_60", "forced_night_50"]:
-                if getattr(cur_slot, "target_temp_c", None) is not None:
-                    target_t = float(cur_slot.target_temp_c)
-                elif plan.dhw_summary and getattr(plan.dhw_summary, "target_temp_c", None) is not None:
-                    target_t = float(plan.dhw_summary.target_temp_c)
-                else:
-                    target_t = 60.0 if mode_to_execute in ["max_on", "forced_solar_boost_60"] else 50.0
-            else:
-                # Elephant baseline: normal mode strictly targets standard 50.0°C
-                target_t = 50.0
-
-            if plan.dhw_summary and plan.dhw_summary.planned_mode == "max_on" and mode_to_execute == "forced_on":
-                mode_to_execute = "max_on"
+            # 5. Actuate (CV master ownership persisted in dispatch state)
+            actuator = make_daikin_ha_actuator(states_map=states_map, dispatch_state=get_dispatch_state())
             res = actuator.execute_mode(
                 requested_mode=mode_to_execute,
-                current_cv_switch_state=cv_active,
+                current_cv_switch_state=(dhw.cv_master_on is True),
                 target_temp=target_t,
                 current_continuous_lockout_mins=cur_lockout_mins
             )
+            effective_mode = res.effective_mode
 
-            # 4. Check if actuation succeeded or failed
             if not res.success:
                 log_technical_error(
                     domain="hardware",
@@ -574,76 +777,48 @@ class HemsBackgroundCollector(threading.Thread):
                     category="ERROR"
                 )
             else:
-                # 5. Audit Log Hardware Actuation & verify HA state confirmation
-                curr_sel = states_map.get("input_select.warmtepomp_smart_grid_modus", {}).get("state")
-                mode_to_option = {
-                    "normal": "Automatisch",
-                    "forced_off": "Geforceerd uit",
-                    "advised_on": "Geadviseerd aan",
-                    "forced_on": "Geforceerd aan",
-                    "max_on": "Geforceerd aan",
-                    "forced_solar_boost_60": "Geforceerd aan",
-                    "forced_night_50": "Geforceerd aan",
-                    "forced_space_heating": "Geforceerd aan",
-                    "advised_off": "Automatisch"
-                }
-                target_sel = mode_to_option.get(res.effective_mode, "Automatisch")
-                curr_cv = (states_map.get("switch.hc_mode_altherma_on", {}).get("state") == "on")
-
-                # CV Master switch is only managed by Open HEMS during DHW runs (forced OFF for hydraulic isolation)
-                # or when explicitly releasing an in-flight DHW run back to normal.
-                # In normal idle state, Open HEMS respects the user's manual heating setting.
-                cv_needs_switch = False
-                if res.effective_mode in ("forced_on", "max_on", "forced_solar_boost_60", "forced_night_50"):
-                    cv_needs_switch = (curr_cv is True)
-                elif in_flight is not None and res.effective_mode == "normal":
-                    cv_needs_switch = (curr_cv is False)
-
-                has_switched = (curr_sel != target_sel or cv_needs_switch)
-
-                if has_switched:
-                    print(f"[Open HEMS Actuator] Hardware geschakeld naar stand '{mode_to_execute}': Modus={target_sel}, CV_Master={'AAN' if (curr_cv or cv_needs_switch) else 'UIT'}", flush=True)
+                writes = list(getattr(actuator, "ha_writes", []))
+                if writes:
                     time.sleep(0.5)
                     fresh_states = get_ha_states_map()
-                    act_sel = fresh_states.get("input_select.warmtepomp_smart_grid_modus", {}).get("state")
-                    act_cv = (fresh_states.get("switch.hc_mode_altherma_on", {}).get("state") == "on")
-
-                    unconfirmed = []
-                    if target_sel != act_sel:
-                        unconfirmed.append(f"Smart Grid Modus (doel '{target_sel}', is '{act_sel}')")
-                    if cv_needs_switch and (res.command.cv_master_switch_on != act_cv):
-                        unconfirmed.append(f"CV Master (doel {'AAN' if res.command.cv_master_switch_on else 'UIT'}, is {'AAN' if act_cv else 'UIT'})")
-
+                    unconfirmed = [
+                        f"{eid} (doel '{want}', is '{fresh_states.get(eid, {}).get('state')}')"
+                        for eid, want in writes
+                        if eid.split(".")[0] in ("input_select", "switch") and fresh_states.get(eid, {}).get("state") != want
+                    ]
+                    if unconfirmed:
+                        # P1P2 bus entities (e.g. switch.hc_mode_altherma_on) can take 1.5-2.5s to echo state back
+                        time.sleep(2.0)
+                        fresh_states = get_ha_states_map()
+                        unconfirmed = [
+                            f"{eid} (doel '{want}', is '{fresh_states.get(eid, {}).get('state')}')"
+                            for eid, want in writes
+                            if eid.split(".")[0] in ("input_select", "switch") and fresh_states.get(eid, {}).get("state") != want
+                        ]
                     if unconfirmed:
                         log_technical_error(
                             domain="hardware",
                             event_type="actuation_unconfirmed",
                             reason="❌ Schakeling Niet Bevestigd door Home Assistant",
                             explanation=f"Open HEMS heeft de status omgezet voor {mode_to_execute}, maar Home Assistant bevestigt de toestand niet: {', '.join(unconfirmed)}.",
-                            inputs={
-                                "mode_gevraagd": mode_to_execute,
-                                "onbevestigd": unconfirmed,
-                                "modus_werkelijk": act_sel,
-                                "cv_werkelijk": act_cv
-                            },
+                            inputs={"mode_gevraagd": mode_to_execute, "onbevestigd": unconfirmed},
                             category="ERROR"
                         )
                     else:
                         mode_titles = {
                             "normal": "⚙️ Smart Grid Relais: Terug naar Ruststand (SG2)",
-                            "max_on": "⚡ Smart Grid Relais: DHW Zonnebuffer 60°C (SG4)",
-                            "forced_on": "🚿 Smart Grid Relais: DHW Basislading 50°C (SG4)",
+                            "max_on": "⚡ Smart Grid Relais: DHW Buffer (SG4)",
+                            "forced_on": "🚿 Smart Grid Relais: DHW Lading (SG4)",
                             "advised_on": "♨️ Smart Grid Relais: Pre-Heat Vloerbuffer (SG3)",
                             "forced_off": "🚫 Smart Grid Relais: Spitsblokkade (SG1)",
                             "advised_off": "⏸️ Smart Grid Relais: Gereduceerde Modulatie (SG1)"
                         }
                         act_title = mode_titles.get(res.effective_mode, f"⚙️ Smart Grid Relais: {res.effective_mode}")
-                        act_desc = f"Smart Grid modus omgezet: '{target_sel}', CV Master={'AAN' if res.command.cv_master_switch_on else 'UIT'}."
+                        act_desc = f"Writes: {', '.join(f'{e}={w}' for e, w in writes)}."
                         if res.downgrade_reason:
                             act_desc += f" (Veiligheidsinterlock: {res.downgrade_reason})"
                         elif target_t:
-                            act_desc += f" Tapwater setpoint: {target_t}°C."
-
+                            act_desc += f" Tapwater doel: {target_t}°C."
                         write_hems_annotation(
                             event_type="hardware_actuation",
                             title=act_title,
@@ -663,8 +838,9 @@ class HemsBackgroundCollector(threading.Thread):
                                 "s11s": res.command.s11s_relay_on,
                                 "cv_master": res.command.cv_master_switch_on,
                                 "effective_mode": res.effective_mode,
-                                "tank_temp_c": round(t_live, 1),
-                                "downgrade_reason": res.downgrade_reason
+                                "tank_temp_c": round(t_live, 1) if t_live is not None else None,
+                                "downgrade_reason": res.downgrade_reason,
+                                "writes": writes
                             },
                             reason=act_title,
                             explanation=act_desc,
@@ -674,20 +850,36 @@ class HemsBackgroundCollector(threading.Thread):
 
             self.last_actuation = {
                 "timestamp": datetime.now(AMS_TZ).isoformat(),
-                "slot_time": cur_slot.time_label,
+                "slot_time": cur_slot.time_label if cur_slot is not None else None,
+                "failsafe_reason": stale_reason if cur_slot is None else None,
+                "planned_mode": requested_mode,
                 "requested_mode": mode_to_execute,
                 "effective_mode": res.effective_mode,
+                "dhw_run_action": decision.in_flight_action,
                 "downgrade_reason": res.downgrade_reason,
                 "s10s": res.command.s10s_relay_on,
                 "s11s": res.command.s11s_relay_on,
                 "cv_master": res.command.cv_master_switch_on,
-                "target_dhw_c": res.command.target_dhw_temp_c,
+                "target_dhw_c": target_t,
                 "success": res.success
             }
-            print(f"[Open HEMS Dispatcher] Live actuation: {mode_to_execute} -> {res.effective_mode} (target {target_t}°C, S10S={res.command.s10s_relay_on}, S11S={res.command.s11s_relay_on}, CV={res.command.cv_master_switch_on})", flush=True)
+            print(f"[Open HEMS Dispatcher] Live actuation: {requested_mode} -> {mode_to_execute} -> {res.effective_mode} "
+                  f"(target {target_t}°C, tank {t_live}°C, S10S={res.command.s10s_relay_on}, S11S={res.command.s11s_relay_on}, "
+                  f"CV={res.command.cv_master_switch_on})", flush=True)
         except Exception as e:
             print(f"[Open HEMS Dispatcher] Error executing live dispatch: {e}", flush=True)
-            time.sleep(self.sample_interval)
+        finally:
+            # Heartbeat for the Home Assistant dead-man automation (ha/automations/openhems_dispatch_deadman.yaml)
+            try:
+                push_ha_state(HEARTBEAT_ENTITY, datetime.now(timezone.utc).isoformat(), {
+                    "device_class": "timestamp",
+                    "friendly_name": "Open HEMS dispatch heartbeat",
+                    "effective_mode": effective_mode,
+                    "failsafe_reason": getattr(self, "_failsafe_reason", None),
+                    "cv_forced_off_by_hems": bool(get_dispatch_state().get(CV_FORCED_OFF_KEY, False)),
+                })
+            except Exception:
+                pass
 
     def push_ha_sensors(self):
         """Pushes 24h rolling forecast and dispatch sensors to Home Assistant Core."""
@@ -750,8 +942,9 @@ class HemsBackgroundCollector(threading.Thread):
                     p_sol = None
                     if src_type == "mqtt":
                         t_pow = dev.get("mqtt_power_topic", "mbmd/inepro1-103/Power")
-                        if t_pow in self.mqtt_sub.cache:
-                            p_sol = abs(float(self.mqtt_sub.cache[t_pow]))
+                        v_mqtt = self.mqtt_sub.get_fresh(t_pow)
+                        if isinstance(v_mqtt, float):
+                            p_sol = abs(v_mqtt)
                     if p_sol is None:
                         sol_eid = dev.get("ha_power_entity") or "sensor.zonnepanelen_power"
                         p_sol = get_val_w(sol_eid)
@@ -771,8 +964,9 @@ class HemsBackgroundCollector(threading.Thread):
                     p_hp = None
                     if src_type == "mqtt":
                         t_pow = dev.get("mqtt_power_topic", "mbmd/inepro1-102/Power")
-                        if t_pow in self.mqtt_sub.cache:
-                            p_hp = float(self.mqtt_sub.cache[t_pow])
+                        v_mqtt = self.mqtt_sub.get_fresh(t_pow)
+                        if isinstance(v_mqtt, float):
+                            p_hp = v_mqtt
                     if p_hp is None:
                         p_hp = get_val_w(dev.get("ha_power_entity", "sensor.warmtepomp_power"))
 
@@ -780,7 +974,7 @@ class HemsBackgroundCollector(threading.Thread):
                         # Apply Site-Specific Daikin P1P2 State Classifier
                         disagg = DaikinP1P2StateClassifier.classify(
                             total_power_w=p_hp,
-                            mqtt_cache=self.mqtt_sub.cache,
+                            mqtt_cache=self.mqtt_sub.fresh_snapshot(),
                             ha_states=ha_states
                         )
                         mode_tag = disagg.mode.lower()
@@ -826,15 +1020,17 @@ class HemsBackgroundCollector(threading.Thread):
             p1_exp = get_val_w("sensor.power_production") or 0.0
 
             # Read Solar (Direct MQTT Inepro 103 -> HA Fallback)
-            if "mbmd/inepro1-103/Power" in self.mqtt_sub.cache:
-                sol = abs(float(self.mqtt_sub.cache["mbmd/inepro1-103/Power"]))
+            sol_mqtt = self.mqtt_sub.get_fresh("mbmd/inepro1-103/Power")
+            if isinstance(sol_mqtt, float):
+                sol = abs(sol_mqtt)
             else:
                 sol_raw = get_val_w("sensor.zonnepanelen_power") or get_val_w("sensor.zonnepanelen_power_avg_5_minutes") or 0.0
                 sol = abs(sol_raw)
 
             # Read Heat Pump (Direct MQTT Inepro 102 -> HA Fallback)
-            if "mbmd/inepro1-102/Power" in self.mqtt_sub.cache:
-                wp = float(self.mqtt_sub.cache["mbmd/inepro1-102/Power"])
+            wp_mqtt = self.mqtt_sub.get_fresh("mbmd/inepro1-102/Power")
+            if isinstance(wp_mqtt, float):
+                wp = wp_mqtt
             else:
                 wp = get_val_w("sensor.warmtepomp_power") or 0.0
 
@@ -938,10 +1134,9 @@ class HemsBackgroundCollector(threading.Thread):
             cur_hp_mode = self.last_actuation.get("effective_mode") or self.last_actuation.get("requested_mode", "normal")
         else:
             try:
-                plan = ensure_active_canonical_plan()
-                if plan and plan.slots:
-                    val = getattr(plan.slots[0].mode_code, "value", plan.slots[0].mode_code)
-                    cur_hp_mode = str(val).strip().lower()
+                cur_slot, _ = resolve_current_slot(ensure_active_canonical_plan(), datetime.now(timezone.utc))
+                if cur_slot is not None:
+                    cur_hp_mode = normalize_mode(cur_slot.mode_code)
             except Exception:
                 pass
 
