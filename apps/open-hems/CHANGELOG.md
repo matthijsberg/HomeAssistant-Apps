@@ -10,7 +10,7 @@ and this project adheres to our **4-Tier Semantic Versioning Specification**:
 
 ---
 
-## [0.108.22] - 2026-11-09
+## [0.108.23] - 2026-11-09
 
 ## What’s changed
 

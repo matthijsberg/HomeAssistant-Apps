@@ -522,10 +522,6 @@ SELECT mean(power_w)/1000.0 * 0.25 as dhw_kwh_el FROM "energy_telemetry" WHERE "
 
         self.profile["last_updated"] = datetime.now(AMSTERDAM_TZ).isoformat()
         save_json(PROFILE_FILE, self.profile)
-        # Keep add-on data profile synchronized as well
-        addon_prof = "/config/addons/open-hems/data/unallocated_load_profile.json"
-        if os.path.exists(os.path.dirname(addon_prof)):
-            save_json(addon_prof, self.profile)
 
         # 2. Recalibrate Building UA using OLS on Heating Days
         old_ua = float(self.params.get("building", {}).get("ua_base_w_per_k", 321.1))

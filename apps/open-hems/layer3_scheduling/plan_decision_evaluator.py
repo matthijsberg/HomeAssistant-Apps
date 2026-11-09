@@ -2,7 +2,7 @@
 Open HEMS: Plan Decision Evaluator & Real-time Audit Logger
 ===========================================================
 Layer 3 Scheduling & Arbitration:
-  - Opportunistic DHW run merging & live plan slot mutations
+  - Opportunistic DHW run assessment (observe-only: no actuation, no plan mutation)
   - Night boiler pre-evaluation & audit logging
   - Daily planner decision auditing (peak lockouts, space heating policy, daytime arbitrage)
 """
@@ -10,15 +10,13 @@ Layer 3 Scheduling & Arbitration:
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
-from models.canonical import StandardizedState
-from layer3_scheduling.plan_store import PlanStore
 from layer3_scheduling.decision_audit import DecisionAuditLogger
 from layer3_scheduling.opportunistic_merger import OpportunisticDHWMerger
 from layer3_scheduling.dhw_specs import DhwTankSpec
+from layer3_scheduling.peak_detection import hard_lockout_slot_indices
 from api.infra_diagnostics import write_hems_annotation
-from integrations.homeassistant.client import get_ha_states_map, call_ha_service
 
 
 GLOBAL_OPPORTUNISTIC_MERGE = None
@@ -34,238 +32,77 @@ _LAST_PLAN_LOGS: Dict[str, Any] = {
 
 def evaluate_and_apply_dhw_run_merger(
     plan: Any,
-    t_live: float,
+    t_live: Optional[float],
     current_solar_kw: float = 0.0,
-    current_price_eur: float = 0.24
+    current_price_eur: float = 0.24,
+    dhw_power_w: float = 0.0,
+    dhw_valve_on: bool = False,
 ) -> Any:
     """
-    Evaluates whether the heat pump has autonomously started heating DHW (e.g. after a shower)
-    and merges an upcoming 60C solar boost run into the active run if cost-effective.
+    OBSERVE-ONLY opportunistic-merge assessment (presentation & audit).
+
+    It never actuates hardware, never mutates the (immutable) published plan and never touches
+    the in-flight run commitment. Whether an autonomous Daikin DHW run should be continued to a
+    higher buffer temperature is decided by the DP optimizer (it receives the running compressor
+    as run_state0) and executed by the Layer 4 DhwRunSupervisor.
+
+    dhw_power_w / dhw_valve_on: heat-pump power and 3-way-valve/DHW-demand state, read by the
+    caller through the device integration (no entity ids in Layer 3).
     """
     global GLOBAL_OPPORTUNISTIC_MERGE
-    states_map = get_ha_states_map()
 
-    wp_power_sensor = states_map.get("sensor.warmtepomp_power", {})
-    try:
-        wp_power = float(wp_power_sensor.get("state", 0.0))
-    except (ValueError, TypeError):
-        wp_power = 0.0
+    # Hydraulic fidelity: only consider active DHW heating if the 3-way valve is routed to DHW.
+    # Never trigger on electrical compressor power alone (which can be space heating).
+    is_actively_heating = bool(dhw_power_w > 600.0 and dhw_valve_on and t_live is not None)
 
-    dhw_demand_sensor = states_map.get("binary_sensor.hc_dhw_dhw_demand", {})
-    dhw_valve_sensor = states_map.get("binary_sensor.hc_dhw_valve_dhw_tank", {})
-    is_dhw_valve = (dhw_demand_sensor.get("state") == "on" or dhw_valve_sensor.get("state") == "on")
-
-    # Hydraulic fidelity: Only consider active heating if 3-way valve is physically routed to DHW!
-    # Never trigger on high electrical compressor power alone (which can be space heating).
-    is_actively_heating = (wp_power > 600.0 and is_dhw_valve)
-
-    is_hard_lockout = False
-    if plan and getattr(plan, "dynamic_peaks", None):
-        for p_peak in plan.dynamic_peaks:
-            if p_peak.get("is_hard_lockout") and p_peak.get("start_idx", 99) <= 0 <= p_peak.get("end_idx", -1):
-                is_hard_lockout = True
-                break
-
-    dhw_cl_temp = None
-    try:
-        t_raw = states_map.get("climate.hc_dhw_dhw_setpoint", {}).get("attributes", {}).get("temperature")
-        if t_raw is not None:
-            dhw_cl_temp = float(t_raw)
-    except Exception:
-        pass
-    dhw_spec = DhwTankSpec.from_config(live_setpoint_c=dhw_cl_temp)
+    hard_now = hard_lockout_slot_indices(getattr(plan, "dynamic_peaks", None) or [], n_slots=1) if plan else set()
+    is_hard_lockout = 0 in hard_now
 
     merge_res = OpportunisticDHWMerger.evaluate_merge(
         plan=plan,
         is_dhw_actively_heating=is_actively_heating,
-        current_tank_temp_c=t_live,
+        current_tank_temp_c=t_live if t_live is not None else 0.0,
         current_solar_kw=current_solar_kw,
         current_price_eur=current_price_eur,
         is_hard_lockout_now=is_hard_lockout,
-        current_power_kw=round(wp_power / 1000.0, 2),
-        spec=dhw_spec
+        current_power_kw=round(dhw_power_w / 1000.0, 2),
+        spec=DhwTankSpec()
     )
-
     GLOBAL_OPPORTUNISTIC_MERGE = merge_res
 
-    if merge_res.should_merge:
-        # Actuate HA via input_select (atomic coordinated SG4 actuation) and hydraulic interlock.
-        # DO NOT touch climate.hc_dhw_dhw_setpoint; Daikin heats to boost temp natively in SG4.
-        call_ha_service("input_select", "select_option", {
-            "entity_id": "input_select.warmtepomp_smart_grid_modus",
-            "option": "Geforceerd aan"
-        })
-        call_ha_service("switch", "turn_off", {"entity_id": "switch.hc_mode_altherma_on"})
+    state_key = "idle"
+    if is_actively_heating:
+        state_key = "merge_advised" if merge_res.should_merge else "dhw_active"
 
-        # Cancel the upcoming planned slots in the plan!
-        for slot_idx in merge_res.cancelled_slots:
-            if slot_idx < len(plan.slots):
-                plan.slots[slot_idx].mode_code = StandardizedState.NORMAL
-                plan.slots[slot_idx].mode_label = "Normaal (50°C)"
-                plan.slots[slot_idx].dhw_kw = 0.0
-
-        run_pwr = max(3.0, round(wp_power / 1000.0, 2))
-        # Reflect active run on current slot (slot 0) and next slots
-        if plan and plan.slots:
-            for run_i in range(min(4, len(plan.slots))):
-                plan.slots[run_i].mode_code = StandardizedState.MAX_ON
-                plan.slots[run_i].mode_label = "Zonnebuffer (Fusie tot 60°C)"
-                plan.slots[run_i].dhw_kw = run_pwr
-                plan.slots[run_i].heating_kw = 0.0
-
-        store = PlanStore.get_instance()
-        store.register_in_flight_run(target_temp_c=60.0, mode="max_on")
-        store.publish_plan(plan)
-
-        now_ts = time.time()
-        if _LAST_LOGGED_DECISION.get("state") != "max_on" or (now_ts - _LAST_LOGGED_DECISION.get("ts", 0)) >= 900.0:
-            _LAST_LOGGED_DECISION["state"] = "max_on"
-            _LAST_LOGGED_DECISION["ts"] = now_ts
-            write_hems_annotation(
-                event_type="run_merger",
-                title="⚡ DHW Zonnebuffer Fusie (60°C)",
-                description=merge_res.decision_explanation,
-                state_code="max_on",
-                power_kw=run_pwr,
-                target_temp_c=60.0,
-                savings_eur=merge_res.savings_estimate_eur
-            )
+    now_ts = time.time()
+    if state_key != "idle" and (
+        _LAST_LOGGED_DECISION.get("state") != state_key or (now_ts - _LAST_LOGGED_DECISION.get("ts", 0)) >= 900.0
+    ):
+        _LAST_LOGGED_DECISION["state"] = state_key
+        _LAST_LOGGED_DECISION["ts"] = now_ts
+        try:
             DecisionAuditLogger.log_decision(
                 domain="dhw",
-                decision_type="opportunistic_merge",
-                chosen_mode="max_on",
-                target_temp_c=60.0,
+                decision_type="dhw_run_observed",
+                chosen_mode=merge_res.promoted_mode,
+                target_temp_c=merge_res.target_temp_c,
                 inputs={
                     "tank_temp_c": t_live,
-                    "wp_power_w": wp_power,
+                    "wp_power_w": dhw_power_w,
+                    "dhw_valve_on": dhw_valve_on,
                     "solar_kw": current_solar_kw,
                     "current_price_eur": current_price_eur,
-                    "price_tolerance_eur": 0.05
+                    "hard_lockout_now": is_hard_lockout,
                 },
                 reason=merge_res.reason,
-                explanation=merge_res.decision_explanation,
-                savings_estimate_eur=merge_res.savings_estimate_eur
+                explanation=merge_res.decision_explanation + " (observatie; actuatie volgt uit het canonieke plan)",
+                savings_estimate_eur=merge_res.savings_estimate_eur,
+                category="DECISION"
             )
-    elif is_actively_heating and t_live >= 49.8:
-        # Target reached! Stop forced mode and return relays to SG2 (Automatisch)
-        call_ha_service("input_select", "select_option", {
-            "entity_id": "input_select.warmtepomp_smart_grid_modus",
-            "option": "Automatisch"
-        })
-        call_ha_service("switch", "turn_on", {"entity_id": "switch.hc_mode_altherma_on"})
-
-        if plan and plan.slots:
-            for slot_idx in merge_res.cancelled_slots:
-                if slot_idx < len(plan.slots):
-                    plan.slots[slot_idx].mode_code = StandardizedState.NORMAL
-                    plan.slots[slot_idx].mode_label = "Normaal"
-                    plan.slots[slot_idx].dhw_kw = 0.0
-
-            plan.slots[0].mode_code = StandardizedState.NORMAL
-            plan.slots[0].mode_label = "Normaal (Standby)"
-            plan.slots[0].dhw_kw = 0.0
-
-            store = PlanStore.get_instance()
-            store.clear_in_flight_run()
-            store.publish_plan(plan)
-
-        now_ts = time.time()
-        if _LAST_LOGGED_DECISION.get("state") != "released_50" or (now_ts - _LAST_LOGGED_DECISION.get("ts", 0)) >= 900.0:
-            _LAST_LOGGED_DECISION["state"] = "released_50"
-            _LAST_LOGGED_DECISION["ts"] = now_ts
-            write_hems_annotation(
-                event_type="system_release",
-                title="✅ DHW Doel 50°C Bereikt — Automatisch (SG2)",
-                description="Boilervat op doeltemperatuur. Warmtepomp vrijgegeven naar ruststand.",
-                state_code="normal",
-                power_kw=0.0,
-                target_temp_c=50.0
-            )
-            DecisionAuditLogger.log_decision(
-                domain="dhw",
-                decision_type="system_release",
-                chosen_mode="normal",
-                target_temp_c=50.0,
-                inputs={
-                    "tank_temp_c": t_live,
-                    "wp_power_w": wp_power,
-                    "target_temp_c": 50.0
-                },
-                reason="✅ DHW Doel 50°C Bereikt — Automatisch (SG2)",
-                explanation="Boilervat is op doeltemperatuur (>= 50°C). Smart Grid relais zijn vrijgegeven naar Automatisch (SG2 ruststand).",
-                savings_estimate_eur=0.00
-            )
-    elif is_actively_heating and plan and plan.slots:
-        # Boiler is actively heating to 50°C standard comfort (still below 49.8°C)!
-        call_ha_service("input_select", "select_option", {
-            "entity_id": "input_select.warmtepomp_smart_grid_modus",
-            "option": "Geforceerd aan"
-        })
-        call_ha_service("switch", "turn_off", {"entity_id": "switch.hc_mode_altherma_on"})
-
-        run_pwr = max(3.0, round(wp_power / 1000.0, 2))
-        for run_i in range(min(3, len(plan.slots))):
-            plan.slots[run_i].mode_code = StandardizedState.FORCED_ON
-            plan.slots[run_i].mode_label = "Geforceerd aan (50°C)"
-            plan.slots[run_i].dhw_kw = run_pwr
-            plan.slots[run_i].heating_kw = 0.0
-
-        for slot_idx in merge_res.cancelled_slots:
-            if slot_idx < len(plan.slots):
-                plan.slots[slot_idx].mode_code = StandardizedState.NORMAL
-                plan.slots[slot_idx].mode_label = "Normaal"
-                plan.slots[slot_idx].dhw_kw = 0.0
-
-        store = PlanStore.get_instance()
-        store.register_in_flight_run(target_temp_c=50.0, mode="forced_on")
-        store.publish_plan(plan)
-
-        now_ts = time.time()
-        if _LAST_LOGGED_DECISION.get("state") != "forced_50" or (now_ts - _LAST_LOGGED_DECISION.get("ts", 0)) >= 900.0:
-            _LAST_LOGGED_DECISION["state"] = "forced_50"
-            _LAST_LOGGED_DECISION["ts"] = now_ts
-
-            # SRE Observability: Differentiate autonomous Daikin hardware trigger vs smart dispatch
-            from api.secrets_store import CONFIG_FILE, load_json
-            cfg = load_json(CONFIG_FILE) if CONFIG_FILE.exists() else {}
-            dhw_params = {}
-            for d in cfg.get("devices", []):
-                if isinstance(d, dict) and d.get("id") == "dhw_tank":
-                    dhw_params = d.get("parameters", {})
-                    break
-            reheat_mode = dhw_params.get("reheat_mode", "daikin_system_setting")
-            is_auto = (reheat_mode == "daikin_system_setting")
-            trigger_origin = "daikin_hardware_hysteresis" if is_auto else "openhems_smart_dispatch"
-            trigger_desc = "Daikin Hardware Hysteresis (Autonoom)" if is_auto else "Open HEMS Drempelsturing"
-
-            write_hems_annotation(
-                event_type="dhw_run",
-                title=f"🚿 DHW Basislading (50°C) Gestart [{trigger_desc}]",
-                description=merge_res.decision_explanation,
-                state_code="forced_on",
-                power_kw=run_pwr,
-                target_temp_c=50.0
-            )
-            DecisionAuditLogger.log_decision(
-                domain="dhw",
-                decision_type="standard_charge",
-                chosen_mode="forced_on",
-                target_temp_c=50.0,
-                inputs={
-                    "tank_temp_c": t_live,
-                    "wp_power_w": wp_power,
-                    "target_temp_c": 50.0,
-                    "trigger": trigger_origin,
-                    "trigger_provenance": trigger_desc,
-                    "reheat_mode": reheat_mode
-                },
-                reason=f"DHW Basislading (50°C) Gestart [{trigger_desc}]",
-                explanation=merge_res.decision_explanation,
-                savings_estimate_eur=0.10
-            )
-    else:
-        if _LAST_LOGGED_DECISION.get("state") in ["max_on", "released_50", "forced_50"]:
-            _LAST_LOGGED_DECISION["state"] = "idle"
+        except Exception as e_log:
+            print(f"Warning logging DHW run observation: {e_log}")
+    elif state_key == "idle" and _LAST_LOGGED_DECISION.get("state") != "idle":
+        _LAST_LOGGED_DECISION["state"] = "idle"
 
     return merge_res
 
@@ -441,11 +278,12 @@ def evaluate_and_log_planner_decisions(plan: Any, frame: Any):
                     chosen_mode=cur_mode,
                     target_temp_c=audit.get("target_temp_c"),
                     inputs={
-                        "situation": audit.get("situation"),
-                        "evening_dip_c": audit.get("unheated_evening_dip_c"),
-                        "evening_dip_time": audit.get("evening_dip_time"),
+                        "situation": audit.get("situation") or audit.get("status"),
+                        "evening_dip_c": audit.get("unheated_evening_dip_c") or audit.get("morning_dip_c"),
+                        "evening_dip_time": audit.get("unheated_evening_dip_time") or audit.get("morning_dip_time"),
                         "selected_path": audit.get("selected_path_id"),
-                        "evaluated_paths": audit.get("evaluated_paths")
+                        "evaluated_paths": audit.get("evaluated_paths"),
+                        "planned_runs": audit.get("planned_runs"),
                     },
                     reason=title,
                     explanation=explanation,

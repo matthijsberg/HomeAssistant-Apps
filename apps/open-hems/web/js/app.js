@@ -5004,7 +5004,7 @@
             if (comp === 'dhw') {
                 if (validationDataCache.actual && validationDataCache.actual.dhw_demand) {
                     chartDatasets.push({
-                        label: 'Werkelijk Tapwaterverbruik (Aftap kW_th)',
+                        label: 'Werkelijk Tapwaterverbruik (Aftap kWh_th)',
                         data: validationDataCache.actual.dhw_demand,
                         borderColor: '#38BDF8',
                         backgroundColor: 'rgba(56, 189, 248, 0.20)',
@@ -5017,7 +5017,7 @@
                 }
                 if (validationDataCache.predicted && validationDataCache.predicted.dhw_demand) {
                     chartDatasets.push({
-                        label: 'Verwachte Warmtevraag (Aftap kW_th)',
+                        label: 'Verwachte Warmtevraag (Aftap kWh_th)',
                         data: validationDataCache.predicted.dhw_demand,
                         borderColor: 'rgba(251, 146, 60, 0.55)',
                         backgroundColor: 'rgba(251, 146, 60, 0.08)',

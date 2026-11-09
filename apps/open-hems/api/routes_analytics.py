@@ -428,9 +428,10 @@ def get_today_history_kpis(cfg: dict, sec: dict) -> dict:
 
 
 def load_historical_dhw_planned_windows(start_dt: datetime, end_dt: datetime) -> List[Dict[str, Any]]:
-    """Loads historical planned DHW windows from the persistent decision audit log and baseline schedule."""
+    """Loads historical planned DHW windows from the persistent decision audit log and hardware annotations."""
     day_runs = {}
     night_runs = {}
+    explicit_windows: List[Dict[str, Any]] = []
     audit_file = Path("/config/open_hems_decisions.jsonl")
     if audit_file.exists():
         try:
@@ -441,8 +442,25 @@ def load_historical_dhw_planned_windows(start_dt: datetime, end_dt: datetime) ->
                 ts_str = rec.get("timestamp_iso")
                 if not ts_str: continue
                 rec_dt = datetime.fromisoformat(ts_str).astimezone(AMS_TZ)
+                if rec_dt < start_dt - timedelta(days=1) or rec_dt > end_dt + timedelta(days=1):
+                    continue
                 d_str = rec_dt.strftime("%Y-%m-%d")
                 inputs = rec.get("inputs", {})
+                # 1. Daikin-first explicit planned_runs
+                p_runs = inputs.get("planned_runs")
+                if isinstance(p_runs, list):
+                    for pr in p_runs:
+                        s_lbl = str(pr.get("start_time", "")).split()[-1].replace("Nu(", "").replace(")", "")
+                        e_lbl = str(pr.get("end_time", "")).split()[-1].replace("Nu(", "").replace(")", "")
+                        if ":" in s_lbl and ":" in e_lbl:
+                            run_d = (rec_dt + timedelta(days=1)).strftime("%Y-%m-%d") if (rec_dt.hour >= 18 and s_lbl < "18:00") else d_str
+                            explicit_windows.append({
+                                "date": run_d,
+                                "start_time": s_lbl,
+                                "end_time": e_lbl,
+                                "power_kw": float(pr.get("power_kw", 2.8) or 2.8),
+                            })
+                # 2. Legacy evaluated_paths format
                 sel_path = inputs.get("selected_path")
                 paths = inputs.get("evaluated_paths", [])
                 chosen = next((x for x in paths if x.get("path_id") == sel_path), None) or (paths[0] if paths else None)
@@ -461,15 +479,49 @@ def load_historical_dhw_planned_windows(start_dt: datetime, end_dt: datetime) ->
         except Exception as e_dec:
             print(f"Warning parsing audit log in validation_overlay: {e_dec}")
 
-    windows = []
+    # 3. Also reconstruct executed SG4 (forced_on / max_on) DHW runs from InfluxDB hems_annotations
+    try:
+        sec = load_secrets()
+        pwd = sec.get("influxdb", {}).get("openhems_db", "") or sec.get("influx_password", "")
+        t_s_utc = (start_dt - timedelta(hours=4)).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        t_e_utc = (end_dt + timedelta(hours=2)).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        q_hw = (
+            f'SELECT "state_code", "title" FROM "hems_annotations" '
+            f'WHERE "event_type" = \'hardware_actuation\' AND time >= \'{t_s_utc}\' AND time <= \'{t_e_utc}\' '
+            f'ORDER BY time ASC;'
+        )
+        url_hw = f"http://a0d7b954-influxdb:8086/query?u=openhems&p={pwd}&db=openhems&q={urllib.parse.quote(q_hw)}"
+        with safe_urlopen(url_hw, timeout=3) as r_hw:
+            hw_res = json.loads(r_hw.read().decode())
+        hw_pts = hw_res.get("results", [{}])[0].get("series", [{}])[0].get("values", [])
+        active_start: Optional[datetime] = None
+        for row in hw_pts:
+            dt_ev = datetime.fromisoformat(row[0].replace("Z", "+00:00")).astimezone(AMS_TZ)
+            st_code = str(row[1] or "")
+            if st_code in ("forced_on", "max_on") and active_start is None:
+                active_start = dt_ev
+            elif st_code not in ("forced_on", "max_on") and active_start is not None:
+                s_q = active_start.replace(minute=(active_start.minute // 15) * 15, second=0, microsecond=0)
+                e_q = dt_ev.replace(minute=((dt_ev.minute + 14) // 15) * 15 if dt_ev.minute < 45 else 45, second=0, microsecond=0)
+                if e_q <= s_q:
+                    e_q = s_q + timedelta(minutes=15)
+                explicit_windows.append({
+                    "date": s_q.strftime("%Y-%m-%d"),
+                    "start_time": s_q.strftime("%H:%M"),
+                    "end_time": e_q.strftime("%H:%M"),
+                    "power_kw": 2.8,
+                })
+                active_start = None
+    except Exception:
+        pass
+
+    windows = list(explicit_windows)
     cur = start_dt
     while cur <= end_dt:
         d_str = cur.strftime("%Y-%m-%d")
         if d_str in night_runs:
             s_t, e_t, p_kw = night_runs[d_str]
             windows.append({"date": d_str, "start_time": s_t, "end_time": e_t, "power_kw": p_kw})
-        else:
-            windows.append({"date": d_str, "start_time": "01:30", "end_time": "02:30", "power_kw": 3.0})
         if d_str in day_runs:
             s_t, e_t, p_kw = day_runs[d_str]
             windows.append({"date": d_str, "start_time": s_t, "end_time": e_t, "power_kw": p_kw})
@@ -630,8 +682,6 @@ def _compute_historical_forecast_series(
                     if w["date"] == d_cur and w["start_time"] <= t_cur < w["end_time"]:
                         q_dhw_w = float(w["power_kw"]) * 1000.0
                         break
-                if q_dhw_w == 0.0 and "01:30" <= t_cur < "02:15":
-                    q_dhw_w = 2400.0
 
                 if q_dhw_w > 0.0:
                     q_cv_w = 0.0
@@ -1439,9 +1489,6 @@ def handle_get(handler, path: str, qp: dict) -> bool:
                         if w["date"] == d_cur and w["start_time"] <= t_cur < w["end_time"]:
                             p_dhw_kw = w["power_kw"]
                             break
-                    # Baseline fallback: standard night charging window (01:30–02:30) if no specific decision window logged
-                    if p_dhw_kw == 0.0 and "01:30" <= t_cur < "02:30":
-                        p_dhw_kw = 3.0
 
                     # Historical CV model prediction (reconstruct expected space heating electrical demand)
                     if p_dhw_kw > 0.0:
@@ -1459,9 +1506,23 @@ def handle_get(handler, path: str, qp: dict) -> bool:
 
                 pred_dhw.append(p_dhw_kw)
 
-                # Option B: Fysische Warmtevraag (Thermal draw-off in kW_th)
-                p_dhw_dem_kw = round((GLOBAL_DHW_MODEL.get_learned_tap_kwh_th(dow, q_idx) if GLOBAL_DHW_MODEL else 0.03) * 4.0, 3)
-                pred_dhw_demand.append(p_dhw_dem_kw)
+                # Option B: Fysische Warmtevraag (Thermal draw-off in kWh_th per slot)
+                if interval_h >= 1.0:
+                    p_dhw_dem_kwh = round(
+                        sum(
+                            GLOBAL_DHW_MODEL.get_learned_tap_kwh_th(dow, (dt_ams.hour * 4) + sub_q)
+                            for sub_q in range(4)
+                        )
+                        if GLOBAL_DHW_MODEL
+                        else 0.12,
+                        3,
+                    )
+                else:
+                    p_dhw_dem_kwh = round(
+                        GLOBAL_DHW_MODEL.get_learned_tap_kwh_th(dow, q_idx) if GLOBAL_DHW_MODEL else 0.03,
+                        3,
+                    )
+                pred_dhw_demand.append(p_dhw_dem_kwh)
 
                 # CV Heating Model
                 pred_cv.append(p_cv_kw)
@@ -1476,7 +1537,7 @@ def handle_get(handler, path: str, qp: dict) -> bool:
                 heatpump_el_kwh_map=val_hp_el_map,
                 interval_h=interval_h,
             )
-            act_dhw_demand = [round(q / interval_h, 3) for q in act_dhw_demand_kwh]
+            act_dhw_demand = [round(q, 3) for q in act_dhw_demand_kwh]
 
             from layer2_calibration.model_validator import ModelValidator
             metrics = {

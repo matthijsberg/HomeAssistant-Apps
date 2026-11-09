@@ -97,10 +97,32 @@ def policy_result_to_summary(
                     f"Besparing t.o.v. alleen de Daikin: €{res.saving_eur:.2f} (gecorrigeerd voor de warmte die in het vat achterblijft).")
     n_hard = len(hard_slots or set())
 
+    planned_runs_payload = [
+        {
+            "start_idx": r.start_idx,
+            "end_idx": r.end_idx,
+            "start_time": _label(slots, r.start_idx),
+            "end_time": _label(slots, min(len(slots) - 1, r.end_idx)),
+            "target_temp_c": r.target_temp_c,
+            "power_kw": round(
+                max(
+                    [res.slot_dhw_kw[k] for k in range(r.start_idx, min(r.end_idx, len(res.slot_dhw_kw)))] or [2.8]
+                ),
+                2,
+            ),
+            "kwh_el": r.kwh_el,
+            "reason": r.reason,
+        }
+        for r in runs_24h
+    ]
+
     details: Dict[str, Any] = {
         "status": status,
         "planner": PLANNER_NAME,
         "planned_mode": planned_mode,
+        "planned_mode_label": meta.get("label", "Normaal bedrijf") if runs_24h else "Normaal — Daikin regelt zelf",
+        "target_temp_c": target_c,
+        "planned_runs": planned_runs_payload,
         "box_title": "Daikin-first tapwatersturing",
         "badge_html": badge,
         "comfort_card_title": "1️⃣ Comfort: wanneer stookt de Daikin zelf?",
