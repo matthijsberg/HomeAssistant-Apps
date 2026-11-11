@@ -52,7 +52,7 @@ def test_solve_respects_in_flight_slots_override():
 
 def test_central_planner_preserves_in_flight_run():
     """Verify that CentralPlanner.plan() maintains in-flight run commitment from PlanStore."""
-    store = PlanStore.get_instance()
+    store = PlanStore(persistence_path=None)
     store.register_in_flight_run(target_temp_c=50.0, mode="forced_on")
 
     now = datetime(2026, 9, 20, 12, 15, tzinfo=ZoneInfo("Europe/Amsterdam"))
@@ -72,13 +72,16 @@ def test_central_planner_preserves_in_flight_run():
         step_mins=15
     )
 
-    plan = CentralPlanner.plan(frame, current_dhw_temp=44.0)
+    plan = CentralPlanner.plan(frame, current_dhw_temp=44.0, store=store)
 
     # In-flight run must be present on slot 0
     assert plan.slots[0].dhw_kw > 0.0, "Slot 0 must have active DHW power"
     assert plan.slots[0].mode_code in [StandardizedState.FORCED_ON, StandardizedState.MAX_ON]
     assert "nu" in plan.dhw_summary.run_start.lower()
 
-    # When tank temperature reaches target, in-flight run is cleared
-    plan_finished = CentralPlanner.plan(frame, current_dhw_temp=50.0)
-    assert store.get_in_flight_run() is None, "In-flight run should be cleared once setpoint is attained"
+    # The planner only READS the commitment (single owner: Layer 4 DhwRunSupervisor). Once the tank
+    # has reached the target it must stop extending the run, but it must not clear the record itself.
+    plan_finished = CentralPlanner.plan(frame, current_dhw_temp=50.0, store=store)
+    assert store.get_in_flight_run() is not None, "Planner must not write the in-flight commitment"
+    assert plan_finished.slots[0].target_temp_c is None or plan_finished.slots[0].dhw_kw == 0.0 \
+        or plan_finished.slots[0].target_temp_c > 50.0, "Reached in-flight target must not force slot 0 again"

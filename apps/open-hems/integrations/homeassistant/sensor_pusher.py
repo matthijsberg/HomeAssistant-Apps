@@ -15,7 +15,6 @@ Entities:
 """
 
 import json
-import ssl
 import urllib.request
 from typing import Dict, Any
 
@@ -27,9 +26,8 @@ class HomeAssistantSensorPusher:
     def __init__(self, ha_url: str, ha_token: str):
         self.ha_url = ha_url.rstrip("/")
         self.ha_token = ha_token
-        self.ssl_ctx = ssl.create_default_context()
-        self.ssl_ctx.check_hostname = False
-        self.ssl_ctx.verify_mode = ssl.CERT_NONE
+        from integrations.homeassistant.client import ha_ssl_context
+        self.ssl_ctx = ha_ssl_context(self.ha_url)
 
     def push_state(self, entity_id: str, state: Any, attributes: Dict[str, Any]) -> bool:
         """Publishes a single entity state and attributes dictionary to Home Assistant."""

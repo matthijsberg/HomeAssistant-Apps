@@ -1,0 +1,50 @@
+# Open HEMS — dispatch dead-man switch (Elephant fail-safe), review finding A5
+#
+# The Open HEMS dispatcher publishes sensor.openhems_dispatch_heartbeat (an ISO timestamp)
+# at the end of every 60 s dispatch tick. If that heartbeat stops (add-on crashed, hung or
+# stopped), the relays would otherwise stay wherever they were last set — e.g. SG4 with the
+# CV master OFF (no floor heating) or SG1 (peak lockout).
+#
+# This automation returns the heat pump to the Elephant baseline:
+#   * Smart Grid mode "Automatisch" (SG2)
+#   * CV master switch back ON — only if Open HEMS itself had switched it off
+#     (heartbeat attribute cv_forced_off_by_hems), never overriding a user's own "heating off".
+#
+# The heartbeat is considered dead after 5 min without update, held for another 5 min
+# (≈ 10 min total), so an HA restart or a single slow tick never triggers it.
+#
+# Install: add to automations.yaml (or a package) and reload automations.
+
+- id: openhems_dispatch_deadman
+  alias: "Open HEMS – dispatch dead-man (fail-safe naar SG2)"
+  description: "Zet de warmtepomp terug naar Automatisch (SG2) als de Open HEMS dispatcher geen heartbeat meer stuurt."
+  mode: single
+  trigger:
+    - platform: template
+      value_template: >-
+        {{ (as_timestamp(now()) - as_timestamp(states('sensor.openhems_dispatch_heartbeat'), 0)) > 300 }}
+      for: "00:05:00"
+  action:
+    - service: input_select.select_option
+      target:
+        entity_id: input_select.warmtepomp_smart_grid_modus
+      data:
+        option: "Automatisch"
+    - if:
+        - condition: template
+          value_template: "{{ state_attr('sensor.openhems_dispatch_heartbeat', 'cv_forced_off_by_hems') == true }}"
+        - condition: state
+          entity_id: switch.hc_mode_altherma_on
+          state: "off"
+      then:
+        - service: switch.turn_on
+          target:
+            entity_id: switch.hc_mode_altherma_on
+    - service: persistent_notification.create
+      data:
+        notification_id: openhems_dispatch_deadman
+        title: "Open HEMS dispatcher reageert niet"
+        message: >-
+          Geen dispatch-heartbeat sinds {{ states('sensor.openhems_dispatch_heartbeat') }}.
+          Warmtepomp teruggezet naar Automatisch (SG2){% if state_attr('sensor.openhems_dispatch_heartbeat', 'cv_forced_off_by_hems') == true %} en CV-hoofdschakelaar weer aan{% endif %}.
+          Controleer de Open HEMS add-on logs.

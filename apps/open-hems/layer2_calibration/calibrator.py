@@ -20,6 +20,7 @@ import os
 import json
 import math
 from datetime import datetime
+from typing import Optional
 
 CONFIG_PATH = "/config/heatpump_config.json"
 MODEL_PARAMS_PATH = "/config/heatpump_model_parameters.json"
@@ -42,19 +43,15 @@ class ModelCalibrationEngine:
         return {}
 
     def _save_params(self):
-        tmp_path = f"{self.params_path}.tmp.{os.getpid()}"
+        """Merges this engine's parameters into the on-disk file under the parameter-store lock."""
+        from layer2_calibration.params_store import update_params
+        snapshot = dict(self.params or {})
         try:
-            with open(tmp_path, "w") as f:
-                json.dump(self.params, f, indent=2)
-            os.replace(tmp_path, self.params_path)
-            os.chmod(self.params_path, 0o644)
+            def _merge(data):
+                data.update(snapshot)
+            self.params = update_params(_merge, self.params_path)
         except Exception as e:
             print(f"Warning: Could not save model parameters: {e}")
-            if os.path.exists(tmp_path):
-                try:
-                    os.remove(tmp_path)
-                except Exception:
-                    pass
 
     def is_sample_excluded(self, sensor_name: str, ts) -> bool:
         """Checks if a sample timestamp falls inside any configured data exclusion window."""
@@ -70,7 +67,8 @@ class ModelCalibrationEngine:
 
         d_str = dt.strftime("%Y-%m-%d")
         for win in self.config.get("data_exclusion_windows", []):
-            if win.get("sensor") == sensor_name or win.get("sensor") in sensor_name:
+            win_sensor = win.get("sensor")
+            if win_sensor and (win_sensor == sensor_name or win_sensor in sensor_name):
                 start = win.get("start", "1970-01-01")
                 end = win.get("end", "2099-12-31")
                 if start <= d_str <= end:
@@ -196,14 +194,16 @@ class ModelCalibrationEngine:
     # =========================================================================
     # 3. SPACE HEATING OLS REGRESSION (UA_base, c_wind, c_solar)
     # =========================================================================
-    def solve_ols_3x3(self, X: list, Y: list) -> list:
+    def solve_ols_3x3(self, X: list, Y: list) -> Optional[list]:
         """
         Solves Ordinary Least Squares: Beta = (X^T X)^(-1) X^T Y for 3 features.
-        X[i] = [x1 (delta_T), x2 (wind), x3 (solar_gains)]
+        Returns None when there are too few samples or the design matrix is (near-)singular
+        (e.g. collinear regressors). Callers must treat None as "no calibration update" — never
+        substitute default coefficients for a failed fit.
         """
         n = len(Y)
         if n < 5:
-            return [7.02137, 0.03634, 0.08885]
+            return None
 
         ATA = [[0.0] * 3 for _ in range(3)]
         ATY = [0.0] * 3
@@ -214,12 +214,13 @@ class ModelCalibrationEngine:
                 for j in range(3):
                     ATA[i][j] += row_x[i] * row_x[j]
 
+        scale = max(abs(ATA[i][i]) for i in range(3)) or 1.0
         # Gauss-Jordan elimination on 3x4 augmented matrix [ATA | ATY]
         M = [ATA[i] + [ATY[i]] for i in range(3)]
         for i in range(3):
             pivot = M[i][i]
-            if abs(pivot) < 1e-12:
-                return [7.02137, 0.03634, 0.08885]
+            if abs(pivot) < 1e-9 * scale:
+                return None
             for j in range(i, 4):
                 M[i][j] /= pivot
             for k in range(3):
@@ -228,12 +229,7 @@ class ModelCalibrationEngine:
                     for j in range(i, 4):
                         M[k][j] -= factor * M[i][j]
 
-        # Physical constraints check (UA must be positive, wind positive, solar gain positive/negative)
-        ua = max(4.0, min(12.0, M[0][3]))
-        c_wind = max(0.001, min(0.15, M[1][3]))
-        c_solar = max(0.01, min(2.50, M[2][3]))
-
-        return [round(ua, 5), round(c_wind, 5), round(c_solar, 5)]
+        return [round(M[0][3], 5), round(M[1][3], 5), round(M[2][3], 5)]
 
     # =========================================================================
     # ACCURACY METRICS: MAE, RMSE & BIAS
@@ -260,149 +256,3 @@ class ModelCalibrationEngine:
             "bias_pct": round(bias_pct, 2),
             "n": n
         }
-
-    # =========================================================================
-    # FULL AUTOMATED CALIBRATION RUN
-    # =========================================================================
-    def run_full_calibration(self, core) -> dict:
-        """Runs complete calibration across solar profile, DHW demand, and space heating."""
-        print("\n--- RUNNING MODEL CALIBRATION ENGINE ---")
-
-        # 1. Solar Calibration (Wittboy/Open-Meteo vs. Inverter Actuals)
-        q_pv = "SELECT non_negative_difference(last(value)) FROM \"kWh\" WHERE entity_id = 'zonnepanelen_export_power' AND time > now() - 30d GROUP BY time(1h)"
-        q_rad = "SELECT mean(value) FROM \"W/m²\" WHERE entity_id = 'wittboy_gw2000a_weather_station_gw2000a_solar_radiation' AND time > now() - 30d GROUP BY time(1h)"
-
-        res_pv = core.query_influx(q_pv)
-        res_rad = core.query_influx(q_rad)
-
-        pv_dict = self._extract_series(res_pv)
-        rad_dict = self._extract_series(res_rad)
-
-        kwp = self.config.get("solar", {}).get("kwp", 5.5)
-        solar_profile = self.calculate_hourly_solar_profile(pv_dict, rad_dict, kwp=kwp)
-
-        # 2. DHW Calibration
-        q_dhw = "SELECT non_negative_difference(last(value)) FROM \"kWh\" WHERE entity_id = 'warmtepomp_hot_water_production_all_time' AND time > now() - 60d GROUP BY time(1d)"
-        res_dhw = core.query_influx(q_dhw)
-        dhw_dict = self._extract_series(res_dhw)
-        dhw_params = self.calculate_dhw_empirical_parameters(dhw_dict, tank_volume=350.0)
-
-        # 3. Space Heating OLS Calibration
-        q_thermal = "SELECT non_negative_difference(last(value)) FROM \"kWh\" WHERE entity_id = 'warmtepomp_heating_production_all_time' AND time > now() - 365d GROUP BY time(1d)"
-        q_tout = "SELECT mean(value) FROM \"°C\" WHERE (entity_id = 'buiten_temperatuur' OR entity_id = 'temperatuur_buiten') AND time > now() - 365d GROUP BY time(1d)"
-        q_tin = "SELECT mean(value) FROM \"°C\" WHERE (entity_id = 'sco2_staging_01_woonkamer_co2_temperature' OR entity_id = 'hc_sensors_temperature_room') AND time > now() - 365d GROUP BY time(1d)"
-        q_wind = "SELECT mean(value) FROM \"Bft\" WHERE (entity_id = 'br_wind_force_2' OR entity_id = 'br_wind_force') AND time > now() - 365d GROUP BY time(1d)"
-        q_rad_day = "SELECT mean(value) FROM \"W/m²\" WHERE entity_id = 'wittboy_gw2000a_weather_station_gw2000a_solar_radiation' AND time > now() - 365d GROUP BY time(1d)"
-
-        d_th = self._extract_series(core.query_influx(q_thermal))
-        d_to = self._extract_series(core.query_influx(q_tout))
-        d_ti = self._extract_series(core.query_influx(q_tin))
-        d_wi = self._extract_series(core.query_influx(q_wind))
-        d_so = self._extract_series(core.query_influx(q_rad_day))
-
-        common_days = sorted(list(set(d_th.keys()) & set(d_to.keys()) & set(d_ti.keys()) & set(d_wi.keys())))
-        X = []
-        Y = []
-        skipped_excluded_days = 0
-        for ts in common_days:
-            # Check data exclusion window (e.g. disconnected meter period)
-            if self.is_sample_excluded("sensor.warmtepomp_power", ts):
-                skipped_excluded_days += 1
-                continue
-
-            th_val = d_th[ts]
-            if th_val and th_val > 2.0:
-                delta_t = max(0.0, d_ti[ts] - d_to[ts])
-                wind_kmh = d_wi.get(ts, 2.0) * 3.6
-                sol_gain = (d_so.get(ts, 100.0) / 1000.0)
-                X.append([delta_t, wind_kmh, sol_gain])
-                Y.append(th_val)
-
-        if skipped_excluded_days > 0:
-            print(f"Notice: Filtered out {skipped_excluded_days} days falling inside data exclusion windows.")
-
-        ua, c_wind, c_solar = self.solve_ols_3x3(X, Y)
-
-        # 4. Apply Guardrails & Exponential Smoothing against existing parameters
-        old_params = self.params or {}
-        old_tilt = old_params.get("solar_hourly_tilt_profile", {})
-        smoothed_solar_profile = {}
-        for h, new_factor in solar_profile.items():
-            old_factor = float(old_tilt.get(str(h), old_tilt.get(h, new_factor)))
-            smoothed_solar_profile[h] = self.apply_smoothed_clamping(
-                old_factor, new_factor,
-                min_val=self.GUARDRAILS["solar_factor_min"],
-                max_val=self.GUARDRAILS["solar_factor_max"],
-                max_shift_pct=self.GUARDRAILS["solar_step_limit_pct"]
-            )
-
-        # Space heating clamping (with summer freeze check)
-        old_ua = old_params.get("ua_base", 8.0)
-        if len(X) >= self.GUARDRAILS["min_heating_samples_required"]:
-            smoothed_ua = self.apply_smoothed_clamping(
-                old_ua, ua,
-                min_val=self.GUARDRAILS["ua_base_min"],
-                max_val=self.GUARDRAILS["ua_base_max"],
-                max_shift_pct=self.GUARDRAILS["ua_step_limit_pct"]
-            )
-            smoothed_c_wind = self.apply_smoothed_clamping(
-                old_params.get("c_wind", 0.01), c_wind,
-                min_val=self.GUARDRAILS["c_wind_min"],
-                max_val=self.GUARDRAILS["c_wind_max"],
-                max_shift_pct=0.50
-            )
-        else:
-            print(f"Notice: Only {len(X)} heating days found; keeping existing space heating parameters (summer freeze).")
-            smoothed_ua = old_ua
-            smoothed_c_wind = old_params.get("c_wind", 0.005)
-
-        # DHW clamping
-        old_dhw_avg = old_params.get("dhw_average_daily_kwh", 4.5)
-        old_dhw_sb = old_params.get("dhw_standby_loss_kwh", 1.5)
-        smoothed_dhw_avg = self.apply_smoothed_clamping(
-            old_dhw_avg, dhw_params["avg_daily_dhw_thermal_kwh"],
-            min_val=self.GUARDRAILS["dhw_daily_min_kwh"],
-            max_val=self.GUARDRAILS["dhw_daily_max_kwh"],
-            max_shift_pct=0.25
-        )
-        smoothed_dhw_sb = self.apply_smoothed_clamping(
-            old_dhw_sb, dhw_params["standby_cooling_loss_kwh"],
-            min_val=self.GUARDRAILS["dhw_standby_min_kwh"],
-            max_val=self.GUARDRAILS["dhw_standby_max_kwh"],
-            max_shift_pct=0.25
-        )
-
-        # 5. Save and return consolidated parameters: merge with existing keys to preserve dhw_cop, dhw_power, etc.
-        """
-        Calibrator ownership domain:
-        - Owns and updates: ua_base, c_wind, c_solar, solar_hourly_tilt_profile,
-          dhw_average_daily_kwh, dhw_standby_loss_kwh, dhw_average_cop, heating_average_cop, calibration_timestamp.
-        - Preserves untouched: dhw_cop, dhw_power, building, heat_pump, dhw_tank,
-          unallocated, metrics, version, and any custom/future configuration blocks.
-        """
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        updated_params = {
-            "ua_base": smoothed_ua,
-            "c_wind": smoothed_c_wind,
-            "c_solar": c_solar,
-            "solar_hourly_tilt_profile": smoothed_solar_profile,
-            "dhw_average_daily_kwh": smoothed_dhw_avg,
-            "dhw_standby_loss_kwh": smoothed_dhw_sb,
-            "dhw_average_cop": 2.02,
-            "heating_average_cop": 4.8,
-            "calibration_timestamp": now_str
-        }
-
-        merged_params = dict(self.params or {})
-        merged_params.update(updated_params)
-        self.params = merged_params
-        self._save_params()
-        print(f"✓ Saved updated parameters to {self.params_path}")
-        return merged_params
-
-    def _extract_series(self, res: dict) -> dict:
-        try:
-            series = res["results"][0]["series"][0]
-            return {v[0]: v[1] for v in series["values"] if v[0] is not None and v[1] is not None}
-        except Exception:
-            return {}

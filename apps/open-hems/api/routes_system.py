@@ -4,7 +4,6 @@ import base64
 import json
 import os
 import re
-import ssl
 import time
 import urllib.parse
 import urllib.request
@@ -18,6 +17,7 @@ from api.secrets_store import (
     load_json, save_json, load_secrets, save_secret, get_secret, ensure_framework_defaults
 )
 from integrations.homeassistant.client import (
+    ha_ssl_context,
     get_ha_client_config, get_ha_states_map, fetch_ha_entities
 )
 from api.infra_diagnostics import (
@@ -25,6 +25,7 @@ from api.infra_diagnostics import (
 )
 from models.canonical import StandardizedState, get_state_metadata
 from layer3_scheduling.plan_store import get_plan_store
+from layer3_scheduling.dhw_policy import effective_settings as dhw_policy_settings, validate_settings_update
 
 def handle_get(handler, path: str, qp: dict) -> bool:
     if path == "/api/settings":
@@ -34,8 +35,9 @@ def handle_get(handler, path: str, qp: dict) -> bool:
         bat_cfg = cfg.get("battery", {})
         handler._send_json({
             "status": "success",
-            "baseload_watts": cfg.get("baseload_watts", 300),
-            "solar_cost_eur_kwh": cfg.get("solar_cost_eur_kwh", 0.06),
+            # Daikin-first tapwatersturing (ADR-006): effective values incl. defaults
+            "dhw_policy": dhw_policy_settings(cfg),
+            # Deprecated: settings of the old optimizer (dynamic programming), only used with dhw_policy.engine = "dp"
             "dhw_optimizer": {
                 "min_run_slots": int(opt_cfg.get("min_run_slots", 2)),
                 "comfort_margin": {
@@ -258,9 +260,7 @@ def handle_get(handler, path: str, qp: dict) -> bool:
 
         if ha_token:
             headers = {"Authorization": f"Bearer {ha_token}", "Content-Type": "application/json"}
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
+            ctx = ha_ssl_context(ha_base_url)
             t0 = time.time()
             try:
                 req_cfg = urllib.request.Request(f"{ha_base_url}/api/config", headers=headers)
@@ -475,9 +475,7 @@ def handle_post(handler, path: str, body: dict) -> bool:
             return True
         try:
             headers = {"Authorization": f"Bearer {ha_token}", "Content-Type": "application/json"}
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
+            ctx = ha_ssl_context(ha_base_url)
             t0 = time.time()
             req = urllib.request.Request(f"{ha_base_url}/api/config", headers=headers)
             with urllib.request.urlopen(req, timeout=4, context=ctx) as r:
@@ -526,11 +524,8 @@ def handle_post(handler, path: str, body: dict) -> bool:
     if path == "/api/settings" or path == "/api/analytics/solar_cost":
         try:
             cfg = load_json(CONFIG_FILE)
-            if "baseload_watts" in body:
-                cfg["baseload_watts"] = float(body["baseload_watts"])
-            if "solar_cost_eur_kwh" in body:
-                cfg["solar_cost_eur_kwh"] = round(float(body["solar_cost_eur_kwh"]), 4)
-
+            if "dhw_policy" in body:
+                cfg.setdefault("dhw_policy", {}).update(validate_settings_update(body["dhw_policy"]))
             if "dhw_optimizer" in body and isinstance(body["dhw_optimizer"], dict):
                 opt_in = body["dhw_optimizer"]
                 cur_opt = cfg.setdefault("dhw_optimizer", {})
@@ -609,8 +604,7 @@ def handle_post(handler, path: str, body: dict) -> bool:
             bat_cfg = cfg.get("battery", {})
             handler._send_json({
                 "status": "success",
-                "baseload_watts": cfg.get("baseload_watts", 300),
-                "solar_cost_eur_kwh": cfg.get("solar_cost_eur_kwh", 0.06),
+                "dhw_policy": dhw_policy_settings(cfg),
                 "dhw_optimizer": {
                     "comfort_margin": {
                         "mode": cm_cfg.get("mode", "p95"),

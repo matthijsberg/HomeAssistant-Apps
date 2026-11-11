@@ -34,7 +34,8 @@ def _load_and_plan_fixture(fixture_filename: str):
     data = json.loads(fixture_path.read_text(encoding="utf-8"))
 
     date_str = data["recorded_date"]
-    day_dt = datetime.fromisoformat(f"{date_str}T09:00:00+02:00")
+    # Local 09:00 in Europe/Amsterdam (CET in winter, CEST in summer) — never a fixed offset
+    day_dt = datetime.fromisoformat(f"{date_str}T09:00:00").replace(tzinfo=ZoneInfo("Europe/Amsterdam"))
 
     raw_prices = [{"dt": p["timestamp"], "price": p["price"]} for p in data["prices"]]
 
@@ -64,7 +65,8 @@ def _load_and_plan_fixture(fixture_filename: str):
 
     from layer3_scheduling.dhw_optimizer import DhwOptimizerParams
     golden_dhw_params = DhwOptimizerParams(min_run_slots=3, comfort_margin_mode="p50", min_comfort_margin_c=0.5)
-    plan = CentralPlanner.plan(frame, current_dhw_temp=data["dhw_tank_temp_c"], dhw_optimizer_params=golden_dhw_params)
+    plan = CentralPlanner.plan(frame, current_dhw_temp=data["dhw_tank_temp_c"], dhw_optimizer_params=golden_dhw_params,
+                               dhw_engine="daikin_first")
     return data, frame, plan
 
 

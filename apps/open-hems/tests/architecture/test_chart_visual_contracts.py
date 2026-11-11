@@ -25,7 +25,7 @@ def test_plugin_uses_strict_integer_indices_only():
 
 
 def test_all_pages_overlay_invariants_across_resolutions():
-    """Guarantee that overlays on all pages (15m and 1h) have strict bounds, zero overlap, and duration caps."""
+    """Guarantee that overlays on all pages (15m and 1h) have strict bounds, zero overlap, and lockout duration caps."""
     plan = ensure_active_canonical_plan()
     assert plan and plan.slots, "Canonical plan must be active"
 
@@ -50,9 +50,8 @@ def test_all_pages_overlay_invariants_across_resolutions():
         for h in heats:
             s_idx, e_idx = h["start_idx"], h["end_idx"]
             assert 0 <= s_idx <= e_idx < total_slots, f"Heating range out of bounds ({res_label}): {h}"
-            dur_slots = e_idx - s_idx + 1
-            max_dur = 32 if is_15m else 8  # max 8 hours
-            assert dur_slots <= max_dur, f"Heating duration excessive ({res_label}): {dur_slots} > {max_dur}"
+            # No duration cap: the Daikin runs for 9+ hours at low modulation (e.g. 2026-10-11 21:00-06:45).
+            # The invariant is that heating never overlaps a hard lockout.
             for i in range(s_idx, e_idx + 1):
                 assert i not in spits_set, f"ILLEGAL OVERLAP at slot {i} ({res_label}): active heating overlaps with spitsblok!"
 

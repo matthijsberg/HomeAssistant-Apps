@@ -9,7 +9,6 @@ import os
 import time
 import math
 import json
-import ssl
 import urllib.request
 import urllib.parse
 from datetime import datetime, timedelta, timezone
@@ -19,7 +18,7 @@ from typing import Dict, Any, List, Tuple, Optional
 
 from api.secrets_store import load_secrets
 from api.http_client import safe_urlopen
-from integrations.homeassistant.client import get_ha_client_config, get_ha_states_map
+from integrations.homeassistant.client import get_ha_client_config, get_ha_states_map, ha_ssl_context
 from layer1_data_collection.geo_location import get_geo_coordinates
 
 
@@ -88,7 +87,8 @@ def calculate_poa_solar_kw(
     inverter_limit_kw: float = 5.5,
     eff: float = 0.88,
     lat: Optional[float] = None,
-    lon: Optional[float] = None
+    lon: Optional[float] = None,
+    relative_humidity: Optional[float] = None,
 ) -> float:
     """Calculates Plane-of-Array (POA) solar generation in AC kW based on NOAA solar geometry."""
     if lat is None or lon is None:
@@ -106,8 +106,9 @@ def calculate_poa_solar_kw(
     lat_r = math.radians(lat)
     sin_alpha = math.sin(lat_r) * math.sin(decl) + math.cos(lat_r) * math.cos(decl) * math.cos(omega)
     alpha = math.asin(max(-1.0, min(1.0, sin_alpha)))
+    alpha_deg = math.degrees(alpha)
     cos_alpha = math.cos(alpha)
-    if math.degrees(alpha) <= 1.0:
+    if alpha_deg <= 2.0:
         return 0.0
     cos_az = (math.sin(decl) * math.cos(lat_r) - math.cos(decl) * math.sin(lat_r) * math.cos(omega)) / max(0.001, cos_alpha)
     cos_az = max(-1.0, min(1.0, cos_az))
@@ -117,7 +118,8 @@ def calculate_poa_solar_kw(
     beta_r = math.radians(tilt_deg)
     gamma_diff_r = math.radians(az_deg - azimuth_deg)
     cos_aoi = math.cos(alpha) * math.sin(beta_r) * math.cos(gamma_diff_r) + math.sin(alpha) * math.cos(beta_r)
-    kt = min(1.0, ghi_w_m2 / (1367.0 * max(0.05, math.sin(alpha))))
+    sin_alpha_eff = max(0.12, math.sin(alpha))
+    kt = min(1.0, ghi_w_m2 / (1367.0 * sin_alpha_eff))
     if kt <= 0.22:
         df_frac = 1.0 - 0.09 * kt
     elif kt <= 0.80:
@@ -126,11 +128,19 @@ def calculate_poa_solar_kw(
         df_frac = 0.165
     diffuse_horiz = ghi_w_m2 * max(0.15, min(1.0, df_frac))
     direct_horiz = max(0.0, ghi_w_m2 - diffuse_horiz)
-    direct_normal = direct_horiz / max(0.05, math.sin(alpha))
-    poa_beam = direct_normal * max(0.0, cos_aoi)
-    poa_diffuse = diffuse_horiz * (1.0 + math.cos(beta_r)) / 2.0
+    # Physical beam tilt ratio cap + western low-sun horizon shading attenuation (<16 deg elevation)
+    rb = min(1.55, max(0.0, cos_aoi) / max(0.15, math.sin(alpha)))
+    if omega > 0 and alpha_deg < 16.0:
+        horizon_factor = max(0.0, (alpha_deg - 2.0) / 14.0) ** 1.3
+    else:
+        horizon_factor = 1.0
+    poa_beam = direct_horiz * rb * horizon_factor
+    poa_diffuse = diffuse_horiz * (1.0 + math.cos(beta_r)) / 2.0 * (0.35 + 0.65 * horizon_factor)
     poa_ground = ghi_w_m2 * 0.20 * (1.0 - math.cos(beta_r)) / 2.0
-    poa_total = max(0.0, poa_beam + poa_diffuse + poa_ground)
+    mist_factor = 1.0
+    if relative_humidity is not None and float(relative_humidity) > 82.0:
+        mist_factor = max(0.32, 1.0 - 0.045 * (float(relative_humidity) - 82.0))
+    poa_total = max(0.0, poa_beam + poa_diffuse + poa_ground) * mist_factor
     p_dc = (poa_total / 1000.0) * kwp * eff
     return round(min(inverter_limit_kw, p_dc), 3)
 
@@ -155,9 +165,7 @@ def get_anchored_weather_forecast(base_dt: datetime) -> tuple:
     try:
         ha_url, ha_tok = get_ha_client_config()
         if ha_tok and ha_url:
-            ctx_ssl = ssl.create_default_context()
-            ctx_ssl.check_hostname = False
-            ctx_ssl.verify_mode = ssl.CERT_NONE
+            ctx_ssl = ha_ssl_context(ha_url)
 
             entities_to_query = [
                 ("sensor.wittboy_gw2000a_weather_station_gw2000a_outdoor_temperature", "temp"),
@@ -235,7 +243,8 @@ def get_anchored_weather_forecast(base_dt: datetime) -> tuple:
 
                 nudge_temp = round(float(h_temps[idx]) + delta_temp * weight, 1)
                 nudge_wind = round(max(0.0, float(h_winds[idx]) + delta_wind * weight), 1)
-                nudge_solar = round(max(0.0, float(h_rads[idx]) + delta_solar * weight), 1)
+                raw_rad = float(h_rads[idx])
+                nudge_solar = round(max(0.0, raw_rad + delta_solar * weight), 1) if raw_rad > 5.0 else 0.0
                 nudge_rh = round(float(h_rhs[idx]), 1)
 
                 temp_map[k_t] = nudge_temp
@@ -406,6 +415,25 @@ def _save_stroomvoorspeller_cache() -> None:
         print(f"Warning saving Stroomvoorspeller cache: {e}")
 
 
+def get_supplier_markup_import() -> float:
+    """Gets the active supplier import markup from Home Assistant or heatpump_config.json."""
+    try:
+        from integrations.homeassistant.client import get_ha_states_map
+        st = get_ha_states_map().get("input_number.dynamic_energy_markup_import", {}).get("state")
+        if st is not None and st not in ["unavailable", "unknown"]:
+            return float(st)
+    except Exception:
+        pass
+    try:
+        from api.secrets_store import CONFIG_FILE, load_json
+        cfg = load_json(CONFIG_FILE)
+        dt_cfg = cfg.get("dynamic_tariffs", {})
+        return float(dt_cfg.get("fallback_markup_import", 0.01))
+    except Exception:
+        pass
+    return 0.01
+
+
 def fetch_stroomvoorspeller_tariffs_cached(force: bool = False) -> Dict[str, Any]:
     """
     Fetches and caches up to 7-day ahead hourly electricity price predictions from Stroomvoorspeller.nl.
@@ -428,6 +456,7 @@ def fetch_stroomvoorspeller_tariffs_cached(force: bool = False) -> Dict[str, Any
                 forecasts = data.get("forecasts", [])
                 if forecasts:
                     parsed_map = {}
+                    markup = get_supplier_markup_import()
                     for fc in forecasts:
                         t_str = fc.get("time")
                         if not t_str:
@@ -435,8 +464,9 @@ def fetch_stroomvoorspeller_tariffs_cached(force: bool = False) -> Dict[str, Any
                         dt = datetime.fromisoformat(t_str).astimezone(ZoneInfo("Europe/Amsterdam"))
                         k_h = dt.strftime("%Y-%m-%d %H:00")
                         base_eur = round(float(fc.get("predicted", 0.0)) / 1000.0, 4)
-                        all_in_eur = round((base_eur + 0.0121 + 0.11085) * 1.21, 4)
-                        export_eur = round(max(0.0, base_eur - 0.00605), 4)
+                        # Formula: (spot * 1.21) + statutory energy tax (0.11085 incl btw) + supplier markup (0.0100)
+                        all_in_eur = round((base_eur * 1.21) + 0.11085 + markup, 4)
+                        export_eur = round(base_eur - 0.00605, 4)
                         parsed_map[k_h] = {
                             "dt": dt.isoformat(),
                             "base": base_eur,
@@ -544,9 +574,10 @@ def get_epex_tariffs_cached(is_15m: bool = True, force: bool = False) -> Tuple[L
                     all_in_items = res_p.get("all_in_with_vat", [])
                     base_items = res_p.get("base", [])
                     if len(all_in_items) >= (96 if is_15m else 24):
+                        markup = get_supplier_markup_import()
                         _EPEX_CACHE_DATA.setdefault(date_key, {})[cache_type] = {
-                            "all_in": [{"start": it["start"], "val": float(it.get("price", {}).get("value", 0.25))} for it in all_in_items],
-                            "base": [{"start": it["start"], "val": float(it.get("price", {}).get("value", 0.12))} for it in base_items]
+                            "all_in": [{"start": it["start"], "val": round(float(it.get("price", {}).get("value", 0.25)) + markup, 5), "has_markup": True} for it in all_in_items],
+                            "base": [{"start": it["start"], "val": round(float(it.get("price", {}).get("value", 0.12)), 5)} for it in base_items]
                         }
                         dirty = True
                         if date_key == tomorrow_key:
@@ -586,10 +617,12 @@ def get_epex_tariffs_cached(is_15m: bool = True, force: bool = False) -> Tuple[L
     for d_k in [today_key, tomorrow_key]:
         if d_k in _EPEX_CACHE_DATA and cache_type in _EPEX_CACHE_DATA[d_k]:
             blob = _EPEX_CACHE_DATA[d_k][cache_type]
+            markup = get_supplier_markup_import()
             for it in blob.get("all_in", []):
                 dt = datetime.fromisoformat(it["start"].replace("Z", "+00:00")).astimezone(ZoneInfo("Europe/Amsterdam"))
                 k_dt = dt.strftime("%Y-%m-%d %H:%M" if is_15m else "%Y-%m-%d %H:00")
-                p_val = round(it["val"], 4)
+                raw_v = float(it["val"])
+                p_val = round(raw_v if it.get("has_markup") else raw_v + markup, 4)
                 map_all_in[k_dt] = p_val
                 _TARIFF_SOURCES_MAP[k_dt] = "epex"  # EPEX WINS!
                 epex_keys.add(dt)

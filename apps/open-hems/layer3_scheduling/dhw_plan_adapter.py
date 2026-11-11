@@ -20,6 +20,7 @@ from layer3_scheduling.dhw_optimizer import (
     DhwOptimizerParams,
 )
 from layer3_scheduling.dhw_optimizer_explain import explain_dhw_optimization
+from layer3_scheduling.peak_detection import hard_lockout_slot_indices
 
 
 def adapt_optimizer_to_dhw_summary(
@@ -108,10 +109,7 @@ def adapt_optimizer_to_dhw_summary(
 
     # 3. Dynamic peaks & lockout hours
     peaks_list = list(dynamic_peaks or [])
-    spits_lockout_hours = round(
-        sum(0.25 for p in peaks_list if (isinstance(p, dict) and p.get("is_hard_lockout")) or getattr(p, "is_hard_lockout", False)),
-        2
-    )
+    spits_lockout_hours = round(len(hard_lockout_slot_indices(peaks_list, n_slots=N)) * 0.25, 2)
 
     # 4. Determine status & badge HTML
     is_active_now = (0 in opt_result.planned_slots)

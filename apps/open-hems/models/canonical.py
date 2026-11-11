@@ -391,6 +391,11 @@ class DispatchPlanSlot:
     tailwind_class: str = ""
     description: str = ""
     device_dispatches: Dict[str, DeviceSlotDispatch] = field(default_factory=dict)
+    # DHW stop temperature of the run this slot belongs to (None = no planned DHW run).
+    # Layer 4 ends a forced run as soon as the tank reaches it (Goldfish rule).
+    target_temp_c: Optional[float] = None
+    # Provenance of price_eur: "good" (day-ahead), "forecast" (price forecast), "interpolated"
+    price_quality: str = "good"
 
     def __post_init__(self):
         if not isinstance(self.mode_code, StandardizedState):
@@ -467,10 +472,14 @@ class SpaceHeatingPlanSummary:
     max_projected_room_temp_c: float
     slots: List[SpaceHeatingSlotResult]
     target_room_temp_c: float = 20.0
-    min_comfort_room_c: float = 19.6
+    min_comfort_room_c: float = 19.5
     max_preheat_room_c: float = 21.2
     max_floor_temp_c: float = 28.0
+    thermostat_setpoint_c: float = 20.0
+    baseline_comfort_temp_c: float = 20.0
+    is_buffering: bool = False
     unheated_room_temps_c: List[float] = field(default_factory=list)
+    unheated_second_run_temps_c: List[Optional[float]] = field(default_factory=list)
     room_temps_p05_c: List[float] = field(default_factory=list)
     room_temps_p95_c: List[float] = field(default_factory=list)
     unheated_temps_p05_c: List[float] = field(default_factory=list)
@@ -492,6 +501,8 @@ class CanonicalDispatchPlan:
     heating_summary: Optional[SpaceHeatingPlanSummary] = None
     validation_issues: List[str] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
+    # Priority-3 home battery plan (layer3_scheduling.battery_policy.BatteryPlanSummary) or None
+    battery_summary: Optional[Any] = None
 
     def get_projected_slots(self, is_15m: bool = True) -> List[Dict[str, Any]]:
         """

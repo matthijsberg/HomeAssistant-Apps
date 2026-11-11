@@ -94,6 +94,13 @@ class BatterySlotResult:
     soc_p95_pct: float = 0.0                    # Optimistic upper bound SoC
     ch_solar_kw: float = 0.0                    # Active solar charging power
     ch_grid_kw: float = 0.0                     # Active grid charging power
+    dis_zom_kw: float = 0.0                     # Zero-on-the-meter discharge power (covers House+WP)
+    dis_exp_kw: float = 0.0                     # Grid export discharge power
+    shadow_price_eur: float = 0.0               # Marginal value of stored energy (Hold threshold)
+    val_zom_eur: float = 0.0                    # Net value of Zero-on-the-meter discharge (Buy - wear)
+    val_exp_eur: float = 0.0                    # Net value of Grid export discharge (Sell - wear)
+    wac_dc_eur: float = 0.0                     # Weighted average cost of DC energy in battery
+    breakeven_lcos_eur: float = 0.0             # Break-even discharge price (WAC/eta_dis + wear)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -115,6 +122,9 @@ class BatteryPlanSummary:
     autonomy_pct: float = 100.0
     is_active: bool = True
     inactive_reason: str = ""
+    # True when the plan is a what-if simulation (no installed battery); it must never be
+    # mixed into real energy balances or actuated.
+    is_simulation: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -216,7 +226,11 @@ class BatteryPolicy:
         eta_one_way = math.sqrt(spec.roundtrip_efficiency)
         min_kwh = spec.capacity_kwh * (spec.min_soc_pct / 100.0)
         max_kwh = spec.capacity_kwh * (spec.max_soc_pct / 100.0)
-        cur_kwh = max(min_kwh, min(max_kwh, spec.capacity_kwh * (initial_soc_pct / 100.0)))
+        # Use the measured SoC as-is (never round it up to the reserve floor). If the battery is
+        # outside its operating window, widen the window for this solve so the LP stays feasible.
+        cur_kwh = max(0.0, min(spec.capacity_kwh, spec.capacity_kwh * (initial_soc_pct / 100.0)))
+        min_kwh = min(min_kwh, cur_kwh)
+        max_kwh = max(max_kwh, cur_kwh)
 
         # -------------------------------------------------------------------
         # Linear Programming (LP) Global Optimization (Priority 3)
@@ -405,6 +419,7 @@ class BatteryPolicy:
         current_soc = cur_kwh
         min_proj_soc = initial_soc_pct
         max_proj_soc = initial_soc_pct
+        wac_dc = max(0.08, min_tail_reload * 0.85)
 
         for i in range(n_slots):
             ch_s = max(0.0, float(p_ch_solar[i]))
@@ -421,6 +436,17 @@ class BatteryPolicy:
             tot_dis += dis * dt
 
             total_ch = ch_s + ch_g
+            added_dc = total_ch * dt * eta_ch
+            if added_dc > 1e-4:
+                added_cost = (ch_s * max(0.0, p_ex) + ch_g * p_in) * dt
+                wac_dc = (max(0.0, current_soc) * wac_dc + added_cost) / max(1e-4, current_soc + added_dc)
+            breakeven_lcos = round(wac_dc / eta_dis + c_deg, 4)
+            val_zom = round(p_in - c_deg, 4)
+            val_exp = round(p_ex - c_deg, 4)
+            future_vals = [import_prices[k] - c_deg for k in range(i, n_slots)]
+            shadow_p = round(max(lambda_term * eta_dis, float(np.percentile(future_vals, 75)) if future_vals else 0.0), 4)
+            dis_zom = round(min(dis, max(0.0, res_kw)), 3)
+            dis_exp = round(max(0.0, dis - dis_zom), 3)
             if total_ch > 0.02:
                 pwr = round(float(total_ch), 3)
                 if ch_s > 0.02 and ch_g > 0.02:
@@ -479,7 +505,14 @@ class BatteryPolicy:
                     soc_p05_pct=p05_soc_list[i],
                     soc_p95_pct=p95_soc_list[i],
                     ch_solar_kw=round(ch_s, 3),
-                    ch_grid_kw=round(ch_g, 3)
+                    ch_grid_kw=round(ch_g, 3),
+                    dis_zom_kw=dis_zom,
+                    dis_exp_kw=dis_exp,
+                    shadow_price_eur=shadow_p,
+                    val_zom_eur=val_zom,
+                    val_exp_eur=val_exp,
+                    wac_dc_eur=round(wac_dc, 4),
+                    breakeven_lcos_eur=breakeven_lcos,
                 )
             )
 

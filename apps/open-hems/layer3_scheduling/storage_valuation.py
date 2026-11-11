@@ -9,16 +9,16 @@ Calculates the purchase value (inkoopwaarde) and actual replacement value
 Clean Architecture Layer 3 Domain Logic: Zero HA entities, zero external dependencies.
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 
 def calculate_storage_valuation(
-    dhw_tank_temp_c: float = 48.0,
+    dhw_tank_temp_c: Optional[float] = 48.0,
     dhw_setpoint_c: float = 50.0,
     dhw_volume_l: float = 350.0,
     dhw_cop: float = 3.1,
     dhw_charging_price_eur: float = 0.18,
-    battery_soc_pct: float = 50.0,
+    battery_soc_pct: Optional[float] = 50.0,
     battery_capacity_kwh: float = 15.0,
     battery_min_soc_pct: float = 10.0,
     battery_charging_price_eur: float = 0.16,
@@ -27,7 +27,27 @@ def calculate_storage_valuation(
 ) -> Dict[str, Any]:
     """
     Computes buying vs actual valuation of energy stored in DHW tank and battery.
+    A measurement passed as None yields {"available": False} for that store (never a placeholder value).
     """
+    if dhw_tank_temp_c is None:
+        dhw_result: Dict[str, Any] = {"available": False, "reason": "Tanktemperatuur onbekend"}
+        dhw_stored_el_kwh = dhw_buying_val_eur = dhw_actual_val_eur = 0.0
+    else:
+        dhw_result, dhw_stored_el_kwh, dhw_buying_val_eur, dhw_actual_val_eur = _dhw_valuation(
+            dhw_tank_temp_c, dhw_setpoint_c, dhw_volume_l, dhw_cop, dhw_charging_price_eur, current_epex_price_eur)
+    if battery_soc_pct is None:
+        battery_result: Dict[str, Any] = {"available": False, "reason": "Laadtoestand (SoC) onbekend"}
+        bat_usable_kwh = bat_buying_val_eur = bat_actual_val_eur = 0.0
+    else:
+        battery_result, bat_usable_kwh, bat_buying_val_eur, bat_actual_val_eur = _battery_valuation(
+            battery_soc_pct, battery_capacity_kwh, battery_min_soc_pct, battery_charging_price_eur,
+            battery_efficiency, current_epex_price_eur)
+    return _aggregate(dhw_result, battery_result, dhw_stored_el_kwh, bat_usable_kwh,
+                      dhw_buying_val_eur, bat_buying_val_eur, dhw_actual_val_eur, bat_actual_val_eur,
+                      current_epex_price_eur)
+
+
+def _dhw_valuation(dhw_tank_temp_c, dhw_setpoint_c, dhw_volume_l, dhw_cop, dhw_charging_price_eur, current_epex_price_eur):
     # -------------------------------------------------------------
     # 1. Domestic Hot Water (DHW / Boilervat)
     # -------------------------------------------------------------
@@ -57,9 +77,14 @@ def calculate_storage_valuation(
         "buying_value_eur": dhw_buying_val_eur,
         "actual_value_eur": dhw_actual_val_eur,
         "delta_value_eur": dhw_delta_val_eur,
-        "is_profitable": dhw_delta_val_eur > 0
+        "is_profitable": dhw_delta_val_eur > 0,
+        "available": True
     }
+    return dhw_result, dhw_stored_el_kwh, dhw_buying_val_eur, dhw_actual_val_eur
 
+
+def _battery_valuation(battery_soc_pct, battery_capacity_kwh, battery_min_soc_pct, battery_charging_price_eur,
+                       battery_efficiency, current_epex_price_eur):
     # -------------------------------------------------------------
     # 2. Thuisbatterij (Home Battery)
     # -------------------------------------------------------------
@@ -84,9 +109,14 @@ def calculate_storage_valuation(
         "buying_value_eur": bat_buying_val_eur,
         "actual_value_eur": bat_actual_val_eur,
         "delta_value_eur": bat_delta_val_eur,
-        "is_profitable": bat_delta_val_eur > 0
+        "is_profitable": bat_delta_val_eur > 0,
+        "available": True
     }
+    return battery_result, bat_usable_kwh, bat_buying_val_eur, bat_actual_val_eur
 
+
+def _aggregate(dhw_result, battery_result, dhw_stored_el_kwh, bat_usable_kwh, dhw_buying_val_eur, bat_buying_val_eur,
+               dhw_actual_val_eur, bat_actual_val_eur, current_epex_price_eur):
     # -------------------------------------------------------------
     # 3. Aggregates
     # -------------------------------------------------------------

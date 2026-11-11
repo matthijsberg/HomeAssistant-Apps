@@ -122,7 +122,7 @@ class OpportunisticDHWMerger:
         cur_is_boost = (
             "max_on" in cur_mode
             or "solar_boost" in cur_mode
-            or getattr(cur_s, "target_temp_c", t_set) >= (t_boost - 2.0)
+            or (getattr(cur_s, "target_temp_c", None) or t_set) >= (t_boost - 2.0)
             or (plan_summary and getattr(plan_summary, "target_temp_c", t_set) >= (t_boost - 2.0) and getattr(plan_summary, "run_start", "").startswith("Nu"))
         )
 
@@ -161,7 +161,7 @@ class OpportunisticDHWMerger:
         for idx in range(1, lookahead_limit):
             s = plan.slots[idx]
             s_mode = str(getattr(s, "mode_code", "")).lower()
-            s_target = getattr(s, "target_temp_c", t_set)
+            s_target = getattr(s, "target_temp_c", None) or t_set
             if "max_on" in s_mode or "solar_boost" in s_mode or (s.dhw_kw > 1.0 and s_target >= (t_boost - 2.0)):
                 candidate_slots_boost.append(idx)
                 if candidate_time_boost is None:

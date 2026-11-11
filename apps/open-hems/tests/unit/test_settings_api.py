@@ -19,6 +19,16 @@ from layer1_data_collection.sanitizer import CleanTelemetryFrame
 from datetime import datetime, timezone
 
 
+@pytest.fixture(autouse=True)
+def isolated_config(tmp_path, monkeypatch):
+    """Never touch the live /config/heatpump_config.json and never start a background re-plan from tests."""
+    cfg_copy = tmp_path / "heatpump_config.json"
+    save_json(cfg_copy, load_json(CONFIG_FILE) if CONFIG_FILE.exists() else {})
+    monkeypatch.setattr(routes_system, "CONFIG_FILE", cfg_copy)
+    monkeypatch.setattr(routes_system, "ensure_active_canonical_plan", lambda *a, **k: None)
+    return cfg_copy
+
+
 class MockHandler:
     def __init__(self, body=None, path="/api/settings"):
         self.body = body or {}
@@ -138,10 +148,51 @@ def test_planner_reflects_comfort_margin_in_decision_details():
     frame = create_sample_telemetry_frame(now_dt, current_dhw_temp=45.0)
 
     params_p50 = DhwOptimizerParams(comfort_margin_mode="p50", min_comfort_margin_c=0.5)
-    plan = CentralPlanner.plan(frame, current_dhw_temp=45.0, dhw_optimizer_params=params_p50)
+    plan = CentralPlanner.plan(frame, current_dhw_temp=45.0, dhw_optimizer_params=params_p50, dhw_engine="dp")
 
     assert plan.dhw_summary is not None
     details = plan.dhw_summary.decision_details
     assert details is not None
     assert details.get("comfort_margin_mode") == "p50"
     assert details.get("comfort_boundary_c") == 40.5
+
+
+# --------------------------------------------------------------------------- dhw_policy (ADR-006, WP4)
+def test_get_settings_contains_dhw_policy_with_defaults():
+    handler = MockHandler(path="/api/settings")
+    routes_system.handle_get(handler, "/api/settings", {})
+    pol = handler.sent_json["dhw_policy"]
+    assert pol["engine"] in ("daikin_first", "dp")
+    for key in ("preheat_margin_c", "preheat_window_hours", "advance_margin", "advance_max_start_temp_c",
+                "boost_max_start_temp_c", "free_price_eur_per_kwh", "sg4_no_effect_timeout_min", "sg4_no_effect_cooldown_min"):
+        assert key in pol, key
+
+
+def test_post_dhw_policy_saves_valid_values_and_allows_switching_rules_off(isolated_config):
+    body = {"dhw_policy": {"engine": "daikin_first", "preheat_margin_c": 1.5, "advance_margin": None,
+                           "free_price_eur_per_kwh": 0.01}}
+    handler = MockHandler(body=body)
+    routes_system.handle_post(handler, "/api/settings", body)
+    assert handler.sent_status == 200
+    pol = handler.sent_json["dhw_policy"]
+    assert pol["preheat_margin_c"] == 1.5
+    assert pol["advance_margin"] is None
+    assert pol["free_price_eur_per_kwh"] == 0.01
+    saved = load_json(isolated_config)["dhw_policy"]
+    assert saved["advance_margin"] is None and saved["preheat_margin_c"] == 1.5
+
+
+@pytest.mark.parametrize("bad", [
+    {"engine": "magic"},
+    {"preheat_margin_c": 9},
+    {"boost_max_start_temp_c": None},
+    {"advance_margin": "veel"},
+    {"unknown_key": 1},
+])
+def test_post_dhw_policy_rejects_invalid_values(bad, isolated_config):
+    before = load_json(isolated_config)
+    handler = MockHandler(body={"dhw_policy": bad})
+    routes_system.handle_post(handler, "/api/settings", {"dhw_policy": bad})
+    assert handler.sent_status == 400
+    assert load_json(isolated_config) == before
+

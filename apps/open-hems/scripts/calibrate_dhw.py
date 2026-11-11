@@ -228,7 +228,7 @@ def run_dhw_power_calibration(dry_run: bool = True, write: bool = False, days: i
     """
     import shutil
     import scipy.stats as stats
-    from api.secrets_store import PARAMS_FILE, load_json, save_json
+    from api.secrets_store import PARAMS_FILE
 
     sec = load_secrets()
     pwd = sec.get("influxdb", {}).get("openhems_db", "") or sec.get("influxdb", {}).get("local_ha_influxdb", "")
@@ -360,15 +360,19 @@ def run_dhw_power_calibration(dry_run: bool = True, write: bool = False, days: i
             # Create backup of PARAMS_FILE
             backup_path = PARAMS_FILE.with_suffix(".json.bak")
             shutil.copyfile(PARAMS_FILE, backup_path)
-            cur_cfg = load_json(PARAMS_FILE)
-            cur_cfg.setdefault("dhw_power", {})["p_nom_50"] = round(float(beta[0]), 2)
-            cur_cfg["dhw_power"]["k_t_tank"] = round(float(beta[1]), 3)
-            cur_cfg["dhw_power"]["k_out"] = round(float(beta[2]), 3)
-            cur_cfg["dhw_power"]["t_ref_tank_c"] = 50.0
-            cur_cfg["dhw_power"]["t_ref_out_c"] = 10.0
-            cur_cfg["dhw_power"]["p_min_kw"] = 1.6
-            cur_cfg["dhw_power"]["p_max_kw"] = 3.5
-            save_json(PARAMS_FILE, cur_cfg)
+            from layer2_calibration.params_store import update_params
+
+            def _apply_dhw_power(cur_cfg):
+                cur_cfg.setdefault("dhw_power", {})["p_nom_50"] = round(float(beta[0]), 2)
+                cur_cfg["dhw_power"]["k_t_tank"] = round(float(beta[1]), 3)
+                cur_cfg["dhw_power"]["k_out"] = round(float(beta[2]), 3)
+                cur_cfg["dhw_power"]["t_ref_tank_c"] = 50.0
+                cur_cfg["dhw_power"]["t_ref_out_c"] = 10.0
+                cur_cfg["dhw_power"]["p_min_kw"] = 1.6
+                cur_cfg["dhw_power"]["p_max_kw"] = 3.5
+
+            # Locked reload-merge-write: never overwrite concurrent updates by the running daemon
+            update_params(_apply_dhw_power, PARAMS_FILE)
             print(f"✓ Gekalibreerde parameters opgeslagen naar {PARAMS_FILE} (backup: {backup_path})")
             report["write_status"] = "written"
     else:

@@ -2509,6 +2509,168 @@
             }
         }
 
+        window.__costMatrixFilter = 'all';
+        window.setCostMatrixFilter = function(mode) {
+            window.__costMatrixFilter = mode || 'all';
+            const pills = document.querySelectorAll('#cm-filter-pills button[data-cm-filter]');
+            pills.forEach(btn => {
+                if (btn.getAttribute('data-cm-filter') === window.__costMatrixFilter) {
+                    btn.className = 'px-2.5 py-1 rounded-lg bg-purple-600 text-white font-bold transition';
+                } else {
+                    btn.className = 'px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition';
+                }
+            });
+            if (window.__lastCostMatrixData) {
+                window.renderCostMatrixHeatmapTable(window.__lastCostMatrixData);
+            }
+        };
+
+        window.renderCostMatrixHeatmapTable = function(cm) {
+            if (!cm || !cm.labels || !cm.series) return;
+            const thead = document.getElementById('cost-matrix-thead');
+            const tbody = document.getElementById('cost-matrix-tbody');
+            if (!thead || !tbody) return;
+
+            const elInv = document.getElementById('cm-badge-invoice');
+            const elTerm = document.getElementById('cm-badge-terminal');
+            const elEcon = document.getElementById('cm-badge-economic');
+            const invVal = Number(cm.total_invoice_eur || 0);
+            const termVal = Number(cm.terminal_value_delta_eur || 0);
+            const econVal = Number(cm.true_economic_cost_eur || 0);
+            if (elInv) elInv.innerText = `Factuur: €${invVal.toFixed(2)}`;
+            if (elTerm) elTerm.innerText = `ΔBuffer Waarde: ${termVal >= 0 ? '+' : ''}€${termVal.toFixed(2)}`;
+            if (elEcon) elEcon.innerText = `Echte Econ. Kosten: €${econVal.toFixed(2)}`;
+
+            const labels = cm.labels;
+            const n = labels.length;
+            const s = cm.series;
+            const lockouts = cm.lockout_flags || [];
+            const chosenCv = cm.chosen_cv_flags || [];
+            const chosenDn = cm.chosen_dhw_norm_flags || [];
+            const chosenDb = cm.chosen_dhw_boost_flags || [];
+
+            // Header row
+            let thHtml = `<tr>
+                <th class="sticky left-0 z-30 bg-[#0f172a] px-3 py-2 border-r border-slate-700 min-w-[230px]">Rij / Variabele</th>
+                <th class="sticky left-[230px] z-30 bg-[#0f172a] px-2 py-2 border-r border-slate-700 min-w-[74px] text-slate-400">Eenheid</th>
+                <th class="sticky left-[304px] z-30 bg-[#162038] px-2.5 py-2 border-r-2 border-purple-500/40 min-w-[92px] text-right text-purple-200">Totaal / Gem.</th>`;
+            for (let i = 0; i < n; i++) {
+                const isLock = Boolean(lockouts[i]);
+                thHtml += `<th class="px-2 py-2 text-right min-w-[66px] border-r border-slate-800/70 ${isLock ? 'bg-red-950/60 text-red-300' : ''}">${labels[i]}</th>`;
+            }
+            thHtml += `</tr>`;
+            thead.innerHTML = thHtml;
+
+            const sumArr = (arr) => (arr || []).reduce((a, b) => a + Number(b || 0), 0);
+            const avgArr = (arr) => (arr && arr.length) ? sumArr(arr) / arr.length : 0;
+            const minArr = (arr) => (arr && arr.length) ? Math.min(...arr.map(Number)) : 0;
+            const maxArr = (arr) => (arr && arr.length) ? Math.max(...arr.map(Number)) : 0;
+
+            const heatBg = (val, lo, hi, invert) => {
+                if (!Number.isFinite(val) || hi <= lo + 1e-6) return '';
+                let ratio = Math.max(0, Math.min(1, (val - lo) / (hi - lo)));
+                if (invert) ratio = 1 - ratio;
+                if (ratio <= 0.35) return 'background: rgba(16, 185, 129, 0.25); color: #6ee7b7;';
+                if (ratio <= 0.68) return 'background: rgba(245, 158, 11, 0.22); color: #fcd34d;';
+                return 'background: rgba(239, 68, 68, 0.26); color: #fca5a5;';
+            };
+
+            const rowDefs = [
+                { sec: 'prices', grp: ['all', 'heatmap', 'finance'], header: '1. Prijzen (€ / kWh)' },
+                { grp: ['all', 'heatmap', 'finance'], name: 'kWh Buy (All-in Inkoop)', unit: '€/kWh', arr: s.kwh_buy, agg: 'avg', dec: 4, heatmap: 'cost' },
+                { grp: ['all', 'solar', 'finance'], name: 'kWh Sell / Solar (Teruglevering)', unit: '€/kWh', arr: s.kwh_sell, agg: 'avg', dec: 4 },
+
+                { sec: 'heatmap', grp: ['all', 'heatmap'], header: '2. Beslis-Matrix Warmteprijs Heatmap (€ / kWh_th — o.b.v. 3-wegklep & Zon_na_Huis)' },
+                { grp: ['all', 'heatmap'], name: '🔥 Warmteprijs CV Vloer (0,8 kW)', unit: '€/kWh_th', arr: s.heat_price_cv, agg: 'min', dec: 4, heatmap: 'cost', chosen: chosenCv, icon: '🔥' },
+                { grp: ['all', 'heatmap'], name: '🚿 Warmteprijs Boiler Normaal (48°C)', unit: '€/kWh_th', arr: s.heat_price_dhw_norm, agg: 'min', dec: 4, heatmap: 'cost', chosen: chosenDn, icon: '🚿' },
+                { grp: ['all', 'heatmap'], name: '🚀 Warmteprijs Boiler Boost (60°C +5%)', unit: '€/kWh_th', arr: s.heat_price_dhw_boost, agg: 'min', dec: 4, heatmap: 'cost', chosen: chosenDb, icon: '🚀' },
+
+                { sec: 'solar', grp: ['all', 'solar'], header: '3. Productie & 5-Staps Zon-Waterval (kWh)' },
+                { grp: ['all', 'solar'], name: '☀️ Solar Production (Opwek)', unit: 'kWh', arr: s.solar_kwh, agg: 'sum', dec: 2 },
+                { grp: ['all', 'solar'], name: '🏠 Totaal Niet-WP Huis (Sluip + Overig)', unit: 'kWh', arr: s.house_total_kwh, agg: 'sum', dec: 2 },
+                { grp: ['all', 'solar'], name: 'Stap 1a: Zon gebruikt door Huis', unit: 'kWh', arr: s.zon_house_kwh, agg: 'sum', dec: 2 },
+                { grp: ['all', 'solar'], name: 'Stap 1b: Grid nodig voor Huis', unit: 'kWh', arr: s.grid_house_kwh, agg: 'sum', dec: 2 },
+                { grp: ['all', 'solar', 'heatmap'], name: '🟢 Zon-overschot over na Huis (Pool)', unit: 'kWh', arr: s.zon_after_house_kwh, agg: 'sum', dec: 2, highlight: 'emerald' },
+                { grp: ['all', 'solar'], name: 'Stap 2a: Zon gebruikt door Heating', unit: 'kWh', arr: s.zon_heat_kwh, agg: 'sum', dec: 2 },
+                { grp: ['all', 'solar'], name: 'Stap 2b: Grid nodig voor Heating', unit: 'kWh', arr: s.grid_heat_kwh, agg: 'sum', dec: 2 },
+                { grp: ['all', 'solar'], name: '🟢 Zon-overschot over na Heating', unit: 'kWh', arr: s.zon_after_heat_kwh, agg: 'sum', dec: 2, highlight: 'emerald' },
+                { grp: ['all', 'solar'], name: 'Stap 3a: Zon gebruikt door DHW', unit: 'kWh', arr: s.zon_dhw_kwh, agg: 'sum', dec: 2 },
+                { grp: ['all', 'solar'], name: 'Stap 3b: Grid nodig voor DHW', unit: 'kWh', arr: s.grid_dhw_kwh, agg: 'sum', dec: 2 },
+                { grp: ['all', 'solar'], name: '🟢 Eind-overschot Zon naar Grid', unit: 'kWh', arr: s.zon_export_kwh, agg: 'sum', dec: 2, highlight: 'emerald' },
+
+                { sec: 'battery', grp: ['all', 'battery'], header: '4. Tweezijdige Accu-Waterval & Meerdaagse Hold-Logica' },
+                { grp: ['all', 'battery'], name: '🛡️ Accu Modus (CH / HOLD / ZOM / EXP)', unit: 'Mode', arr: s.bat_mode, agg: 'mode', isText: true },
+                { grp: ['all', 'battery', 'heatmap'], name: '⚡ Waarde Nul-op-de-Meter (Buy - slijtage)', unit: '€/kWh', arr: s.bat_val_zom, agg: 'max', dec: 4, heatmap: 'value' },
+                { grp: ['all', 'battery'], name: '🎯 Shadow Price / Hold-Drempel', unit: '€/kWh', arr: s.bat_shadow_price, agg: 'avg', dec: 4 },
+                { grp: ['all', 'battery'], name: '📦 WAC Kostprijs in Accu (DC)', unit: '€/kWh', arr: s.bat_wac_eur, agg: 'avg', dec: 4 },
+                { grp: ['all', 'battery'], name: '⚖️ Break-Even Ontlaadprijs (LCOS)', unit: '€/kWh', arr: s.bat_breakeven_eur, agg: 'avg', dec: 4 },
+                { grp: ['all', 'battery'], name: 'Stap L1: Accu Laden uit Zon (CH_PV)', unit: 'kWh', arr: s.bat_ch_pv_kwh, agg: 'sum', dec: 2 },
+                { grp: ['all', 'battery'], name: 'Stap L2: Accu Laden uit Grid (CH_GRID)', unit: 'kWh', arr: s.bat_ch_grid_kwh, agg: 'sum', dec: 2 },
+                { grp: ['all', 'battery'], name: 'Stap O1: Ontladen Nul-op-de-Meter (ZOM)', unit: 'kWh', arr: s.bat_dis_zom_kwh, agg: 'sum', dec: 2 },
+                { grp: ['all', 'battery'], name: 'Stap O2: Ontladen Grid Export (DUMP)', unit: 'kWh', arr: s.bat_dis_exp_kwh, agg: 'sum', dec: 2 },
+                { grp: ['all', 'battery'], name: '🔋 Accu Voorraad (SoC)', unit: 'kWh', arr: s.bat_soc_kwh, agg: 'max', dec: 2 },
+
+                { sec: 'storage', grp: ['all', 'finance'], header: '5. Thermische Buffers, Temperaturen & COP' },
+                { grp: ['all', 'finance'], name: 'Storage DHW (boven 38°C)', unit: 'kWh_th', arr: s.storage_dhw_kwh_th, agg: 'avg', dec: 2 },
+                { grp: ['all', 'finance', 'heatmap'], name: 'Boiler Temperatuur', unit: '°C', arr: s.boiler_temp_c, agg: 'min', dec: 1 },
+                { grp: ['all', 'finance'], name: 'Storage Vloer (boven 19,5°C)', unit: 'kWh_th', arr: s.storage_floor_kwh_th, agg: 'avg', dec: 2 },
+                { grp: ['all', 'finance', 'heatmap'], name: 'Woonkamer Temperatuur', unit: '°C', arr: s.room_temp_c, agg: 'min', dec: 2 },
+                { grp: ['all', 'finance'], name: 'Buitentemperatuur', unit: '°C', arr: s.outdoor_temp_c, agg: 'avg', dec: 1 },
+                { grp: ['all', 'heatmap'], name: 'CoP DHW Normaal / Boost / CV', unit: 'COP', arr: s.cop_heating, agg: 'avg', dec: 2 },
+
+                { sec: 'finance', grp: ['all', 'finance'], header: '6. Financiële Afrekening op Factuur (€)' },
+                { grp: ['all', 'finance'], name: 'Grid Inkoopkosten Huis (Sluip + Overig)', unit: '€', arr: s.cost_house_eur, agg: 'sum', dec: 2 },
+                { grp: ['all', 'finance'], name: 'Economische Kosten Heating (Grid + Zon)', unit: '€', arr: s.cost_heat_eur, agg: 'sum', dec: 2 },
+                { grp: ['all', 'finance'], name: 'Economische Kosten DHW (Grid + Zon)', unit: '€', arr: s.cost_dhw_eur, agg: 'sum', dec: 2 },
+                { grp: ['all', 'finance'], name: 'Opbrengst Teruglevering aan Grid', unit: '€', arr: s.rev_export_eur, agg: 'sum', dec: 2 },
+                { grp: ['all', 'finance', 'heatmap'], name: '💶 Netto Factuurbedrag Slot', unit: '€', arr: s.net_invoice_eur, agg: 'sum', dec: 2, highlight: 'purple' }
+            ];
+
+            const activeFilter = window.__costMatrixFilter || 'all';
+            let tbHtml = '';
+            for (const rd of rowDefs) {
+                if (!rd.grp.includes(activeFilter)) continue;
+                if (rd.header) {
+                    tbHtml += `<tr class="bg-[#111c33] text-cyan-300 font-bold">
+                        <td colspan="${3 + n}" class="sticky left-0 z-10 bg-[#111c33] px-3 py-1.5 border-y border-slate-700">${rd.header}</td>
+                    </tr>`;
+                    continue;
+                }
+                const arr = rd.arr || [];
+                let sumTxt = '--';
+                if (!rd.isText && arr.length) {
+                    const v = rd.agg === 'sum' ? sumArr(arr) : (rd.agg === 'min' ? minArr(arr) : (rd.agg === 'max' ? maxArr(arr) : avgArr(arr)));
+                    const pfx = rd.agg === 'min' ? 'min ' : (rd.agg === 'max' ? 'max ' : (rd.agg === 'avg' ? 'gem ' : ''));
+                    sumTxt = `${pfx}${v.toFixed(rd.dec ?? 2)}`;
+                }
+                const lo = !rd.isText ? minArr(arr) : 0;
+                const hi = !rd.isText ? maxArr(arr) : 1;
+                const rowBg = rd.highlight === 'emerald' ? 'bg-emerald-950/20 text-emerald-200 font-bold' : (rd.highlight === 'purple' ? 'bg-purple-950/25 text-purple-200 font-bold' : 'hover:bg-slate-800/40 text-slate-200');
+
+                tbHtml += `<tr class="${rowBg}">
+                    <td class="sticky left-0 z-10 bg-[#0b111e] px-3 py-1.5 border-r border-slate-800 truncate max-w-[230px]" title="${rd.name}">${rd.name}</td>
+                    <td class="sticky left-[230px] z-10 bg-[#0b111e] px-2 py-1.5 border-r border-slate-800 text-slate-400">${rd.unit}</td>
+                    <td class="sticky left-[304px] z-10 bg-[#131d33] px-2.5 py-1.5 border-r-2 border-purple-500/40 text-right font-bold text-white">${sumTxt}</td>`;
+
+                for (let i = 0; i < n; i++) {
+                    const val = arr[i];
+                    const isLock = Boolean(lockouts[i]);
+                    const isChosen = Boolean(rd.chosen && rd.chosen[i]);
+                    let style = '';
+                    if (rd.heatmap === 'cost') style = heatBg(Number(val), lo, hi, false);
+                    else if (rd.heatmap === 'value') style = heatBg(Number(val), lo, hi, true);
+                    if (isLock && rd.heatmap) style += 'background-image: repeating-linear-gradient(45deg, rgba(239,68,68,0.18), rgba(239,68,68,0.18) 3px, transparent 3px, transparent 6px);';
+                    const chosenBorder = isChosen ? 'ring-2 ring-inset ring-purple-400 font-black' : '';
+                    const cellTxt = rd.isText ? String(val || '-') : Number(val || 0).toFixed(rd.dec ?? 2);
+                    const badge = isChosen ? `${rd.icon || ''} ` : (isLock && rd.chosen ? '🔒 ' : '');
+                    const tip = `${labels[i]} — ${rd.name}: ${cellTxt} ${rd.unit} | Buy: €${Number(s.kwh_buy[i]||0).toFixed(3)} | Zon na Huis: ${Number(s.zon_after_house_kwh[i]||0).toFixed(2)} kWh | Buiten: ${s.outdoor_temp_c[i]}°C`;
+                    tbHtml += `<td class="px-2 py-1.5 text-right border-r border-slate-800/50 ${chosenBorder}" style="${style}" title="${tip}">${badge}${cellTxt}</td>`;
+                }
+                tbHtml += `</tr>`;
+            }
+            tbody.innerHTML = tbHtml;
+        };
+
         async function loadChartData() {
             try {
                 const simParam = window.__simulateBattery ? '&simulate_battery=1' : '';
@@ -2586,6 +2748,10 @@
 
                 // Render Storage Energy Valuation (DHW & Thuisbatterij)
                 updateStorageValuationUI(data.storage_valuation);
+                if (window.renderCostMatrixHeatmapTable && data.cost_matrix) {
+                    window.__lastCostMatrixData = data.cost_matrix;
+                    window.renderCostMatrixHeatmapTable(data.cost_matrix);
+                }
 
                 // Populate Live Active DHW Banner (Visible only when heating)
                 const liveDhwCard = document.getElementById('live-dhw-active-card');
@@ -4909,12 +5075,19 @@
 
             const comp = validationComponent;
             const metrics = validationDataCache.metrics ? (validationDataCache.metrics[comp] || {}) : {};
+            const metaLabels = {
+                'all': { prefix: '⚡ Totaal Stroom', eUnit: 'kWh_el', predWord: 'Voorspeld' },
+                'solar': { prefix: '☀️ Zonnestroom', eUnit: 'kWh', predWord: 'Voorspeld' },
+                'dhw': { prefix: '⚡ WP Stroom (SWW)', eUnit: 'kWh_el', predWord: 'Gepland' },
+                'cv': { prefix: '🌡️ WP Stroom (CV)', eUnit: 'kWh_el', predWord: 'Voorspeld' }
+            };
+            const mLbl = metaLabels[comp] || metaLabels['all'];
             
             // Update KPI badges
             const accEl = document.getElementById('val-kpi-accuracy');
             if (accEl) {
                 const acc = metrics.accuracy_pct !== undefined ? metrics.accuracy_pct : '--';
-                accEl.innerText = `Kwaliteit: ${acc}%`;
+                accEl.innerText = `${mLbl.prefix} Kwaliteit: ${acc}%`;
                 if (acc >= 85) accEl.className = 'px-2.5 py-1 rounded-lg border bg-emerald-950/60 border-emerald-500/40 text-emerald-300 font-bold';
                 else if (acc >= 70) accEl.className = 'px-2.5 py-1 rounded-lg border bg-amber-950/60 border-amber-500/40 text-amber-300 font-bold';
                 else accEl.className = 'px-2.5 py-1 rounded-lg border bg-blue-950/60 border-blue-500/40 text-blue-300 font-bold';
@@ -4928,45 +5101,67 @@
             const totEl = document.getElementById('val-kpi-totals');
             if (totEl) {
                 const dSign = metrics.delta_kwh > 0 ? '+' : '';
-                totEl.innerText = `Werkelijk: ${metrics.total_actual_kwh || 0} kWh | Voorspeld: ${metrics.total_pred_kwh || 0} kWh (Δ ${dSign}${metrics.delta_kwh || 0} kWh)`;
+                totEl.innerText = `Werkelijk: ${metrics.total_actual_kwh || 0} ${mLbl.eUnit} | ${mLbl.predWord}: ${metrics.total_pred_kwh || 0} ${mLbl.eUnit} (Δ ${dSign}${metrics.delta_kwh || 0} ${mLbl.eUnit})`;
+            }
+
+            const dhwDemRow = document.getElementById('val-kpi-dhw-demand-row');
+            if (dhwDemRow) {
+                if (comp === 'dhw' && validationDataCache.metrics && validationDataCache.metrics.dhw_demand) {
+                    const dm = validationDataCache.metrics.dhw_demand;
+                    dhwDemRow.classList.remove('hidden');
+                    dhwDemRow.classList.add('flex');
+                    const demAccEl = document.getElementById('val-kpi-dhw-demand-accuracy');
+                    if (demAccEl) {
+                        const dAcc = dm.accuracy_pct !== undefined ? dm.accuracy_pct : '--';
+                        demAccEl.innerText = `🚿 Tapwater Aftap Kwaliteit: ${dAcc}%`;
+                    }
+                    const demTotEl = document.getElementById('val-kpi-dhw-demand-totals');
+                    if (demTotEl) {
+                        const dmSign = dm.delta_kwh > 0 ? '+' : '';
+                        demTotEl.innerText = `Werkelijk getapt: ${dm.total_actual_kwh || 0} kWh_th | Verwacht: ${dm.total_pred_kwh || 0} kWh_th (Δ ${dmSign}${dm.delta_kwh || 0} kWh_th)`;
+                    }
+                } else {
+                    dhwDemRow.classList.add('hidden');
+                    dhwDemRow.classList.remove('flex');
+                }
             }
 
             const actSeries = validationDataCache.actual ? (validationDataCache.actual[comp] || []) : [];
             const predSeries = validationDataCache.predicted ? (validationDataCache.predicted[comp] || []) : [];
 
-            // Theme colors per component
+            // Theme colors per component aligned with OpenHEMSTokens & canonical Purple (#C084FC) for predictions
             const themeMap = {
                 'all': {
-                    actBorder: '#06B6D4',
-                    actFill: 'rgba(6, 182, 212, 0.12)',
+                    actBorder: '#F97316',
+                    actFill: 'rgba(249, 115, 22, 0.14)',
                     predBorder: '#C084FC',
-                    unit: 'kW',
-                    actLabel: 'Werkelijk Totaal (Telemetrie)',
-                    predLabel: 'Voorspeld Totaal (Model)'
+                    unit: 'kW_el',
+                    actLabel: 'Werkelijk Totaalverbruik (Telemetrie, kW_el)',
+                    predLabel: 'Voorspeld Totaalverbruik (Model, kW_el)'
                 },
                 'solar': {
-                    actBorder: '#F59E0B',
-                    actFill: 'rgba(245, 158, 11, 0.15)',
-                    predBorder: '#FDE047',
+                    actBorder: OpenHEMSTokens.colors.solar,
+                    actFill: 'rgba(245, 158, 11, 0.16)',
+                    predBorder: '#C084FC',
                     unit: 'kW',
-                    actLabel: 'Werkelijke Zonnestroom (Inepro 103)',
-                    predLabel: 'Voorspelde Zonnestroom (POA Model)'
+                    actLabel: 'Werkelijke Zonnestroom (Inepro 103, kW)',
+                    predLabel: 'Voorspelde Zonnestroom (POA Model, kW)'
                 },
                 'dhw': {
-                    actBorder: '#F43F5E',
-                    actFill: 'rgba(244, 63, 94, 0.15)',
-                    predBorder: '#FB923C',
-                    unit: 'kW',
-                    actLabel: 'Werkelijke Warmtepomp SWW (Daikin)',
-                    predLabel: 'Geplande SWW Sturing (DHW Model)'
+                    actBorder: OpenHEMSTokens.colors.dhw,
+                    actFill: 'rgba(236, 72, 153, 0.16)',
+                    predBorder: '#C084FC',
+                    unit: 'kW_el',
+                    actLabel: 'Werkelijke Warmtepomp SWW (Stroom kW_el)',
+                    predLabel: 'Geplande SWW Sturing (DHW Model kW_el)'
                 },
                 'cv': {
-                    actBorder: '#3B82F6',
-                    actFill: 'rgba(59, 130, 246, 0.15)',
-                    predBorder: '#818CF8',
-                    unit: 'kW',
-                    actLabel: 'Werkelijke Warmtepomp CV (Daikin)',
-                    predLabel: 'Voorspelde CV Vraag (2-Massa Model)'
+                    actBorder: OpenHEMSTokens.colors.heating,
+                    actFill: 'rgba(99, 102, 241, 0.16)',
+                    predBorder: '#C084FC',
+                    unit: 'kW_el',
+                    actLabel: 'Werkelijke Warmtepomp CV (Stroom kW_el)',
+                    predLabel: 'Voorspelde CV Stroom (2R1C Model kW_el)'
                 }
             };
 
@@ -4978,7 +5173,9 @@
 
             const chartDatasets = [
                 {
+                    id: 'val_actual_power',
                     label: t.actLabel,
+                    unit: t.unit,
                     data: actSeries,
                     borderColor: t.actBorder,
                     backgroundColor: t.actFill,
@@ -4989,7 +5186,9 @@
                     pointHoverRadius: 5
                 },
                 {
+                    id: 'val_predicted_power',
                     label: t.predLabel,
+                    unit: t.unit,
                     data: predSeries,
                     borderColor: t.predBorder,
                     borderWidth: 2,
@@ -5004,7 +5203,9 @@
             if (comp === 'dhw') {
                 if (validationDataCache.actual && validationDataCache.actual.dhw_demand) {
                     chartDatasets.push({
+                        id: 'val_actual_dhw_demand',
                         label: 'Werkelijk Tapwaterverbruik (Aftap kWh_th)',
+                        unit: 'kWh_th',
                         data: validationDataCache.actual.dhw_demand,
                         borderColor: '#38BDF8',
                         backgroundColor: 'rgba(56, 189, 248, 0.20)',
@@ -5017,12 +5218,14 @@
                 }
                 if (validationDataCache.predicted && validationDataCache.predicted.dhw_demand) {
                     chartDatasets.push({
+                        id: 'val_predicted_dhw_demand',
                         label: 'Verwachte Warmtevraag (Aftap kWh_th)',
+                        unit: 'kWh_th',
                         data: validationDataCache.predicted.dhw_demand,
-                        borderColor: 'rgba(251, 146, 60, 0.55)',
-                        backgroundColor: 'rgba(251, 146, 60, 0.08)',
-                        borderWidth: 1.5,
-                        borderDash: [2, 3],
+                        borderColor: '#67E8F9',
+                        backgroundColor: 'rgba(103, 232, 249, 0.08)',
+                        borderWidth: 1.8,
+                        borderDash: [3, 3],
                         fill: true,
                         tension: 0.3,
                         pointRadius: 0,
@@ -5062,7 +5265,8 @@
                             callbacks: {
                                 label: function(context) {
                                     const val = context.parsed.y;
-                                    return `  ${context.dataset.label}: ${val.toFixed(2)} kW`;
+                                    const dsUnit = context.dataset.unit || 'kW';
+                                    return `  ${context.dataset.label}: ${val.toFixed(2)} ${dsUnit}`;
                                 },
                                 afterBody: function(items) {
                                     if (items.length >= 2) {
@@ -5070,7 +5274,7 @@
                                         const p = items[1].parsed.y;
                                         const deltaW = Math.round((a - p) * 1000);
                                         const sign = deltaW > 0 ? '+' : '';
-                                        return `  Afwijking (Delta): ${sign}${deltaW} W`;
+                                        return `  Afwijking Stroom (Delta): ${sign}${deltaW} W`;
                                     }
                                     return '';
                                 }

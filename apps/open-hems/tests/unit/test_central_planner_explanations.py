@@ -40,7 +40,8 @@ def test_optimizer_explanation_structure_in_central_planner():
     frame = create_sample_telemetry_frame(now_dt, current_dhw_temp=46.0)
     spec = DhwTankSpec()
 
-    plan = CentralPlanner.plan(frame, current_dhw_temp=46.0, dhw_spec=spec)
+    # DP engine (ADR-004): fallback until WP5 of docs/plans/PLAN-dhw-daikin-first.md
+    plan = CentralPlanner.plan(frame, current_dhw_temp=46.0, dhw_spec=spec, dhw_engine="dp")
     summary = plan.dhw_summary
     assert summary is not None
 
@@ -80,7 +81,8 @@ def test_no_contradiction_when_target_reaches_60c():
     frame = create_sample_telemetry_frame(now_dt, current_dhw_temp=46.0)
     spec = DhwTankSpec()
 
-    plan = CentralPlanner.plan(frame, current_dhw_temp=46.0, dhw_spec=spec)
+    # DP engine (ADR-004): fallback until WP5 of docs/plans/PLAN-dhw-daikin-first.md
+    plan = CentralPlanner.plan(frame, current_dhw_temp=46.0, dhw_spec=spec, dhw_engine="dp")
     details = plan.dhw_summary.decision_details
     assert details is not None
 

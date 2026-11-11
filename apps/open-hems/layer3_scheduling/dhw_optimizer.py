@@ -54,6 +54,7 @@ from layer2_calibration.dhw_thermal_model import DhwThermalModel
 from layer3_scheduling.dhw_specs import DhwTankSpec
 from layer3_scheduling.tariff_provider import TariffProvider
 from layer3_scheduling.dhw_financials import calculate_slot_financials
+from layer3_scheduling.peak_detection import hard_lockout_slot_indices
 
 
 @dataclass
@@ -282,19 +283,9 @@ def solve(
     t_comf = spec.comfort_min_temp_c
     t_max = spec.boost_setpoint_c
 
-    # 2. Lockout map
+    # 2. Lockout map (accepts per-slot dicts and detect_dynamic_price_peaks block objects)
     lockouts = [False] * N
-    peak_lockout_set = set()
-    if dynamic_peaks:
-        for pk in dynamic_peaks:
-            if isinstance(pk, dict) and pk.get("is_hard_lockout"):
-                idx = pk.get("slot_idx")
-                if idx is not None and 0 <= idx < N:
-                    peak_lockout_set.add(idx)
-            elif hasattr(pk, "is_hard_lockout") and getattr(pk, "is_hard_lockout"):
-                idx = getattr(pk, "slot_idx", None)
-                if idx is not None and 0 <= idx < N:
-                    peak_lockout_set.add(idx)
+    peak_lockout_set = hard_lockout_slot_indices(dynamic_peaks or [], n_slots=N)
 
     for k, s in enumerate(slots):
         is_locked = getattr(s, "is_hard_lockout", False) or (k in peak_lockout_set)
@@ -630,8 +621,9 @@ def solve(
                 cand_cost_1 = cost_start[current_r, 1] + c_el + val_1
 
         # Decision
-        if k < in_flight_slots:
+        if k < in_flight_slots and not is_locked_k:
             # Physical In-Flight Run Commitment: Heat pump is already running and must complete cycle
+            # (never through a hard peak lockout)
             u_opt = 1
             current_t = t_next_cand_1
             current_r = r_next_1 if r_next_1 >= 0 else idx_on_free
@@ -1017,3 +1009,113 @@ def evaluate_plan_metrics(
         "comfort_breached": comfort_breached,
         "total_kwh_el": round(total_kwh_el, 2)
     }
+
+
+def result_from_u_plan(
+    slots: List[Any],
+    u_plan: List[int],
+    t0_c: float,
+    spec: Optional[DhwTankSpec] = None,
+    params: Optional[DhwOptimizerParams] = None,
+    tariff_provider: Any = None,
+    dhw_model: Any = None,
+    run_state0: Any = None,
+    model_parameters: Optional[Dict[str, Any]] = None,
+    validation_issue: Optional[str] = None,
+) -> DhwOptimizerResult:
+    """
+    Pure function: builds a complete, internally consistent DhwOptimizerResult (trajectory,
+    uncertainty band, runs, slot modes, costs, J) for an arbitrary binary plan u_plan.
+    Used whenever the dispatched plan differs from the raw DP solution (run consolidation),
+    so that summaries, trajectories and dispatch slots always describe the same plan.
+    """
+    spec = spec or DhwTankSpec()
+    params = params or DhwOptimizerParams()
+    dhw_model = dhw_model or DhwThermalModel()
+    tp = tariff_provider or TariffProvider()
+    N = len(slots)
+    u = [int(u_plan[k]) if k < len(u_plan) else 0 for k in range(N)]
+
+    metrics = evaluate_plan_metrics(
+        slots=slots, u_plan=u, t0_c=t0_c, spec=spec, params=params, tariff_provider=tp,
+        dhw_model=dhw_model, run_state0=run_state0, model_parameters=model_parameters
+    )
+    temps = metrics["temperatures_c"]
+
+    tank_spec_dict = {
+        "thermal_capacity_kwh_per_k": spec.thermal_capacity_kwh_per_k,
+        "ua_w_per_k": dhw_model.get_tank_ua() if hasattr(dhw_model, "get_tank_ua") else 2.5,
+        "ambient_temp_c": params.t_amb_c,
+        "target_temp_c": spec.boost_setpoint_c,
+    }
+    p05, p95 = [round(float(t0_c), 2)], [round(float(t0_c), 2)]
+    demand_p50: List[float] = []
+    c05 = c95 = float(t0_c)
+    for k, s in enumerate(slots):
+        dt_val = getattr(s, "dt", None) or (datetime.now(timezone.utc) + timedelta(minutes=15 * k))
+        dow, q_idx = dt_val.weekday(), dt_val.hour * 4 + dt_val.minute // 15
+        demand_p50.append(round(dhw_model.get_learned_tap_kwh_th(dow, q_idx), 4) if hasattr(dhw_model, "get_learned_tap_kwh_th") else 0.0)
+        out_t = float(getattr(s, "outdoor_temp_c", getattr(s, "outdoor_temp", 10.0)))
+        q05 = dhw_model.get_learned_tap_kwh_th_p05(dow, q_idx) if hasattr(dhw_model, "get_learned_tap_kwh_th_p05") else 0.0
+        q95 = dhw_model.get_learned_tap_kwh_th_p95(dow, q_idx) if hasattr(dhw_model, "get_learned_tap_kwh_th_p95") else 0.0
+        for which in ("05", "95"):
+            cur = c05 if which == "05" else c95
+            p_el = spec.get_electric_power_kw(cur, outdoor_temp_c=out_t, params=model_parameters) if u[k] else 0.0
+            nxt = dhw_step(
+                t_tank_c=cur, u=float(u[k]), q_tap_kwh=q05 if which == "05" else q95, t_outdoor_c=out_t,
+                dt_h=0.25, spec=dict(tank_spec_dict, heat_pump_power_kw=p_el), params=model_parameters,
+                t_max_c=spec.boost_setpoint_c, t_amb_c=params.t_amb_c
+            )
+            if which == "05":
+                c05 = nxt
+            else:
+                c95 = nxt
+        p05.append(round(c05, 2))
+        p95.append(round(c95, 2))
+
+    runs: List[DhwRun] = []
+    for r in metrics["runs"]:
+        st, en = int(r["start_idx"]), int(r["end_idx"])
+        self_kwh = 0.0
+        for k in range(st, min(en, N)):
+            s = slots[k]
+            out_t = float(getattr(s, "outdoor_temp_c", getattr(s, "outdoor_temp", 10.0)))
+            p_el = spec.get_electric_power_kw(temps[k], outdoor_temp_c=out_t, params=model_parameters)
+            _, s_kwh, _, _ = calculate_slot_financials(
+                solar_kw=float(getattr(s, "solar_kw", 0.0)),
+                unalloc_kw=float(getattr(s, "unallocated_kw", 0.30)),
+                el_demand_kw=p_el,
+                price_all_in=float(getattr(s, "price_all_in", 0.25)),
+                step_hours=0.25,
+                tariff_provider=tp
+            )
+            self_kwh += s_kwh
+        kwh = float(r["kwh_el"])
+        runs.append(DhwRun(
+            start_idx=st, end_idx=en, t_start_c=r["t_start_c"], t_end_c=r["t_end_c"],
+            kwh_el=round(kwh, 2), cost_eur=r["cost_eur"],
+            solar_share=round(self_kwh / kwh, 2) if kwh > 0 else 0.0
+        ))
+
+    slot_modes = ["normal"] * N
+    for run in runs:
+        for k in range(run.start_idx, min(run.end_idx, N)):
+            slot_modes[k] = "max_on" if run.t_end_c >= 52.0 else "forced_on"
+
+    return DhwOptimizerResult(
+        planned_slots=[k for k in range(N) if u[k] == 1],
+        runs=runs,
+        trajectory={
+            "temperatures_c": temps,
+            "temperatures_p05_c": p05,
+            "temperatures_p95_c": p95,
+            "demand_kwh_th": demand_p50,
+        },
+        total_cost_eur=metrics["total_cost_eur"],
+        slot_modes=slot_modes,
+        validation_issue=validation_issue,
+        electricity_cost_eur=metrics["electricity_cost_eur"],
+        start_cost_eur=metrics["start_cost_eur"],
+        salvage_value_eur=metrics["salvage_value_eur"],
+        j_objective_eur=metrics["j_objective_eur"],
+    )

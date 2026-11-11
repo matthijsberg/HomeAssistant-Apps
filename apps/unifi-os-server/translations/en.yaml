@@ -1,0 +1,34 @@
+---
+configuration:
+  system_ip:
+    name: "System IP / Inform Host"
+    description: "The LAN IPv4 address or hostname of your Home Assistant OS host that UniFi devices use to reach port 8080/tcp."
+  log_level:
+    name: "Log Level"
+    description: "Controls the verbosity of the add-on entrypoint and service supervisor logs."
+  memory_init:
+    name: "Initial JVM Heap Memory (MB)"
+    description: "Initial Java heap allocation (Xms) for the UniFi Network Application."
+  memory_max:
+    name: "Maximum JVM Heap Memory (MB)"
+    description: "Maximum Java heap allocation (Xmx) for the UniFi Network Application."
+  show_journal:
+    name: "Stream Service Journal to Add-on Logs"
+    description: "Forward internal UniFi OS service logs (unifi-core, unifi, postgresql, nginx) to the Home Assistant add-on log output."
+  ssl_cert:
+    name: "SSL Certificate"
+    description: "Optional certificate filename in /ssl (e.g., fullchain.pem). If left empty, UniFi OS uses its internal SSL certificate."
+  ssl_key:
+    name: "SSL Private Key"
+    description: "Optional private key filename in /ssl (e.g., privkey.pem) matching the SSL certificate."
+network:
+  11443/tcp: "UniFi OS Console Web UI & HA Integration HTTPS port"
+  8080/tcp: "UniFi Device Inform & adoption communication"
+  8443/tcp: "Legacy UniFi Network API port (optional)"
+  8444/tcp: "UniFi OS HTTPS Hotspot Captive Portal"
+  8880/tcp: "UniFi OS HTTP Hotspot portal redirection"
+  6789/tcp: "UniFi WiFiman mobile speed test"
+  3478/udp: "STUN for UniFi device adoption and NAT traversal"
+  10003/udp: "UniFi OS L2 device discovery"
+  10001/udp: "Legacy UniFi L2 device discovery"
+  5514/udp: "Remote Syslog ingestion"

@@ -15,33 +15,30 @@ from models.canonical import StandardizedState, get_state_metadata, Quality
 
 def test_core_entity_isolation():
     """
-    Ensure core modules do NOT contain hardcoded HA entity names.
-    Hardware entities belong strictly in site_adapters/ or site_config.json.
+    Ensure core modules do NOT contain hardcoded HA entity ids (AGENTS.md rule 2).
+    Scans EVERY Python file in the core packages with a generic entity-id pattern, so new files
+    are covered automatically. Hardware entities belong in integrations/ or config.
     """
     repo_root = Path(__file__).parent.parent.parent
-    core_dirs = [
+    core_files = [
         repo_root / "layer1_data_collection" / "sanitizer.py",
-        repo_root / "layer2_calibration" / "learned_forecaster.py",
-        repo_root / "layer3_scheduling" / "central_planner.py",
-        repo_root / "layer3_scheduling" / "plan_store.py",
-        repo_root / "models" / "canonical.py"
+        repo_root / "models" / "canonical.py",
     ]
+    for core_dir in ("layer2_calibration", "layer3_scheduling"):
+        core_files.extend(sorted((repo_root / core_dir).rglob("*.py")))
 
-    forbidden_patterns = [
-        r"sensor\.hc_dhw_temperature",
-        r"switch\.hc_mode_altherma_on",
-        r"climate\.woonkamer_climate",
-        r"switch\.sg_relais"
-    ]
+    entity_pattern = re.compile(
+        r"\b(sensor|switch|climate|binary_sensor|input_select|input_boolean|input_number|number)\.[a-z][a-z0-9_]{2,}"
+    )
 
     violations = []
-    for file_path in core_dirs:
-        if not file_path.exists():
+    for file_path in core_files:
+        if not file_path.exists() or "__pycache__" in file_path.parts:
             continue
         text = file_path.read_text(encoding="utf-8")
-        for pattern in forbidden_patterns:
-            if re.search(pattern, text):
-                violations.append(f"{file_path.name} violates entity isolation: matched '{pattern}'")
+        for m in entity_pattern.finditer(text):
+            line_no = text.count("\n", 0, m.start()) + 1
+            violations.append(f"{file_path.relative_to(repo_root)}:{line_no} contains HA entity id '{m.group(0)}'")
 
     assert not violations, "Entity isolation violations found:\n" + "\n".join(violations)
 

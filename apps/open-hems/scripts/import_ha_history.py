@@ -29,7 +29,6 @@ from typing import Dict, List, Any
 SOURCE_INFLUX_URL = "http://a0d7b954-influxdb:8086"
 SOURCE_DB = "hassio"
 SOURCE_USER = "hermes"
-SOURCE_PWD_DEFAULT = "iu32dp§2g3dpuiy§g23pd9h23"
 
 TARGET_INFLUX_URL = "http://a0d7b954-influxdb:8086"
 TARGET_DB = "openhems"
@@ -269,8 +268,8 @@ def main():
     secrets = load_secrets()
     config = load_config()
 
-    target_pwd = secrets.get("influxdb", {}).get("local_ha_influxdb", "")
-    src_pwd = SOURCE_PWD_DEFAULT
+    target_pwd = secrets.get("influxdb", {}).get("local_ha_influxdb", "") or secrets.get("influxdb", {}).get("openhems_db", "")
+    src_pwd = os.environ.get("INFLUX_SOURCE_PASSWORD", "") or secrets.get("influxdb", {}).get("hassio_db", "") or secrets.get("influxdb", {}).get("local_ha_influxdb", "")
 
     exclusion_windows = config.get("data_exclusion_windows", [])
 

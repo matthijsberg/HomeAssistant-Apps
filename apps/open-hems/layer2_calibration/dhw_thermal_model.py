@@ -62,7 +62,12 @@ class DhwThermalModel:
         return UA_TANK_W_PER_K
 
     def _load_profile(self) -> Dict[str, Any]:
-        for p in [self.profile_path, "/config/addons/open-hems/data/unallocated_load_profile.json", "/config/projects/energy-scheduler/data/unallocated_load_profile.json"]:
+        candidates = (
+            [self.profile_path, "/config/addons/open-hems/data/unallocated_load_profile.json", "/config/projects/energy-scheduler/data/unallocated_load_profile.json"]
+            if self.profile_path == "/config/unallocated_load_profile.json"
+            else [self.profile_path]
+        )
+        for p in candidates:
             if os.path.exists(p):
                 try:
                     with open(p, "r", encoding="utf-8") as f:

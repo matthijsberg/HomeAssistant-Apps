@@ -9,9 +9,27 @@ Strictly enforces: No mock data in production, clear quality flags.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 from models.canonical import Quality
+
+
+def _abs_minute(dt: datetime) -> int:
+    """Absolute (UTC epoch) minute key. Unambiguous across DST transitions."""
+    return int(dt.timestamp()) // 60
+
+
+def _parse_dt(raw: Any, tz: Any) -> Optional[datetime]:
+    if isinstance(raw, str):
+        try:
+            raw = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if not isinstance(raw, datetime):
+        return None
+    if raw.tzinfo is None and tz is not None:
+        raw = raw.replace(tzinfo=tz)
+    return raw
 
 
 @dataclass
@@ -31,6 +49,7 @@ class TelemetrySlot:
     solar_rad_w_m2: float = 0.0
     quality: Quality = Quality.GOOD
     issues: List[str] = field(default_factory=list)
+    price_quality: Quality = Quality.GOOD
 
 
 @dataclass
@@ -82,6 +101,18 @@ class CleanTelemetryFrame:
     def target_room_temp(self) -> float:
         return float(self.metadata.get("target_room_temp_c", 20.0))
 
+    @property
+    def baseline_comfort_temp(self) -> float:
+        return float(self.metadata.get("baseline_comfort_temp_c", self.target_room_temp))
+
+    @property
+    def thermostat_setpoint(self) -> float:
+        return float(self.metadata.get("thermostat_setpoint_c", self.target_room_temp))
+
+    @property
+    def is_buffering(self) -> bool:
+        return bool(self.metadata.get("is_buffering", False))
+
 
 class TelemetrySanitizer:
     """
@@ -102,6 +133,8 @@ class TelemetrySanitizer:
         current_room_temp: Optional[float] = None,
         current_floor_temp: Optional[float] = None,
         target_room_temp: Optional[float] = None,
+        thermostat_setpoint: Optional[float] = None,
+        is_buffering: bool = False,
         last_hardware_reading_time: Optional[datetime] = None,
         is_space_heating_enabled: bool = True,
         is_dhw_enabled: bool = True,
@@ -118,10 +151,11 @@ class TelemetrySanitizer:
         issues = []
         validation_errors = []
 
-        # 1. Freshness Check
+        # 1. Freshness Check (no hardware reading at all is NOT fresh: never invent a state)
         if last_hardware_reading_time is None:
-            age_s = 0.0
-            is_fresh = True
+            age_s = -1.0
+            is_fresh = False
+            issues.append("Geen geldige hardware-telemetrie (tanktemperatuur) beschikbaar")
         else:
             if last_hardware_reading_time.tzinfo is None:
                 last_hardware_reading_time = last_hardware_reading_time.replace(tzinfo=now.tzinfo)
@@ -130,65 +164,48 @@ class TelemetrySanitizer:
             if not is_fresh:
                 issues.append(f"Hardware-telemetrie is {int(age_s / 60)} min oud (overschrijdt 15m limiet)")
 
-        # 2. Align start to quarter-hour boundary
+        # 2. Align start to quarter-hour boundary. The grid is advanced in UTC so that every slot is
+        #    exactly step_mins long, including across DST transitions; slots are labelled in local time.
         aligned_minute = (now.minute // step_mins) * step_mins
         grid_start = now.replace(minute=aligned_minute, second=0, microsecond=0)
+        local_tz = now.tzinfo
 
-        # Lookup maps by rounded datetime
-        price_map = {}
+        # Lookup maps keyed by absolute minute (UTC epoch) so the repeated DST hour never collides
+        price_map: Dict[int, Any] = {}
         for p in raw_prices:
-            dt = p.get("dt") or p.get("timestamp")
-            if dt:
-                if isinstance(dt, str):
-                    try:
-                        dt = datetime.fromisoformat(dt.replace("Z", "+00:00"))
-                    except Exception:
-                        continue
-                if dt.tzinfo is None and now.tzinfo is not None:
-                    dt = dt.replace(tzinfo=now.tzinfo)
-                p_val = float(p.get("price", p.get("all_in_price", 0.30)))
-                # Clamp extreme price spikes / negative errors
-                p_val = max(-1.0, min(5.0, p_val))
-                key = dt.strftime("%Y-%m-%d %H:%M")
-                price_map[key] = p_val
+            dt = _parse_dt(p.get("dt") or p.get("timestamp"), local_tz)
+            if dt is None:
+                continue
+            p_val = float(p.get("price", p.get("all_in_price", 0.30)))
+            # Clamp extreme price spikes / negative errors
+            p_val = max(-1.0, min(5.0, p_val))
+            src = str(p.get("source", "")).lower()
+            p_quality = Quality.FORECAST if src in ("stroomvoorspeller", "forecast") else Quality.GOOD
+            price_map[_abs_minute(dt)] = (p_val, p_quality)
 
-        solar_map = {}
+        solar_map: Dict[int, float] = {}
         for s in raw_solar:
-            dt = s.get("dt") or s.get("timestamp")
-            if dt:
-                if isinstance(dt, str):
-                    try:
-                        dt = datetime.fromisoformat(dt.replace("Z", "+00:00"))
-                    except Exception:
-                        continue
-                if dt.tzinfo is None and now.tzinfo is not None:
-                    dt = dt.replace(tzinfo=now.tzinfo)
-                s_val = max(0.0, float(s.get("solar_kw", s.get("power_kw", 0.0))))
-                # Physical bounds: max 5.76 kWp on Matthijs's roof
-                s_val = min(6.0, s_val)
-                key = dt.strftime("%Y-%m-%d %H:%M")
-                solar_map[key] = s_val
+            dt = _parse_dt(s.get("dt") or s.get("timestamp"), local_tz)
+            if dt is None:
+                continue
+            s_val = max(0.0, float(s.get("solar_kw", s.get("power_kw", 0.0))))
+            # Physical bounds: max 5.76 kWp on Matthijs's roof
+            s_val = min(6.0, s_val)
+            solar_map[_abs_minute(dt)] = s_val
 
-        weather_map = {}
+        weather_map: Dict[int, Dict[str, float]] = {}
         for w in raw_weather:
-            dt = w.get("dt") or w.get("timestamp")
-            if dt:
-                if isinstance(dt, str):
-                    try:
-                        dt = datetime.fromisoformat(dt.replace("Z", "+00:00"))
-                    except Exception:
-                        continue
-                if dt.tzinfo is None and now.tzinfo is not None:
-                    dt = dt.replace(tzinfo=now.tzinfo)
-                t_val = float(w.get("temperature", w.get("temp_c", 15.0)))
-                # Physical sanity bounds: -30°C to +50°C
-                t_val = max(-30.0, min(50.0, t_val))
-                w_val = float(w.get("wind_speed_ms", w.get("wind_speed", w.get("wind_speed_10m", 0.0))))
-                w_val = max(0.0, min(50.0, w_val))
-                rad_val = float(w.get("solar_radiation_w_m2", w.get("shortwave_radiation", 0.0)))
-                rad_val = max(0.0, min(1500.0, rad_val))
-                key = dt.strftime("%Y-%m-%d %H:%M")
-                weather_map[key] = {"temp": t_val, "wind": w_val, "radiation": rad_val}
+            dt = _parse_dt(w.get("dt") or w.get("timestamp"), local_tz)
+            if dt is None:
+                continue
+            t_val = float(w.get("temperature", w.get("temp_c", 15.0)))
+            # Physical sanity bounds: -30°C to +50°C
+            t_val = max(-30.0, min(50.0, t_val))
+            w_val = float(w.get("wind_speed_ms", w.get("wind_speed", w.get("wind_speed_10m", 0.0))))
+            w_val = max(0.0, min(50.0, w_val))
+            rad_val = float(w.get("solar_radiation_w_m2", w.get("shortwave_radiation", 0.0)))
+            rad_val = max(0.0, min(1500.0, rad_val))
+            weather_map[_abs_minute(dt)] = {"temp": t_val, "wind": w_val, "radiation": rad_val}
 
         # Sanitize current temperatures
         clean_dhw = None
@@ -213,28 +230,29 @@ class TelemetrySanitizer:
         last_known_p = 0.30
         last_known_t = 15.0
 
+        grid_start_utc = grid_start.astimezone(timezone.utc) if local_tz is not None else None
         for i in range(horizon_slots):
-            slot_dt = grid_start + timedelta(minutes=i * step_mins)
-            key_exact = slot_dt.strftime("%Y-%m-%d %H:%M")
-            key_hour = slot_dt.strftime("%Y-%m-%d %H:00")
+            if grid_start_utc is not None:
+                slot_dt = (grid_start_utc + timedelta(minutes=i * step_mins)).astimezone(local_tz)
+            else:
+                slot_dt = grid_start + timedelta(minutes=i * step_mins)
+            key_exact = _abs_minute(slot_dt)
+            dt_floor = slot_dt.replace(minute=0, second=0, microsecond=0)
+            key_hour = _abs_minute(dt_floor)
 
             # Price matching with hour fallback
             if key_exact in price_map:
-                p_val = price_map[key_exact]
-                p_q = Quality.GOOD
+                p_val, p_q = price_map[key_exact]
             elif key_hour in price_map:
-                p_val = price_map[key_hour]
-                p_q = Quality.GOOD
+                p_val, p_q = price_map[key_hour]
             else:
                 p_val = last_known_p
                 p_q = Quality.INTERPOLATED
             last_known_p = p_val
 
             # Solar matching with continuous 15-minute interpolation
-            dt_floor = slot_dt.replace(minute=0, second=0, microsecond=0)
-            dt_ceil = dt_floor + timedelta(hours=1)
-            key_floor = dt_floor.strftime("%Y-%m-%d %H:00")
-            key_ceil = dt_ceil.strftime("%Y-%m-%d %H:00")
+            key_floor = key_hour
+            key_ceil = key_hour + 60
             frac = slot_dt.minute / 60.0
 
             if slot_dt.hour >= 21 or slot_dt.hour < 6:
@@ -326,35 +344,17 @@ class TelemetrySanitizer:
                     wind_speed_ms=round(w_val, 2),
                     solar_rad_w_m2=round(rad_val, 1),
                     quality=p_q if is_fresh else Quality.STALE,
-                    issues=slot_issues
+                    issues=slot_issues,
+                    price_quality=p_q
                 )
             )
 
-        # Apply Local Microclimate Observation Nudging (Wittboy & Rooftop Solar Inverter)
+        # Apply Local Microclimate Observation Nudging (Wittboy outdoor temperature & wind only;
+        # solar generation & irradiance use the calibrated POA forecast model without short-term arc nudging)
         nowcasting_active = False
         try:
             from layer1_data_collection.nowcasting import ObservationNowcaster
             slot_hours = step_mins / 60.0
-
-            if live_solar_kw is not None and slots:
-                raw_s = [s.solar_kw for s in slots]
-                nudged_s = ObservationNowcaster.nudge_solar_forecast(raw_s, live_solar_kw, slot_hours=slot_hours)
-                for idx_s, val in enumerate(nudged_s):
-                    if slots[idx_s].dt.hour >= 21 or slots[idx_s].dt.hour < 6:
-                        slots[idx_s].solar_kw = 0.0
-                    else:
-                        slots[idx_s].solar_kw = val
-                nowcasting_active = True
-
-            if live_solar_radiation_w_m2 is not None and slots:
-                raw_rad = [s.solar_rad_w_m2 for s in slots]
-                nudged_rad = ObservationNowcaster.nudge_radiation_forecast(raw_rad, live_solar_radiation_w_m2, slot_hours=slot_hours)
-                for idx_r, val in enumerate(nudged_rad):
-                    if slots[idx_r].dt.hour >= 21 or slots[idx_r].dt.hour < 6:
-                        slots[idx_r].solar_rad_w_m2 = 0.0
-                    else:
-                        slots[idx_r].solar_rad_w_m2 = val
-                nowcasting_active = True
 
             if live_outdoor_temp_c is not None and slots:
                 raw_t = [s.outdoor_temp_c for s in slots]
@@ -372,6 +372,9 @@ class TelemetrySanitizer:
         except Exception as e_nudge:
             validation_errors.append(f"Observation nowcasting error: {e_nudge}")
 
+        base_target = round(max(15.0, min(25.0, target_room_temp)), 1) if target_room_temp is not None else 20.0
+        live_sp = round(max(15.0, min(25.0, thermostat_setpoint)), 1) if thermostat_setpoint is not None else base_target
+
         return CleanTelemetryFrame(
             timestamp=now,
             is_fresh=is_fresh,
@@ -382,7 +385,10 @@ class TelemetrySanitizer:
                 "aligned_grid_start": grid_start.isoformat(),
                 "slot_count": len(slots),
                 "horizon_hours": (horizon_slots * step_mins) / 60.0,
-                "target_room_temp_c": round(max(15.0, min(25.0, target_room_temp)), 1) if target_room_temp is not None else 20.0,
+                "target_room_temp_c": base_target,
+                "baseline_comfort_temp_c": base_target,
+                "thermostat_setpoint_c": live_sp,
+                "is_buffering": is_buffering,
                 "is_space_heating_enabled": is_space_heating_enabled,
                 "nowcasting": {
                     "active": nowcasting_active,

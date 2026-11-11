@@ -133,7 +133,7 @@ def ensure_framework_defaults(cfg: dict) -> None:
                 "adapter": "daikin_p1p2",
                 "capabilities": ["modulate", "smart_grid_ready", "read_power", "read_temperatures"],
                 "ha_power_entity": "sensor.warmtepomp_power",
-                "parameters": {"mod_floor_w": 950, "cv_flow_lag_hours": 3.5}
+                "parameters": {"mod_floor_w": 700, "cv_flow_lag_hours": 3.5}
             },
             {
                 "id": "inepro_pv_meter",

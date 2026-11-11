@@ -120,14 +120,26 @@ def test_daikin_reader_dhw_circuit_detection():
     }
     assert DaikinReader.is_dhw_circuit_enabled(states_on) is True
 
-    # Case 2: DHW off via vacation mode
+    # Case 2: DHW off via climate.hc_dhw_dhw_setpoint ('uit = uit')
+    states_dhw_off = {
+        "climate.hc_dhw_dhw_setpoint": {"state": "off", "attributes": {"temperature": 50.0}}
+    }
+    assert DaikinReader.is_dhw_circuit_enabled(states_dhw_off) is False
+
+    # Case 3: DHW off via binary_sensor.hc_dhw_dhw ('uit = uit' on heat pump)
+    states_hp_dhw_off = {
+        "binary_sensor.hc_dhw_dhw": {"state": "off"}
+    }
+    assert DaikinReader.is_dhw_circuit_enabled(states_hp_dhw_off) is False
+
+    # Case 4: DHW off via vacation mode
     states_vacation = {
-        "climate.hc_dhw_dhw_setpoint": {"state": "off", "attributes": {"temperature": 50.0}},
+        "climate.hc_dhw_dhw_setpoint": {"state": "heat", "attributes": {"temperature": 50.0}},
         "input_boolean.vacation_mode": {"state": "on"}
     }
     assert DaikinReader.is_dhw_circuit_enabled(states_vacation) is False
 
-    # Case 3: Empty states map defaults to True
+    # Case 5: Empty states map defaults to True
     assert DaikinReader.is_dhw_circuit_enabled({}) is True
 
 

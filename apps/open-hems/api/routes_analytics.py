@@ -446,13 +446,17 @@ def load_historical_dhw_planned_windows(start_dt: datetime, end_dt: datetime) ->
                     continue
                 d_str = rec_dt.strftime("%Y-%m-%d")
                 inputs = rec.get("inputs", {})
-                # 1. Daikin-first explicit planned_runs
+                # 1. Daikin-first explicit planned_runs (only include committed/imminent runs at decision time)
                 p_runs = inputs.get("planned_runs")
                 if isinstance(p_runs, list):
                     for pr in p_runs:
-                        s_lbl = str(pr.get("start_time", "")).split()[-1].replace("Nu(", "").replace(")", "")
-                        e_lbl = str(pr.get("end_time", "")).split()[-1].replace("Nu(", "").replace(")", "")
-                        if ":" in s_lbl and ":" in e_lbl:
+                        if int(pr.get("start_idx", 99) or 0) > 4:
+                            continue
+                        raw_s = str(pr.get("start_time", "")).replace("Nu (", "").replace("Nu(", "").replace("(", "").replace(")", "").strip()
+                        raw_e = str(pr.get("end_time", "")).replace("Nu (", "").replace("Nu(", "").replace("(", "").replace(")", "").strip()
+                        s_lbl = raw_s.split()[-1] if raw_s else ""
+                        e_lbl = raw_e.split()[-1] if raw_e else ""
+                        if len(s_lbl) == 5 and s_lbl[2] == ":" and len(e_lbl) == 5 and e_lbl[2] == ":":
                             run_d = (rec_dt + timedelta(days=1)).strftime("%Y-%m-%d") if (rec_dt.hour >= 18 and s_lbl < "18:00") else d_str
                             explicit_windows.append({
                                 "date": run_d,
@@ -462,7 +466,7 @@ def load_historical_dhw_planned_windows(start_dt: datetime, end_dt: datetime) ->
                             })
                 # 2. Legacy evaluated_paths format
                 sel_path = inputs.get("selected_path")
-                paths = inputs.get("evaluated_paths", [])
+                paths = inputs.get("evaluated_paths") or []
                 chosen = next((x for x in paths if x.get("path_id") == sel_path), None) or (paths[0] if paths else None)
                 if chosen:
                     # Daytime planned run
@@ -1355,6 +1359,8 @@ def handle_get(handler, path: str, qp: dict) -> bool:
             SELECT mean("power_w") as dhw_w FROM "energy_telemetry" WHERE "device_id" = 'daikin_heat_pump' AND "mode" = 'dhw' AND time >= '{t_start}' AND time <= '{t_end}' GROUP BY time({bucket_sz}) fill(0);
             SELECT mean("power_w") as cv_w FROM "energy_telemetry" WHERE "device_id" = 'daikin_heat_pump' AND "mode" = 'heating' AND time >= '{t_start}' AND time <= '{t_end}' GROUP BY time({bucket_sz}) fill(0);
             SELECT mean("outdoor_temp_c") as tout_c FROM "weather_forecast" WHERE time >= '{t_start}' AND time <= '{t_end}' GROUP BY time({bucket_sz}) fill(linear);
+            SELECT mean("temperature_c") as dhw_tank_temp FROM "energy_telemetry" WHERE "device_id" = 'dhw_tank' AND time >= '{t_start}' AND time <= '{t_end}' GROUP BY time({bucket_sz}) fill(linear);
+            SELECT last("is_lockout") as is_lck FROM "device_dispatch_history" WHERE "device_id" = 'heat_pump' AND time >= '{t_start}' AND time <= '{t_end}' GROUP BY time({bucket_sz}) fill(none);
             """
             url = f"http://a0d7b954-influxdb:8086/query?u=openhems&p={pwd}&db=openhems&q={urllib.parse.quote(q_telemetry)}"
             with safe_urlopen(url, timeout=5) as r:
@@ -1366,30 +1372,52 @@ def handle_get(handler, path: str, qp: dict) -> bool:
             cv_pts = cv_series_list[0].get('values', []) if cv_series_list else []
             tout_series_list = influx_res['results'][3].get('series', []) if len(influx_res.get('results', [])) > 3 else []
             tout_pts = tout_series_list[0].get('values', []) if tout_series_list else []
+            tank_series_list = influx_res['results'][4].get('series', []) if len(influx_res.get('results', [])) > 4 else []
+            tank_pts = tank_series_list[0].get('values', []) if tank_series_list else []
+            lck_series_list = influx_res['results'][5].get('series', []) if len(influx_res.get('results', [])) > 5 else []
+            lck_pts = lck_series_list[0].get('values', []) if lck_series_list else []
 
             dhw_map = {p[0]: (p[1] or 0.0) for p in dhw_pts}
             cv_map = {p[0]: (p[1] or 0.0) for p in cv_pts}
             tout_influx_map = {p[0]: p[1] for p in tout_pts if p[1] is not None}
+            tank_influx_map = {p[0]: p[1] for p in tank_pts if p[1] is not None}
+            lck_influx_map = {p[0]: bool(p[1]) for p in lck_pts if p[1] is not None}
 
-            # 2. Get Weather Data (with in-memory 1h caching)
+            # 2. Get Weather Data (with in-memory 1h caching + local energy_feed_cache.json)
             global _weather_history_cache
             if '_weather_history_cache' not in globals() or (time.time() - _weather_history_cache.get('ts', 0) > 3600):
                 try:
                     from layer1_data_collection.geo_location import get_geo_coordinates
                     geo_lat, geo_lon = get_geo_coordinates(cfg)
-                    om_url = f"https://api.open-meteo.com/v1/forecast?latitude={geo_lat}&longitude={geo_lon}&hourly=temperature_2m,shortwave_radiation_instant&past_days=7&timezone=Europe%2FAmsterdam"
+                    om_url = f"https://api.open-meteo.com/v1/forecast?latitude={geo_lat}&longitude={geo_lon}&hourly=temperature_2m,shortwave_radiation,relative_humidity_2m&past_days=7&timezone=Europe%2FAmsterdam"
                     with safe_urlopen(om_url, timeout=6) as r_om:
                         om_data = json.loads(r_om.read().decode())
                         h_data = om_data.get("hourly", {})
-                        rad_m = {t: r for t, r in zip(h_data.get("time", []), h_data.get("shortwave_radiation_instant", []))}
+                        rad_m = {t: r for t, r in zip(h_data.get("time", []), h_data.get("shortwave_radiation", []))}
                         temp_m = {t: tm for t, tm in zip(h_data.get("time", []), h_data.get("temperature_2m", []))}
-                        _weather_history_cache = {'ts': time.time(), 'rad': rad_m, 'temp': temp_m}
+                        rh_m = {t: rh for t, rh in zip(h_data.get("time", []), h_data.get("relative_humidity_2m", []))}
+                        _weather_history_cache = {'ts': time.time(), 'rad': rad_m, 'temp': temp_m, 'rh': rh_m}
                 except Exception as e_om:
                     if '_weather_history_cache' not in globals():
-                        _weather_history_cache = {'ts': 0, 'rad': {}, 'temp': {}}
+                        _weather_history_cache = {'ts': 0, 'rad': {}, 'temp': {}, 'rh': {}}
 
             rad_map = _weather_history_cache.get('rad', {})
             temp_map = _weather_history_cache.get('temp', {})
+            rh_map = _weather_history_cache.get('rh', {})
+            cached_solar_kw_map = {}
+            cached_temp_map = {}
+            cached_hum_map = {}
+            try:
+                efc_path = Path("/config/data/energy_feed_cache.json")
+                if efc_path.exists():
+                    efc_ws = json.loads(efc_path.read_text(encoding="utf-8")).get("weather_solar", {})
+                    for _day_k, _day_v in efc_ws.items():
+                        if isinstance(_day_v, dict):
+                            cached_solar_kw_map.update(_day_v.get("solar_kw_map", {}))
+                            cached_temp_map.update(_day_v.get("temp_map", {}))
+                            cached_hum_map.update(_day_v.get("hum_map", {}))
+            except Exception:
+                pass
 
             # 3. Model Parameters & Calibration Profile
             sol_cfg = cfg.get("solar", {})
@@ -1450,7 +1478,7 @@ def handle_get(handler, path: str, qp: dict) -> bool:
                 # Actuals
                 s_w = p[1] or 0.0
                 tot_w = p[2] or 0.0
-                tank_t = p[5] if len(p) > 5 and p[5] is not None else None
+                tank_t = tank_influx_map.get(ts_str, p[5] if len(p) > 5 and p[5] is not None else None)
                 d_w = dhw_map.get(ts_str, 0.0)
                 c_w = cv_map.get(ts_str, 0.0)
 
@@ -1463,9 +1491,19 @@ def handle_get(handler, path: str, qp: dict) -> bool:
                 act_total.append(round(max(0.0, tot_w / 1000.0), 3))
 
                 # Predictions:
-                # Solar POA Prediction
+                # Solar POA Prediction (prefer cached hourly POA + river-mist RH attenuation)
+                h_key_space = dt_ams.strftime("%Y-%m-%d %H:00")
+                rh_hist = cached_hum_map.get(h_key_space, rh_map.get(h_str))
                 ghi = rad_map.get(h_str, 0.0)
-                p_sol_kw = calculate_poa_solar_kw(dt_ams, ghi, kwp=kwp, tilt_deg=tilt, azimuth_deg=azimuth, inverter_limit_kw=inv_max_w/1000.0, eff=eff)
+                if h_key_space in cached_solar_kw_map:
+                    base_sol_kw = float(cached_solar_kw_map[h_key_space])
+                    mist_f = max(0.32, 1.0 - 0.045 * (float(rh_hist) - 82.0)) if (rh_hist is not None and float(rh_hist) > 82.0) else 1.0
+                    p_sol_kw = round(base_sol_kw * mist_f, 3)
+                else:
+                    p_sol_kw = calculate_poa_solar_kw(
+                        dt_ams, ghi, kwp=kwp, tilt_deg=tilt, azimuth_deg=azimuth,
+                        inverter_limit_kw=inv_max_w / 1000.0, eff=eff, relative_humidity=rh_hist
+                    )
                 pred_solar.append(p_sol_kw)
 
                 # Unallocated Load Prediction
@@ -1475,7 +1513,7 @@ def handle_get(handler, path: str, qp: dict) -> bool:
 
                 # DHW & CV Lockstep Predictions
                 slot_key = (dt_ams.date(), dt_ams.hour, (dt_ams.minute // 15) * 15)
-                tank_t = p[5] if len(p) > 5 and p[5] is not None else 50.0
+                tank_t = tank_influx_map.get(ts_str, p[5] if len(p) > 5 and p[5] is not None else 50.0)
 
                 if slot_key in plan_slot_map:
                     p_dhw_kw = plan_slot_map[slot_key].dhw_kw
@@ -1491,11 +1529,12 @@ def handle_get(handler, path: str, qp: dict) -> bool:
                             break
 
                     # Historical CV model prediction (reconstruct expected space heating electrical demand)
-                    if p_dhw_kw > 0.0:
+                    is_hist_lockout = lck_influx_map.get(ts_str, False)
+                    if p_dhw_kw > 0.0 or d_w > 250.0 or is_hist_lockout:
                         p_cv_kw = 0.0
                     else:
-                        t_out_hist = tout_influx_map.get(ts_str, temp_map.get(h_str, 14.0))
-                        ghi_hist = ghi if ghi > 0.0 else (s_w / max(1.0, kwp * eff))
+                        t_out_hist = tout_influx_map.get(ts_str, cached_temp_map.get(h_key_space, temp_map.get(h_str, 7.5)))
+                        ghi_hist = ghi if ghi > 0.0 else (p_sol_kw * 1000.0 / max(1.0, kwp * eff))
                         try:
                             cv_pred = forecaster.predict_space_heating_w(
                                 dt_ams, t_outdoor_c=float(t_out_hist), solar_radiation_w_m2=float(ghi_hist)
@@ -1506,20 +1545,31 @@ def handle_get(handler, path: str, qp: dict) -> bool:
 
                 pred_dhw.append(p_dhw_kw)
 
-                # Option B: Fysische Warmtevraag (Thermal draw-off in kWh_th per slot)
+                # Option B: Fysische Warmtevraag (Thermal draw-off in kWh_th per slot, normalized to weekday daily total)
+                tap_matrix_cur = forecaster.profile.get("tap_demand_profile_96", []) if 'forecaster' in locals() else []
+                tap_daily_targets = (
+                    forecaster.profile.get("tap_weekday_daily_kwh_th")
+                    if ('forecaster' in locals() and forecaster.profile.get("tap_weekday_daily_kwh_th"))
+                    else [6.17, 4.86, 5.69, 6.23, 5.68, 4.22, 5.49]
+                )
+                dow_scale = 1.0
+                if len(tap_matrix_cur) > dow and len(tap_daily_targets) > dow:
+                    raw_dow_sum = sum(tap_matrix_cur[dow])
+                    if raw_dow_sum > 0.2 and float(tap_daily_targets[dow]) > raw_dow_sum:
+                        dow_scale = min(1.55, float(tap_daily_targets[dow]) / raw_dow_sum)
                 if interval_h >= 1.0:
                     p_dhw_dem_kwh = round(
-                        sum(
+                        (sum(
                             GLOBAL_DHW_MODEL.get_learned_tap_kwh_th(dow, (dt_ams.hour * 4) + sub_q)
                             for sub_q in range(4)
-                        )
+                        ) * dow_scale)
                         if GLOBAL_DHW_MODEL
                         else 0.12,
                         3,
                     )
                 else:
                     p_dhw_dem_kwh = round(
-                        GLOBAL_DHW_MODEL.get_learned_tap_kwh_th(dow, q_idx) if GLOBAL_DHW_MODEL else 0.03,
+                        (GLOBAL_DHW_MODEL.get_learned_tap_kwh_th(dow, q_idx) * dow_scale) if GLOBAL_DHW_MODEL else 0.03,
                         3,
                     )
                 pred_dhw_demand.append(p_dhw_dem_kwh)
@@ -1544,6 +1594,7 @@ def handle_get(handler, path: str, qp: dict) -> bool:
                 "all": ModelValidator.compute_kpis(act_total, pred_total, interval_h=interval_h, peak_cap_kw=5.5),
                 "solar": ModelValidator.compute_kpis(act_solar, pred_solar, interval_h=interval_h, peak_cap_kw=kwp),
                 "dhw": ModelValidator.compute_kpis(act_dhw, pred_dhw, interval_h=interval_h, peak_cap_kw=3.5),
+                "dhw_demand": ModelValidator.compute_kpis(act_dhw_demand, pred_dhw_demand, interval_h=1.0, peak_cap_kw=1.5),
                 "cv": ModelValidator.compute_kpis(act_cv, pred_cv, interval_h=interval_h, peak_cap_kw=4.0)
             }
 
@@ -1933,6 +1984,7 @@ def handle_get(handler, path: str, qp: dict) -> bool:
             WHERE time >= '{t_start}' AND time <= '{t_end}'
             GROUP BY time({bucket_sz}) fill(linear);
             SELECT mean("solar_kw") FROM "weather_solar_forecast" WHERE time >= '{t_start}' AND time <= '{t_end}' GROUP BY time({bucket_sz}) fill(linear);
+            SELECT mean("temperature_c") as dhw_tank_temp FROM "energy_telemetry" WHERE "device_id" = 'dhw_tank' AND time >= '{t_start}' AND time <= '{t_end}' GROUP BY time({bucket_sz}) fill(linear);
             """
             url = f"http://a0d7b954-influxdb:8086/query?u=openhems&p={pwd}&db=openhems&q={urllib.parse.quote(q_telemetry)}"
             with safe_urlopen(url, timeout=5) as r:
@@ -1940,7 +1992,9 @@ def handle_get(handler, path: str, qp: dict) -> bool:
 
             gen_pts = influx_res.get('results', [{}])[0].get('series', [{}])[0].get('values', []) if len(influx_res.get('results', [])) > 0 else []
             sol_pred_pts = influx_res.get('results', [{}])[1].get('series', [{}])[0].get('values', []) if len(influx_res.get('results', [])) > 1 else []
+            tank_pure_pts = influx_res.get('results', [{}])[2].get('series', [{}])[0].get('values', []) if len(influx_res.get('results', [])) > 2 and influx_res.get('results', [{}])[2].get('series') else []
             sol_pred_map = {p[0]: float(p[1] or 0.0) * 1000.0 for p in sol_pred_pts}
+            tank_pure_map = {p[0]: float(p[1]) for p in tank_pure_pts if p[1] is not None}
 
             hist_dhw_windows = load_historical_dhw_planned_windows(t_start_dt.astimezone(AMS_TZ), now.astimezone(AMS_TZ))
             slot_dts = [datetime.fromisoformat(p[0].replace("Z", "+00:00")).astimezone(AMS_TZ) for p in gen_pts]
@@ -1972,7 +2026,7 @@ def handle_get(handler, path: str, qp: dict) -> bool:
                 # Actuals
                 s_w = float(p[1] or 0.0)
                 hp_w = float(p[2] or 0.0)
-                t_c = float(p[3] or 50.0) if len(p) > 3 and p[3] is not None else 50.0
+                t_c = tank_pure_map.get(ts_str, float(p[3] or 50.0) if len(p) > 3 and p[3] is not None else 50.0)
 
                 act_solar.append(round(s_w))
                 act_hp.append(round(hp_w))

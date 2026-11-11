@@ -13,7 +13,6 @@ Priority:
 from typing import Tuple, Dict, Any, Optional
 import urllib.request
 import json
-import ssl
 
 
 FALLBACK_LAT = 51.9537
@@ -36,9 +35,8 @@ def get_geo_coordinates(
                 f"{clean_url}/api/config",
                 headers={"Authorization": f"Bearer {ha_token}", "Content-Type": "application/json"}
             )
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
+            from integrations.homeassistant.client import ha_ssl_context
+            ctx = ha_ssl_context(clean_url)
             with urllib.request.urlopen(req, timeout=3, context=ctx) as r:
                 data = json.loads(r.read().decode())
                 lat = data.get("latitude")

@@ -289,7 +289,9 @@ def compute_counterfactual_cap50(
     # Objective cost difference on full J
     cost_diff = res_cap50.j_objective_eur - opt_result.j_objective_eur
     savings_eur = round(cost_diff, 2)
-    solver_suboptimal = (cost_diff < -0.005)
+    # A counterfactual that fell into the infeasible emergency fallback breaks comfort; its lower J
+    # is not evidence of DP suboptimality. Only compare feasible counterfactuals.
+    solver_suboptimal = (cost_diff < -0.005) and res_cap50.validation_issue is None
     if solver_suboptimal:
         print(f"[WARN] Solver suboptimal in cap50: J_cap50 ({res_cap50.j_objective_eur}) < J_opt ({opt_result.j_objective_eur})")
 
@@ -365,7 +367,7 @@ def compute_counterfactual_delay(
 
     cost_diff = res_delay.j_objective_eur - opt_result.j_objective_eur
     savings_eur = round(cost_diff, 2)
-    solver_suboptimal = (cost_diff < -0.005)
+    solver_suboptimal = (cost_diff < -0.005) and res_delay.validation_issue is None
     if solver_suboptimal:
         print(f"[WARN] Solver suboptimal in delay: J_delay ({res_delay.j_objective_eur}) < J_opt ({opt_result.j_objective_eur})")
 

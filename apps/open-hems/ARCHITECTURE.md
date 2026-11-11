@@ -56,15 +56,19 @@ Open HEMS enforces a contract-first, unidirectional architecture:
    * Solves multi-device energy dispatch over a 24–48 hour horizon based on dynamic wholesale tariffs.
    * **DHW Dynamic Programming Optimizer (`dhw_optimizer.py`):** Solves exact 2D backwards DP over tank temperature and compressor run state, minimizing electricity costs, start costs, and terminal replacement value while strictly enforcing comfort bounds and physical heat pump constraints (ADR-004, Priority 1).
    * **Space Heating Policy (`space_heating_policy.py`):** Solves 2R1C building thermal balance, underfloor preheating, and peak avoidance (Priority 2).
-   * **Home Battery Optimizer (`battery_policy.py`):** Solves 15 kWh electrochemical dispatch (Priority 3) via loosely coupled waterfall planning. Manages solar surplus soaking (`CHARGE_SOLAR`), peak shaving (`DISCHARGE_PEAK`), opportunistic winter night-charging (`CHARGE_GRID`), and reserve holding (`HOLD_RESERVE`) based on dynamic shadow pricing and cyclic cell degradation thresholds (ADR-002, ADR-005).
+   * **Home Battery Central Dispatch (`battery_policy.py`):** Solves 15 kWh electrochemical dispatch (Priority 3) in `CentralPlanner`. Manages solar surplus soaking (`CHARGE_SOLAR`), peak shaving (`DISCHARGE_PEAK`), opportunistic winter night-charging (`CHARGE_GRID`), and reserve holding (`HOLD_RESERVE`) based on dynamic shadow pricing and cyclic cell degradation thresholds (ADR-002, ADR-005). Writes authoritative dispatches into `plan.battery_summary` (with explicit simulation labeling) and `plan.device_dispatches`.
    * Identifies economic price spikes and enforces anti-hunting and comfort caps (max 2.5h winter lockout).
-   * Emits an immutable, versioned `CanonicalDispatchPlan` (Schema 1.1.0) with per-device dispatches (`DeviceSlotDispatch`).
+   * Emits an immutable, deep-copied `CanonicalDispatchPlan` (Schema 1.1.0) with per-device dispatches (`DeviceSlotDispatch`).
    * Publishes to `PlanStore` (thread-safe in-memory singleton + persistent disk snapshot + InfluxDB audit log).
 
 4. **Layer 4: Actuation & Control (`layer4_control/`)**
-   * Translates dispatch commands into physical device actions.
+   * Translates dispatch commands into physical device actions with strict single-owner state tracking.
+   * **In-Flight Run Supervisor (`dhw_run_supervisor.py`):** Single owner of in-flight DHW state, DP target enforcement, telemetry-only run detection (valve + power), and bounded run expiry.
+   * **Dispatch Guard (`dispatch_guard.py`):** Enforces timestamp-based slot lookup, safe-mode fallback to SG2 upon stale plan (>15m) or missing telemetry, and heartbeat pulse generation.
+   * **Dispatch State (`dispatch_state.py`):** Persists actuator ownership across daemon cycles (/config/open_hems_dispatch_state.json), ensuring CV master switch is only restored if Open HEMS forced it off.
+   * **Room Thermostat Buffer (`room_thermostat_buffer.py`):** Ownership-aware room thermostat elevation watchdog that respects manual user setpoint baselines and unblocks releases.
    * Connects via standalone Modbus/GPIO or via the optional Home Assistant Service Actuator.
-   * Guarantees fail-safe fallback to normal mode upon connection loss.
+   * Guarantees fail-safe fallback to normal mode (SG2) upon connection loss, plan staleness, or missing telemetry.
 
 5. **Layer 5: Presentation & Analytics (`daemon.py` / Lovelace)**
    * Pure presentation layer.
@@ -79,3 +83,4 @@ Open HEMS enforces a contract-first, unidirectional architecture:
 * `docs/adr/ADR-003-ha-as-adapter-plugin.md`: Home Assistant as an Optional Adapter Plugin.
 * `docs/adr/ADR-004-dhw-dispatch-optimization-problem.md`: DHW Dispatch Optimization via Dynamic Programming.
 * `docs/adr/ADR-005-adapter-registry.md`: Adapter Registry & Device Binding Architecture.
+* `docs/adr/ADR-006-daikin-first-dhw-policy.md`: Daikin-first DHW Policy (Proposed; supersedes ADR-004 once accepted).

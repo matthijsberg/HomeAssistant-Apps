@@ -1,0 +1,11 @@
+---
+build_from:
+  amd64: "ghcr.io/home-assistant/amd64-base-debian:trixie"
+  aarch64: "ghcr.io/home-assistant/aarch64-base-debian:trixie"
+args:
+  UOS_SERVER_VERSION: "6.0.19"
+  UNIFI_NETWORK_TARGET: "10.6.106"
+  INSTALLER_URL_AMD64: "https://fw-download.ubnt.com/data/unifi-os-server/a6b0-linux-x64-6.0.19-4addcb6a-84d2-428c-84c3-d36a64740bdc.19-x64"
+  INSTALLER_SHA256_AMD64: "3f9bf0f34e98f0a80d8506cc477bccbbe4394adaf16d16c93d3cd9a5fbe99a48"
+  INSTALLER_URL_ARM64: "https://fw-download.ubnt.com/data/unifi-os-server/08a8-linux-arm64-6.0.19-111cc795-a829-4f60-a6fb-ec4e15d5b54f.19-arm64"
+  INSTALLER_SHA256_ARM64: "6a65e2e76b1587e338b298a6edcd15216ced976306a602bb7743d15756558d74"

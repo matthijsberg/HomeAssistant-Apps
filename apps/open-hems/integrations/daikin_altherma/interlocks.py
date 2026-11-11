@@ -7,11 +7,13 @@ Physical Invariants:
 1. Hydraulic Interlock: During active DHW heating (Smart Grid Stand 4),
    the central heating master switch must be forced OFF to prevent the
    9 kW backup heater (BUH) from firing simultaneously on the space heating circuit.
-2. Lossy State Mapping: Daikin SG interface provides only 4 physical relay combinations:
-   - SG1 (S10S=1, S11S=0): Forced Off
+2. Lossy State Mapping: Daikin SG interface provides only 4 physical relay combinations
+   (authoritative; must match resolve_command() below and
+   knowledge/architecture/dhw-goldfish-elephant-control.md):
+   - SG1 (S10S=0, S11S=1): Forced Off (spitsblokkade)
    - SG2 (S10S=0, S11S=0): Normal
-   - SG3 (S10S=1, S11S=1): Recommended On (Space heating boost)
-   - SG4 (S10S=0, S11S=1): Forced Run (DHW heating)
+   - SG3 (S10S=1, S11S=0): Recommended On (space heating boost)
+   - SG4 (S10S=1, S11S=1): Forced Run (DHW heating)
    ADVISED_OFF is mapped to SG2 (Normal) with an explicit downgrade reason.
 """
 

@@ -1,0 +1,60 @@
+---
+name: UniFi OS Server
+version: "6.0.19-0"
+slug: unifi_os_server
+description: "Self-hosted UniFi OS Server 6+ & UniFi Network 11+ controller for Home Assistant OS"
+url: "https://github.com/matthijsberg/HomeAssistant-Apps"
+webui: "https://[HOST]:[PORT:11443]"
+startup: services
+boot: manual
+init: false
+timeout: 120
+backup: cold
+arch:
+  - amd64
+  - aarch64
+privileged:
+  - NET_ADMIN
+  - NET_RAW
+map:
+  - backup:rw
+  - share:rw
+  - ssl:rw
+ports:
+  11443/tcp: 11443
+  8080/tcp: 8080
+  8443/tcp: null
+  8444/tcp: null
+  8880/tcp: null
+  6789/tcp: null
+  3478/udp: 3478
+  10003/udp: 10003
+  10001/udp: 10001
+  5514/udp: null
+ports_description:
+  11443/tcp: "UniFi OS Console Web UI & HA Integration HTTPS port"
+  8080/tcp: "UniFi Device Inform & adoption communication"
+  8443/tcp: "Legacy UniFi Network API port (optional)"
+  8444/tcp: "UniFi OS HTTPS Hotspot Captive Portal"
+  8880/tcp: "UniFi OS HTTP Hotspot portal redirection"
+  6789/tcp: "UniFi WiFiman mobile speed test"
+  3478/udp: "STUN for UniFi device adoption and NAT traversal"
+  10003/udp: "UniFi OS L2 device discovery"
+  10001/udp: "Legacy UniFi L2 device discovery"
+  5514/udp: "Remote Syslog ingestion"
+options:
+  system_ip: ""
+  log_level: "info"
+  memory_init: 512
+  memory_max: 1536
+  show_journal: false
+  ssl_cert: ""
+  ssl_key: ""
+schema:
+  system_ip: "str"
+  log_level: "list(trace|debug|info|notice|warning|error|fatal)"
+  memory_init: "int(256,4096)"
+  memory_max: "int(1024,8192)"
+  show_journal: "bool"
+  ssl_cert: "str?"
+  ssl_key: "str?"

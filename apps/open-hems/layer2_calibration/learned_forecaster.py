@@ -123,14 +123,27 @@ class HybridForecastingModel:
 
         if "heat_pump" not in self.params:
             self.params["heat_pump"] = {
-                "carnot_efficiency": 0.48,
+                "carnot_efficiency": 0.39,
                 "flow_temp_cv_c": 35.0,
                 "flow_temp_dhw_c": 52.0,
                 "defrost_threshold_c": 4.5,
                 "defrost_cop_penalty": 0.82,
                 "nominal_power_w": 18000.0,
                 "standby_power_w": 34.0,
-                "average_heating_cop": legacy_cop
+                "average_heating_cop": legacy_cop,
+                "mod_floor_min_w": 700.0,
+                "mod_floor_max_w": 2000.0,
+                "mod_floor_ref_10c_w": 730.0,
+                "mod_floor_slope_w_per_k": 45.0,
+                "startup_peak_min_w": 950.0,
+                "startup_peak_max_w": 2600.0,
+                "startup_peak_ref_10c_w": 1050.0,
+                "startup_peak_slope_w_per_k": 60.0,
+                "steady_max_power_w": 3200.0,
+                "slot1_surge_weight": 0.10,
+                "surge_decay_slots": 2.0,
+                "thermo_off_cutoff_w": 350.0,
+                "thermo_off_room_margin_c": 0.15
             }
 
         if "dhw_tank" not in self.params:
@@ -275,14 +288,15 @@ class HybridForecastingModel:
             return {"thermal_w": 0.0, "electrical_w": 0.0, "cop": 0.0}
 
         # Building heat loss (Transmission + Infiltration + Wind)
-        ua_effective = float(bldg.get("ua_base_w_per_k", 292.5)) + float(bldg.get("c_wind_w_per_k_ms", 15.0)) * max(0.0, wind_speed_m_s - 2.0)
+        ua_effective = float(bldg.get("ua_base_w_per_k", 308.5)) + float(bldg.get("c_wind_w_per_k_ms", 12.0)) * max(0.0, wind_speed_m_s - 2.0)
         q_transmission_w = ua_effective * delta_t
 
-        # Solar gains discount
-        q_solar_gain_w = float(bldg.get("c_solar_passive", 0.12)) * solar_radiation_w_m2 * 25.0  # Approx 25 m2 south glazing
-        q_thermal_demand_w = max(0.0, q_transmission_w - q_solar_gain_w)
+        # Internal gains (occupants, appliances, DHW standby) + passive solar gain
+        q_internal_gain_w = float(bldg.get("internal_gains_w", 680.0))
+        q_solar_gain_w = float(bldg.get("solar_aperture_m2", 6.8)) * solar_radiation_w_m2
+        q_thermal_demand_w = max(0.0, q_transmission_w - q_internal_gain_w - q_solar_gain_w)
 
-        cop = self.calculate_cop(float(self.params.get("heat_pump", {}).get("flow_temp_cv_c", 35.0)), t_outdoor_c)
+        cop = self.calculate_cop(float(self.params.get("heat_pump", {}).get("flow_temp_cv_c", 32.0)), t_outdoor_c)
         p_electrical_w = round(q_thermal_demand_w / cop, 1) if cop > 0 else 0.0
 
         return {
@@ -353,7 +367,8 @@ SELECT sum(power_w)/60000.0 as cv_kwh FROM "energy_telemetry" WHERE "device_id" 
 SELECT mean(temperature_c) as tout_c FROM "energy_telemetry" WHERE "device_id" = 'outdoor_weather' AND time >= '{t_start}' GROUP BY time(1d) fill(linear);
 SELECT sum(power_w)/60000.0 as pv_kwh FROM "energy_telemetry" WHERE "device_id" = 'rooftop_solar' AND time >= '{t_start}' GROUP BY time(1d) fill(none);
 SELECT mean(temperature_c) as tank_temp FROM "energy_telemetry" WHERE "device_id" = 'dhw_tank' AND time >= '{t_start}' GROUP BY time(15m) fill(linear);
-SELECT mean(power_w)/1000.0 * 0.25 as dhw_kwh_el FROM "energy_telemetry" WHERE "device_id" = 'daikin_heat_pump' AND "mode" = 'dhw' AND time >= '{t_start}' GROUP BY time(15m) fill(0)
+SELECT mean(power_w)/1000.0 * 0.25 as dhw_kwh_el FROM "energy_telemetry" WHERE "device_id" = 'daikin_heat_pump' AND "mode" = 'dhw' AND time >= '{t_start}' GROUP BY time(15m) fill(0);
+SELECT mean(outdoor_temp_c) as tout_wf FROM "weather_forecast" WHERE time >= '{t_start}' GROUP BY time(1d) fill(none)
 """
         params = {"u": "openhems", "p": pwd, "db": "openhems", "q": q, "epoch": "s"}
         url = f"http://a0d7b954-influxdb:8086/query?{urllib.parse.urlencode(params)}"
@@ -435,6 +450,7 @@ SELECT mean(power_w)/1000.0 * 0.25 as dhw_kwh_el FROM "energy_telemetry" WHERE "
                     interval_h=0.25,
                 )
                 tap_grid = [[[] for _ in range(96)] for _ in range(7)]
+                dow_day_buckets = {d: {} for d in range(7)}
                 max_ts = float(sorted_t_keys[-1])
                 for ts_k, q_tap_kwh in zip(sorted_t_keys, draw_offs):
                     ts_f = float(ts_k)
@@ -442,11 +458,14 @@ SELECT mean(power_w)/1000.0 * 0.25 as dhw_kwh_el FROM "energy_telemetry" WHERE "
                     dow_t = dt_t.weekday()
                     q_t = dt_t.hour * 4 + dt_t.minute // 15
                     tap_grid[dow_t][q_t].append((ts_f, float(q_tap_kwh)))
+                    d_str = dt_t.strftime("%Y-%m-%d")
+                    dow_day_buckets[dow_t].setdefault(d_str, []).append((ts_f, float(q_tap_kwh)))
 
                 existing_tap = self.profile.get("tap_demand_profile_96", [])
                 existing_dhw_w = self.profile.get("dhw_profile_96_quarters", [])
                 updated_tap = []
                 updated_dhw_w = []
+                weekday_daily_totals = []
                 halflife_weeks = 3.0
                 decay_lambda = math.log(2.0) / halflife_weeks
 
@@ -514,11 +533,32 @@ SELECT mean(power_w)/1000.0 * 0.25 as dhw_kwh_el FROM "energy_telemetry" WHERE "
                         )
                         calc_w = round((blended_tap * 4000.0) / 2.8, 1)
                         day_dhw_w.append(calc_w if samples else round(old_w, 1))
+
+                    # Track recency-weighted weekday daily draw-off total (kWh_th/day)
+                    complete_days = [
+                        (max(x[0] for x in pts), sum(x[1] for x in pts))
+                        for pts in dow_day_buckets[dow].values()
+                        if len(pts) >= 80
+                    ]
+                    raw_day_sum = sum(day_tap)
+                    target_day_total = raw_day_sum
+                    if complete_days and raw_day_sum > 0.2:
+                        dw_sum = 0.0
+                        dval_sum = 0.0
+                        for d_ts, d_tot in complete_days:
+                            w_d = math.exp(-decay_lambda * max(0.0, (max_ts - d_ts) / (7.0 * 86400.0)))
+                            dw_sum += w_d
+                            dval_sum += w_d * d_tot
+                        if dw_sum > 0:
+                            target_day_total = dval_sum / dw_sum
+                    weekday_daily_totals.append(round(target_day_total, 2))
+
                     updated_tap.append(day_tap)
                     updated_dhw_w.append(day_dhw_w)
 
                 self.profile["tap_demand_profile_96"] = updated_tap
                 self.profile["dhw_profile_96_quarters"] = updated_dhw_w
+                self.profile["tap_weekday_daily_kwh_th"] = weekday_daily_totals
 
         self.profile["last_updated"] = datetime.now(AMSTERDAM_TZ).isoformat()
         save_json(PROFILE_FILE, self.profile)
@@ -536,19 +576,28 @@ SELECT mean(power_w)/1000.0 * 0.25 as dhw_kwh_el FROM "energy_telemetry" WHERE "
         has_sufficient_ua_data = False
         n_stookdagen = 0
 
-        if len(results) > 2 and results[1].get("series") and results[2].get("series"):
+        if len(results) > 2 and results[1].get("series") and (results[2].get("series") or (len(results) > 6 and results[6].get("series"))):
             cv_days = {v[0]: v[1] for v in results[1]["series"][0].get("values", []) if v[1] is not None}
-            tout_days = {v[0]: v[1] for v in results[2]["series"][0].get("values", []) if v[1] is not None}
+            tout_days = (
+                {v[0]: v[1] for v in results[2]["series"][0].get("values", []) if v[1] is not None}
+                if results[2].get("series")
+                else {}
+            )
+            if len(results) > 6 and results[6].get("series"):
+                for v in results[6]["series"][0].get("values", []):
+                    if v and len(v) > 1 and v[1] is not None:
+                        tout_days[v[0]] = v[1]
             common = sorted(set(cv_days.keys()) & set(tout_days.keys()))
             x_dt, y_th_kwh, used_ts = [], [], []
             from models.physics import calculate_carnot_cop
+            eta_carnot = float(self.params.get("heat_pump", {}).get("carnot_efficiency", 0.48))
 
             for ts in common:
                 t_out = tout_days[ts]
                 dt_k = 19.5 - t_out
                 kwh_el = cv_days[ts]
                 if dt_k > 1.0 and kwh_el > 1.5:
-                    cop_day = calculate_carnot_cop(t_out)
+                    cop_day = calculate_carnot_cop(t_out, carnot_efficiency=eta_carnot)
                     kwh_th = kwh_el * cop_day
                     x_dt.append(dt_k)
                     y_th_kwh.append(kwh_th)
@@ -574,12 +623,12 @@ SELECT mean(power_w)/1000.0 * 0.25 as dhw_kwh_el FROM "energy_telemetry" WHERE "
                         X = np.array([[r[0], r[1], 1.0] for r in rows], dtype=float)
                         Y = np.array([r[2] for r in rows], dtype=float)
                         beta, _, rank, _ = np.linalg.lstsq(X, Y, rcond=None)
-                        if rank == 3 and np.all(np.isfinite(beta)):
+                        if rank == 3 and np.all(np.isfinite(beta)) and -float(beta[1]) > 0.0:
                             calibrated_ua_2d = round(float(beta[0]) * 1000.0 / 24.0, 1)
                             if 180.0 <= calibrated_ua_2d <= 450.0:
                                 calibrated_ua = calibrated_ua_2d
                                 # Passive gain per PV kWh is the negative PV coefficient (sun reduces heat demand)
-                                calibrated_c_solar = round(max(0.0, min(2.50, -float(beta[1]))), 3)
+                                calibrated_c_solar = round(max(0.01, min(2.50, -float(beta[1]))), 3)
                                 has_2d = True
 
                 if not has_2d and 180.0 <= calibrated_ua_1d <= 450.0:

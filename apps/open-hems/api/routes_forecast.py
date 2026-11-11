@@ -556,10 +556,11 @@ def handle_get(handler, path: str, qp: dict) -> bool:
             heating_ranges = extract_plan_heating_ranges(dhw_plan_slots, history_count=len(hist_pts), is_15m=is_15m, domain="dhw")
 
             target_setpoint_c = (
-                sp_live
-                or decision.get("target_setpoint_c")
+                decision.get("target_setpoint_c")
                 or (plan.dhw_summary.decision_details.get("target_setpoint_c") if (plan and plan.dhw_summary and plan.dhw_summary.decision_details) else None)
-                or (plan.dhw_summary.target_temp_c if (plan and plan.dhw_summary) else 50.0)
+                or (plan.dhw_summary.target_temp_c if (plan and plan.dhw_summary) else None)
+                or sp_live
+                or 50.0
             )
 
             handler._send_json({

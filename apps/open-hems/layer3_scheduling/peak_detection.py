@@ -9,7 +9,7 @@ Layer 3 Business & Scheduling Logic:
 
 import math
 from datetime import timedelta
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional, Set
 
 
 def calc_percentile(data: List[float], p: float) -> float:
@@ -25,12 +25,22 @@ def calc_percentile(data: List[float], p: float) -> float:
     return float(s[int(f)] * (c - k) + s[int(c)] * (k - f))
 
 
+# In-memory deterministic cache keyed by price series signature and parameters.
+# Since EPEX Day-Ahead prices are published once per day and remain static,
+# this guarantees zero schedule drift across repeated planning calls.
+_PEAK_CACHE: Dict[Tuple[Any, ...], Tuple[List[Dict[str, Any]], Dict[int, Dict[str, Any]]]] = {}
+
+DEFAULT_REF_MOD_POWER_KW = 0.75          # Reference modulated heat pump load (750 W) for whole-block saving evaluation
+DEFAULT_MIN_LOCKOUT_SAVING_EUR = 0.05    # Minimum whole-block electricity saving (€) required to justify a hard SG1 lockout
+
+
 def detect_dynamic_price_peaks(
     timeline_items: List[Dict[str, Any]],
     step_mins: int = 15,
     max_lockout_mins: int = 120,
     past_continuous_lockout_mins: int = 0,
-    mins_since_last_lockout: int = 999
+    mins_since_last_lockout: int = 999,
+    min_lockout_saving_eur: float = DEFAULT_MIN_LOCKOUT_SAVING_EUR,
 ) -> Tuple[List[Dict[str, Any]], Dict[int, Dict[str, Any]]]:
     """
     Verfijnde Dynamische Spitsdetector op kwartierbasis met Winter Comfort Safeguard:
@@ -46,6 +56,23 @@ def detect_dynamic_price_peaks(
     """
     if not timeline_items:
         return [], {}
+
+    # Check cache when slot 0 is not in an in-flight lockout transition
+    can_cache = (past_continuous_lockout_mins == 0 and mins_since_last_lockout >= 120)
+    cache_key = None
+    if can_cache:
+        import copy
+        dt0 = timeline_items[0].get("dt")
+        dt0_str = dt0.isoformat() if (dt0 is not None and hasattr(dt0, "isoformat")) else str(dt0)
+        cache_key = (
+            dt0_str,
+            tuple(round(float(it.get("price", 0.0)), 4) for it in timeline_items),
+            step_mins,
+            max_lockout_mins
+        )
+        if cache_key in _PEAK_CACHE:
+            cached_peaks, cached_map = _PEAK_CACHE[cache_key]
+            return copy.deepcopy(cached_peaks), copy.deepcopy(cached_map)
 
     prices = [float(it.get("price", 0.0)) for it in timeline_items]
     p_med = calc_percentile(prices, 50)
@@ -109,7 +136,7 @@ def detect_dynamic_price_peaks(
     last_hard_end_slot = -999
     if past_continuous_lockout_mins > 0:
         last_hard_end_slot = -1
-    elif mins_since_last_lockout < 120:
+    elif 0 < mins_since_last_lockout < 120:
         last_hard_end_slot = -int(mins_since_last_lockout / step_mins)
 
     for s_idx, e_idx in events:
@@ -126,48 +153,89 @@ def detect_dynamic_price_peaks(
         dt_start = timeline_items[s_idx]["dt"]
         dt_end = timeline_items[e_idx]["dt"] + timedelta(minutes=step_mins)
 
-        h = dt_start.hour
-        # Strikte spitsuren: Ochtendspits (06:00-10:00) en Avondspits (17:00-22:00).
-        # Buiten deze vensters (22:00-06:00 en 10:00-17:00) NOOIT harde blokkade!
-        is_spits_window = (6 <= h < 10) or (17 <= h < 22)
-        name = "Ochtendspits" if 6 <= h < 11 else ("Middagpiek" if 11 <= h < 17 else ("Avondspits" if 17 <= h < 22 else "Nachttarief"))
+        # Check of het cluster (of de piek daarbinnen) in een spitsvenster valt:
+        # Ochtendspits: 06:00 - 11:00
+        # Avondspits: 16:00 - 22:00 (vroege flank kan al om 16:30/16:45 beginnen)
+        cluster_hours = {timeline_items[k]["dt"].hour for k in range(s_idx, e_idx + 1)}
+        peak_k = s_idx + cluster_prices.index(max_p)
+        peak_h = timeline_items[peak_k]["dt"].hour
+
+        is_ochtend = (6 <= peak_h < 11) or any(6 <= ch < 11 for ch in cluster_hours)
+        is_avond = (16 <= peak_h < 22) or any(16 <= ch < 22 for ch in cluster_hours)
+        is_spits_window = is_ochtend or is_avond
+
+        if (16 <= peak_h < 22) or is_avond:
+            name = "Avondspits"
+        elif (6 <= peak_h < 11) or is_ochtend:
+            name = "Ochtendspits"
+        elif 11 <= peak_h < 16:
+            name = "Middagpiek"
+        else:
+            name = "Nachttarief"
 
         # Bepaal of deze piek een harde blokkade rechtvaardigt
         is_hard_cluster = (max_p >= p85) and ((max_p - p_med) >= 0.050) and is_spits_window
 
         # Dwell time safeguard: als de vorige blokkade korter dan 120 minuten geleden eindigde,
         # mag er niet direct opnieuw een harde blokkade starten (afkoelbeveiliging)
-        if s_idx == 0 and mins_since_last_lockout < 120 and past_continuous_lockout_mins == 0:
+        if s_idx == 0 and 0 < mins_since_last_lockout < 120 and past_continuous_lockout_mins == 0:
             is_hard_cluster = False
 
         # Cumulatieve duur-cap met verleden: als dit cluster aansluit op een al lopende blokkade
+        is_in_flight_continuation = (s_idx == 0 and past_continuous_lockout_mins > 0)
         effective_max_mins = max_lockout_mins
-        if s_idx == 0 and past_continuous_lockout_mins > 0:
+        if is_in_flight_continuation:
             effective_max_mins = max(0, max_lockout_mins - past_continuous_lockout_mins)
-            if effective_max_mins < 30:  # minder dan 30 min resterend = direct opheffen
+            if effective_max_mins < 15:  # minder dan 1 kwartier resterend = direct opheffen
                 is_hard_cluster = False
 
-        max_slots_cap = max(0, effective_max_mins // step_mins)
+        max_slots_cap = (
+            max(0, (effective_max_mins + step_mins - 1) // step_mins)
+            if is_in_flight_continuation
+            else max(0, effective_max_mins // step_mins)
+        )
 
-        # Vind de top-kam binnen het cluster
+        # Vind de top-kam binnen het cluster (bij een al lopende blokkade op slot 0 blijft de kam verankerd op slot 0)
         if is_hard_cluster and max_slots_cap > 0 and cluster_len > max_slots_cap:
-            best_sub_start = s_idx
-            best_sub_avg = -1.0
-            for w_start in range(s_idx, e_idx - max_slots_cap + 2):
-                w_end = w_start + max_slots_cap
-                sub_avg = sum(float(timeline_items[k].get("price", 0.0)) for k in range(w_start, w_end)) / max_slots_cap
-                if sub_avg > best_sub_avg:
-                    best_sub_avg = sub_avg
-                    best_sub_start = w_start
-            hard_start_idx = best_sub_start
-            hard_end_idx = best_sub_start + max_slots_cap - 1
+            if is_in_flight_continuation:
+                hard_start_idx = 0
+                hard_end_idx = min(e_idx, max_slots_cap - 1)
+            else:
+                best_sub_start = s_idx
+                best_sub_avg = -1.0
+                for w_start in range(s_idx, e_idx - max_slots_cap + 2):
+                    w_end = w_start + max_slots_cap
+                    sub_avg = sum(float(timeline_items[k].get("price", 0.0)) for k in range(w_start, w_end)) / max_slots_cap
+                    if sub_avg > best_sub_avg:
+                        best_sub_avg = sub_avg
+                        best_sub_start = w_start
+                hard_start_idx = best_sub_start
+                hard_end_idx = best_sub_start + max_slots_cap - 1
         else:
             hard_start_idx = s_idx if (is_hard_cluster and max_slots_cap > 0) else -1
             hard_end_idx = e_idx if (is_hard_cluster and max_slots_cap > 0) else -1
 
         # Inter-event dwell time safeguard: dwing minimaal 120 min hersteltijd af tussen harde blokkades
+        # Whole-block economic saving evaluation: only interrupt a running modulated heat pump
+        # (HARD_LOCKOUT / SG1) when the entire crest block saves at least min_lockout_saving_eur.
         if is_hard_cluster and hard_start_idx >= 0:
-            if (hard_start_idx - last_hard_end_slot) * step_mins < 120:
+            crest_prices = [float(timeline_items[k].get("price", 0.0)) for k in range(hard_start_idx, hard_end_idx + 1)]
+            crest_avg_p = sum(crest_prices) / len(crest_prices) if crest_prices else avg_p
+            h_dur_hours = ((hard_end_idx - hard_start_idx + 1) * step_mins) / 60.0
+            expected_saving_eur = round(max(0.0, crest_avg_p - p_med) * DEFAULT_REF_MOD_POWER_KW * h_dur_hours, 4)
+            if expected_saving_eur < min_lockout_saving_eur and not (is_in_flight_continuation and hard_start_idx == 0):
+                is_hard_cluster = False
+                hard_start_idx = -1
+                hard_end_idx = -1
+        else:
+            expected_saving_eur = round(max(0.0, avg_p - p_med) * DEFAULT_REF_MOD_POWER_KW * (dur_mins / 60.0), 4)
+
+        # Controleer 2 uur hersteltijd tussen harde blokkades
+        # (een al lopende blokkade op slot 0 mag nooit zichzelf als een tweede blokkade annuleren)
+        if is_hard_cluster and hard_start_idx >= 0:
+            if is_in_flight_continuation and hard_start_idx == 0:
+                last_hard_end_slot = hard_end_idx
+            elif (hard_start_idx - last_hard_end_slot) * step_mins < 120:
                 is_hard_cluster = False
                 hard_start_idx = -1
                 hard_end_idx = -1
@@ -189,12 +257,17 @@ def detect_dynamic_price_peaks(
             "severity": "HARD_LOCKOUT" if (is_hard_cluster and hard_start_idx >= 0) else "SOFT_ADVICE",
             "severity_label": "Harde Spitsblokkade 🔒" if (is_hard_cluster and hard_start_idx >= 0) else "Economisch Blokadvies ⚠️",
             "is_hard_lockout": (is_hard_cluster and hard_start_idx >= 0),
+            # Canonical crest window as slot indices (-1 = no hard window). Consumers that need
+            # per-slot lockout truth must use these, never the cluster start_idx/end_idx.
+            "hard_start_idx": hard_start_idx if (is_hard_cluster and hard_start_idx >= 0) else -1,
+            "hard_end_idx": hard_end_idx if (is_hard_cluster and hard_start_idx >= 0) else -1,
             "hard_start_time": h_start_lbl,
             "hard_end_time": h_end_lbl,
             "hard_duration_mins": h_dur_mins,
             "max_price": round(max_p, 4),
             "avg_price": round(avg_p, 4),
-            "delta_median": round(max_p - p_med, 4)
+            "delta_median": round(max_p - p_med, 4),
+            "expected_saving_eur": expected_saving_eur,
         }
         peak_objects.append(peak_obj)
 
@@ -207,7 +280,38 @@ def detect_dynamic_price_peaks(
             slot_entry["peak_obj"] = peak_obj
             slot_lockout_map[k] = slot_entry
 
+    if can_cache and cache_key is not None:
+        import copy
+        _PEAK_CACHE[cache_key] = (copy.deepcopy(peak_objects), copy.deepcopy(slot_lockout_map))
+        if len(_PEAK_CACHE) > 50:
+            _PEAK_CACHE.pop(next(iter(_PEAK_CACHE)))
+
     return peak_objects, slot_lockout_map
+
+
+def hard_lockout_slot_indices(dynamic_peaks: List[Any], n_slots: Optional[int] = None) -> Set[int]:
+    """
+    Resolves the set of hard-lockout slot indices from any supported peak representation:
+      - per-slot dicts {"slot_idx": k, "is_hard_lockout": True}
+      - peak objects from detect_dynamic_price_peaks (uses hard_start_idx..hard_end_idx)
+      - objects exposing the same attributes
+    """
+    result: Set[int] = set()
+    for pk in dynamic_peaks or []:
+        get = pk.get if isinstance(pk, dict) else (lambda k, d=None, _pk=pk: getattr(_pk, k, d))
+        if not get("is_hard_lockout", False):
+            continue
+        slot_idx = get("slot_idx", None)
+        if slot_idx is not None:
+            result.add(int(slot_idx))
+            continue
+        hs = get("hard_start_idx", None)
+        he = get("hard_end_idx", None)
+        if hs is not None and he is not None and int(hs) >= 0 and int(he) >= int(hs):
+            result.update(range(int(hs), int(he) + 1))
+    if n_slots is not None:
+        result = {k for k in result if 0 <= k < n_slots}
+    return result
 
 
 def extract_plan_spitsblok_ranges(slots: List[Any], history_count: int = 0, is_15m: bool = True) -> List[Dict[str, Any]]:

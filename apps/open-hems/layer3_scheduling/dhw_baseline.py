@@ -13,7 +13,7 @@ The optimizer must beat this baseline on objective J to justify intervention.
 
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Iterable
 
 from layer3_scheduling.dhw_specs import DhwTankSpec
 from layer3_scheduling.dhw_optimizer import (
@@ -53,10 +53,13 @@ def simulate_autonomous(
     spec: Optional[DhwTankSpec] = None,
     params: Optional[DhwOptimizerParams] = None,
     model_parameters: Optional[Dict[str, Any]] = None,
+    hard_lockout_slots: Optional[Iterable[int]] = None,
 ) -> DhwBaselineResult:
     """
     Pure simulation of autonomous thermostat behavior.
+    `hard_lockout_slots` are slot indices where SG1 suppresses the compressor.
     """
+    locked_set = set(hard_lockout_slots or [])
     spec = spec or DhwTankSpec()
     params = params or DhwOptimizerParams()
     N = len(slots)
@@ -85,7 +88,7 @@ def simulate_autonomous(
         "thermal_capacity_kwh_per_k": C_tank,
         "ua_w_per_k": ua_w_per_k,
         "ambient_temp_c": params.t_amb_c,
-        "target_temp_c": spec.boost_setpoint_c,
+        "target_temp_c": stop_threshold_c,
     }
 
     p_nom = spec.heat_pump_electric_kw
@@ -105,7 +108,7 @@ def simulate_autonomous(
         q_idx = dt_val.hour * 4 + dt_val.minute // 15
         p50 = dhw_model.get_learned_tap_kwh_th(dow, q_idx) if (dhw_model and hasattr(dhw_model, "get_learned_tap_kwh_th")) else 0.05
         out_t = float(getattr(s, "outdoor_temp_c", getattr(s, "outdoor_temp", 10.0)))
-        is_locked = bool(getattr(s, "is_hard_lockout", False))
+        is_locked = bool(getattr(s, "is_hard_lockout", False)) or (k in locked_set)
 
         # Thermostat logic
         if is_locked:
@@ -133,14 +136,15 @@ def simulate_autonomous(
 
         u_plan.append(u)
 
-        # Advance physics
+        # Advance physics with the same calibrated tank model used for scoring (UA, capacity)
+        p_el_k = spec.get_electric_power_kw(t_curr, outdoor_temp_c=out_t, params=model_parameters) if u == 1 else 0.0
         t_curr = dhw_step(
             t_tank_c=t_curr,
             u=float(u),
             q_tap_kwh=p50,
             t_outdoor_c=out_t,
             dt_h=0.25,
-            spec=spec,
+            spec=dict(tank_spec_dict, heat_pump_power_kw=p_el_k),
             params=model_parameters,
             t_max_c=spec.boost_setpoint_c,
             t_amb_c=params.t_amb_c

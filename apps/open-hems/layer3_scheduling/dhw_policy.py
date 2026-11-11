@@ -419,6 +419,22 @@ class DhwPolicy:
         # 3. Pre-heat before a peak in which the tank would drop below 40 °C + margin
         comfort_c = max(spec.comfort_min_temp_c, t50 - spec.auto_start_delta_c + p.preheat_margin_c)
         dip = next((j for j in range(k, end) if j in inp.hard and temps[j - k] < comfort_c), None)
+        
+        # NOTE: A tank starting at baseline (48C) might drop heavily if the shower is inside the peak.
+        # Check if the baseline drop *itself* breaches the comfort boundary.
+        if dip is None:
+            # Let's find the earliest peak ahead
+            first_peak_start = next((j for j in range(k, end) if j in inp.hard), None)
+            if first_peak_start is not None and first_peak_start > k:
+                # How long is this peak?
+                peak_end = first_peak_start
+                while peak_end < end and peak_end in inp.hard:
+                    peak_end += 1
+                # If we entered this peak at baseline (t50), would we crash?
+                temps50, _ = forecast_autonomous(inp, first_peak_start, t50, False, peak_end - first_peak_start)
+                if temps50 and min(temps50) < comfort_c:
+                    dip = first_peak_start # Force intervention because baseline isn't enough to survive this peak
+        
         if dip is not None:
             peak_start = dip
             while peak_start - 1 >= k and (peak_start - 1) in inp.hard:
@@ -431,8 +447,18 @@ class DhwPolicy:
             horizon_end = peak_start
             
             # Dynamically calculate required temperature to bridge the peak
-            min_temp_in_peak = min(temps[peak_start - k : peak_end - k])
-            drop = temps[peak_start - k] - min_temp_in_peak
+            # Since temps[] is an autonomous trajectory starting from t_c, we need to know the drop
+            # from whatever temperature we EXPECT to have at the start of the peak.
+            # To be exact: the drop is the difference between the tank temp at peak_start and the minimum inside the peak.
+            # BUT the tank temp at peak_start depends on the target we are solving for.
+            # As a conservative proxy, we calculate the drop assuming we enter the peak at target 50C (which is the minimum preheat).
+            temps50, _ = forecast_autonomous(inp, peak_start, t50, False, peak_end - peak_start)
+            min_temp_in_peak = min(temps50) if temps50 else t50
+            drop = t50 - min_temp_in_peak
+            
+            # Calculate what we *actually* need to survive the drop, assuming we enter the peak at req_t
+            # We want: req_t - drop >= comfort_c
+            # So: req_t >= comfort_c + drop
             req_t = comfort_c + drop + 0.5
             req_t = max(t50, min(t60, req_t))
             

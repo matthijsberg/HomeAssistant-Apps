@@ -4,7 +4,7 @@ Welcome to Open HEMS. This document is the authoritative onboarding and developm
 
 ---
 
-## 🏛️ The 5 Invariant Rules (Checklist Before Every Commit)
+## 🏛️ The 12 Invariant Rules (Checklist Before Every Commit)
 
 Before presenting any code changes or committing:
 - [ ] **1. Single Source of Truth & Dumb Views:** Never add math, aggregation, or state-color calculations inside UI views or HTTP GET handlers in `daemon.py`. All presentation consumers read exclusively from `PlanStore.get_plan()`. Styling, translations, and HEX colors belong in `config/mode_catalog.json`.
@@ -21,6 +21,7 @@ Before presenting any code changes or committing:
 - [ ] **9. Open Knowledge Format (OKF v0.2) Conformance:** Elk nieuw domeinconcept, fysieke/financiële metric, of architectuurinvariant moet worden vastgelegd in `knowledge/` (`knowledge/metrics/`, `knowledge/architecture/`, `knowledge/computations/`) en 100% slagen voor `scripts/validate.sh` en `tests/architecture/test_okf_conformance.py`.
 - [ ] **10. Elephant & Goldfish Besturingsdiscipline:** Tapwater- en warmtepompbesturing moet te allen tijde de Elephant baseline respecteren (SG2 normaal, setpoint 50,0 °C, boiler aan/`heat`; boiler NOOIT softwarematig `off` zetten). Goldfish stateloze executie per tick zorgt ervoor dat tussen geplande runs door nooit een residu van 60 °C of een verhoogde doeltemperatuur blijft plakken.
 - [ ] **11. 5-Traps Pre-Commit Pijplijn:** Elke commit moet foutloos door `.git/hooks/pre-commit` komen (1: Secrets, 2: Bandit AST security, 3: Ruff, 4: Mypy, 5: Node.js frontend syntax).
+- [ ] **12. Actuator Isolation & Plan Immutability:** Home Assistant writes and service calls are strictly permitted only from Layer 4 (`layer4_control/`) and integration adapters (`integrations/`). Plans published to `PlanStore` are strictly immutable (deep copy). Each physical actuator state (CV master switch, room thermostat setpoint, in-flight DHW run) must have exactly one single designated owner and respect manual user overrides.
 
 ---
 

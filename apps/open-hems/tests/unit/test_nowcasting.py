@@ -57,3 +57,35 @@ def test_nudge_with_none_preserves_raw():
     assert ObservationNowcaster.nudge_temperature_forecast(raw, None) == raw
     assert ObservationNowcaster.nudge_solar_forecast(raw, None) == raw
     assert ObservationNowcaster.nudge_wind_forecast(raw, None) == raw
+
+
+def test_sanitizer_preserves_poa_solar_forecast_without_nowcast_bump():
+    """Verify TelemetrySanitizer relies on the POA solar forecast without short-term live inverter nudging."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from layer1_data_collection.sanitizer import TelemetrySanitizer
+
+    ams = ZoneInfo("Europe/Amsterdam")
+    now = datetime(2026, 10, 14, 11, 45, tzinfo=ams)
+    raw_prices = [{"dt": now, "price": 0.25}]
+    raw_solar = [{"dt": now, "solar_kw": 1.70}]
+    raw_weather = [{"dt": now, "temperature": 14.0, "wind_speed_ms": 3.0, "solar_radiation_w_m2": 320.0}]
+
+    frame = TelemetrySanitizer.sanitize(
+        now=now,
+        raw_prices=raw_prices,
+        raw_solar=raw_solar,
+        raw_weather=raw_weather,
+        raw_unallocated_matrix=[[400.0] * 96 for _ in range(7)],
+        current_dhw_temp=48.0,
+        last_hardware_reading_time=now,
+        live_solar_kw=0.50,
+        live_solar_radiation_w_m2=100.0,
+        live_outdoor_temp_c=15.5,
+        horizon_slots=4,
+    )
+
+    assert frame.slots[0].solar_kw == 1.70
+    assert frame.slots[0].solar_rad_w_m2 == 320.0
+    assert frame.slots[0].outdoor_temp_c == 15.5
+

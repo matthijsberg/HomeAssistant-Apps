@@ -1,134 +1,279 @@
 """
 Layer 3: Space Heating & Floor Thermal Buffer Policy
 ===================================================
-Physics-informed 2R1C underfloor heating and building thermal storage policy.
+Predicts what the Daikin does with the house over the planning horizon, and decides when Open HEMS
+pre-heats (room setpoint offset) ahead of hard peak lockouts.
 
-Key Capabilities:
-1. Summer Lockout: Suppresses heating when mean outdoor temperature >= 16.0°C.
-2. Dynamic Peak Lockout: Suppresses or clamps heating to modulation floor (950W)
-   during morning and evening wholesale price spikes.
-3. Thermal Floor Buffer Optimization (COP-Price Trade-off):
-   Computes thermal energy cost (€/kWh_th = Price / COP) across slots.
-   Pre-charges the heavy concrete screed (14.5 kWh/K capacity, 3-4 hour thermal lag)
-   during cheap thermal slots or solar surplus windows before peaks.
-4. Solar & Overshoot Resilience:
-   Allows room temperature to buffer up to setpoint + 1.2°C during afternoon pre-peak
-   charging even if solar radiation is already warming the room air, ensuring the
-   concrete floor is sufficiently saturated before sunset to coast through evening peaks.
-5. 2R1C Simulation: Computes room and floor temperature trajectories, enforcing
-   comfort bounds (target - 0.4°C min comfort, floor max 28°C).
-6. Hydraulic DHW Interlock: Space heating is strictly 0 kW during active DHW runs.
+Model (grey-box fit on winter 2025-26, knowledge/architecture/space-heating-model.md):
+1. Building: 2-node network. Room node (the Madoka reading, incl. walls and furniture) and a light floor
+   node, coupled by R_floor_room. 77 % of the heat-pump output enters the floor, the rest reaches the room
+   directly (LT radiators). Losses UA*(T_room - T_out) with wind infiltration, internal gains and solar
+   gain on global horizontal irradiance.
+2. Daikin: closed-loop behaviour, not a schedule. The mean heat output per slot follows
+   clip(K * (base + slope*T_out + gain*(setpoint - T_room) - T_floor), 0, Q_max): weather-compensated
+   with strong room feedback. Compressor cycling below the minimum modulation averages out per slot.
+3. COP: measured (P1P2 heat / Inepro electricity) per outdoor temperature, including defrost.
+4. Levers: hard peak lockout (SG forced off) -> no heat. Pre-heat (advised_on) -> room setpoint +1 K for
+   0-4 h before a hard lockout, chosen per lockout as the cheapest option that keeps the room within
+   comfort; "no pre-heat" is always a candidate. Soft peak advice is SG2 normal for the Daikin.
+5. Summer lockout, DHW hydraulic interlock (no CV heat during DHW runs).
 """
 
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple, Set
+from datetime import datetime
 import json
+import math
 from pathlib import Path
 
 from models.canonical import SpaceHeatingSlotResult, SpaceHeatingPlanSummary
 
 
 class SpaceHeatingPolicy:
-    # Building thermal properties (Culemborg reference site: 321 W/K)
-    UA_BUILDING_KW_PER_K = 0.321
-    C_AIR_KWH_PER_K = 3.2
-    C_FLOOR_KWH_PER_K = 14.5
-    R_FLOOR_AIR_K_PER_KW = 0.08
-    SOLAR_GAIN_COEFFICIENT = 1.15  # Ratio of passive window solar thermal gain to PV kW generation (calibrated from low-angle autumn/winter solar gain)
+    # --- Building network (winter 2025-26 fit with UA fixed to the calibrated envelope value)
+    UA_BUILDING_KW_PER_K = 0.3100          # fallback; the live value comes from heatpump_model_parameters.json
+    C_ROOM_KWH_PER_K = 12.8                # room node: air, walls, furniture (Madoka reference)
+    C_FLOOR_KWH_PER_K = 3.75               # screed node (time constant R*C ~3.2 h)
+    R_FLOOR_ROOM_K_PER_KW = 0.85
+    FLOOR_HEAT_SHARE = 0.77                # share of heat-pump output entering the floor
+    INTERNAL_GAINS_KW = 0.68
+    SOLAR_APERTURE_M2 = 6.8                # kW_th per kW/m2 of global horizontal irradiance
+    PV_KW_PER_KW_M2_GHI = 4.5              # only to approximate GHI from PV kW when no irradiance is given
     WIND_INFILTRATION_COEFF_KW_PER_K_PER_MS = 0.015  # 15 W/K per m/s wind above 2 m/s
+    C_WIND_W_PER_K_MS_BOUNDS = (1.0, 60.0)  # plausible band; values outside are treated as a unit error
+    SUBSTEP_HOURS = 0.25 / 6               # integration and controller step (2.5 min)
+    _warned_param_keys: set = set()
 
-    # Temperatures & Comfort bounds
+    # --- Daikin closed-loop behaviour (mean heat output per slot)
+    DAIKIN_LWT_BASE_C = 28.66
+    DAIKIN_LWT_OUTDOOR_SLOPE = -0.192
+    DAIKIN_ROOM_GAIN_K_PER_K = 8.0
+    DAIKIN_EMITTER_KW_PER_K = 1.57
+    DAIKIN_MAX_HEAT_KW = 8.4
+    # Measured seasonal COP per outdoor temperature (heat / electricity, defrost included)
+    COP_CURVE = ((-2.0, 2.42), (2.0, 2.64), (6.0, 3.56), (10.0, 4.52), (14.0, 5.48))
+    COP_BOUNDS = (1.8, 6.0)
+
+    # --- Compressor electrical modulation & startup profile (calibrated on post-2026-11-07 low-and-slow settings)
+    MOD_FLOOR_MIN_W = 700.0                # minimum steady compressor power floor (W)
+    MOD_FLOOR_MAX_W = 2000.0               # upper bound on temperature-dependent floor (W)
+    MOD_FLOOR_REF_10C_W = 730.0            # modulation floor at 10 C outdoor (W)
+    MOD_FLOOR_SLOPE_W_PER_K = 45.0         # floor increase per K below 10 C (W/K)
+    STARTUP_PEAK_MIN_W = 950.0             # minimum startup peak power in mild weather (W)
+    STARTUP_PEAK_MAX_W = 2600.0            # maximum startup peak power in frost weather (W)
+    STARTUP_PEAK_REF_10C_W = 1050.0        # startup peak at 10 C outdoor (W)
+    STARTUP_PEAK_SLOPE_W_PER_K = 60.0      # startup peak increase per K below 10 C (W/K)
+    STEADY_MAX_POWER_W = 3200.0            # maximum continuous CV electrical power (W)
+    SLOT1_SURGE_WEIGHT = 0.10              # fraction of startup surge in slot 1 (0-15m); rest is floor
+    SURGE_DECAY_SLOTS = 2.0                # exponential decay time constant (in 15m slots) after slot 2
+    THERMO_OFF_CUTOFF_W = 350.0            # thermo-off electrical cutoff when room >= target - margin (W)
+    THERMO_OFF_ROOM_MARGIN_C = 0.15        # room margin below target where thermo-off applies (K)
+
+    # --- Comfort & levers
     TARGET_ROOM_TEMP_C = 20.0
-    MIN_COMFORT_DELTA_C = 0.6      # Max allowable drop below target during peaks (target - 0.6°C)
-    MAX_PREHEAT_OVERSHOOT_C = 1.2  # Max allowable preheat overshoot (target + 1.2°C)
-    MAX_FLOOR_TEMP_C = 28.0        # Upper safety limit for underfloor heating
+    MIN_COMFORT_DELTA_C = 0.5      # max allowed drop below target during a lockout
+    MAX_PREHEAT_OVERSHOOT_C = 1.2  # nominal rise above target from pre-heat without solar spike
+    MAX_PREHEAT_DELTA_ABOVE_BASE_C = 3.0  # max setpoint/room offset when floor is still cool (<26.5C)
+    MAX_PREHEAT_SAFETY_TEMP_C = 23.5      # absolute upper room pre-heat ceiling
+    MAX_PREHEAT_FLOOR_TEMP_C = 26.5       # floor saturation threshold for pre-heating
+    MAX_FLOOR_TEMP_C = 28.0        # upper hardware safety limit for underfloor heating
     SUMMER_LOCKOUT_OUTDOOR_C = 16.0
+    PREHEAT_OFFSET_C = 1.0         # room setpoint offset applied by RoomThermostatBufferController
+    PREHEAT_CANDIDATE_HOURS = (0.0, 1.0, 2.0, 3.0, 4.0)
+    PREHEAT_LEAD_GAP_HOURS = (1.0, 2.0, 3.0, 4.0)
+    PREHEAT_MIN_SAVING_EUR = 0.05  # pre-heat only when it beats "no pre-heat" by at least this much
+    COMFORT_PENALTY_EUR_PER_KH = 8.0
+    MAX_BRIDGE_COST_PREMIUM_RATIO = 1.25  # allow holding a run across a single block when thermal cost is <= 1.25x reference
 
-    # Heat pump parameters
-    MODULATION_FLOOR_KW_EL = 0.85
-    MODULATION_MAX_KW_EL = 4.2
-    PREHEAT_BOOST_KW_EL = 2.2
+    # Legacy Carnot parameters (only for calculate_carnot_cop, kept for callers that still use it)
     FLOW_TEMP_CV_C = 35.0
     CARNOT_EFFICIENCY = 0.42
 
-    # Daikin Altherma 3 H HT 18kW Empirical Modulation (Fitted over 7,370 real historical 15m intervals)
-    REGRESSION_A = 2858.6           # Intercept at 0°C outdoor (~2,858 W)
-    REGRESSION_B = 136.8            # Slope: decreases 136.8 W per degree outdoor warming
-    MIN_RUN_SLOTS = 8               # Minimum run duration once started: 8 slots = 2.0 hours
-    STARTUP_BOOST_SLOTS = 2         # Initial flow delta-T buildup phase: 2 slots = 30 mins
+    _HP_PARAM_SPECS = (
+        ("mod_floor_min_w", "MOD_FLOOR_MIN_W", 400.0, 1500.0),
+        ("mod_floor_max_w", "MOD_FLOOR_MAX_W", 1000.0, 3500.0),
+        ("mod_floor_ref_10c_w", "MOD_FLOOR_REF_10C_W", 400.0, 1800.0),
+        ("mod_floor_slope_w_per_k", "MOD_FLOOR_SLOPE_W_PER_K", 0.0, 150.0),
+        ("startup_peak_min_w", "STARTUP_PEAK_MIN_W", 600.0, 2500.0),
+        ("startup_peak_max_w", "STARTUP_PEAK_MAX_W", 1200.0, 4500.0),
+        ("startup_peak_ref_10c_w", "STARTUP_PEAK_REF_10C_W", 600.0, 2500.0),
+        ("startup_peak_slope_w_per_k", "STARTUP_PEAK_SLOPE_W_PER_K", 0.0, 200.0),
+        ("steady_max_power_w", "STEADY_MAX_POWER_W", 1500.0, 5500.0),
+        ("slot1_surge_weight", "SLOT1_SURGE_WEIGHT", 0.0, 1.0),
+        ("surge_decay_slots", "SURGE_DECAY_SLOTS", 0.5, 10.0),
+        ("thermo_off_cutoff_w", "THERMO_OFF_CUTOFF_W", 100.0, 800.0),
+        ("thermo_off_room_margin_c", "THERMO_OFF_ROOM_MARGIN_C", 0.0, 0.5),
+        ("emitter_kw_per_k", "DAIKIN_EMITTER_KW_PER_K", 0.5, 3.0),
+        ("max_heat_kw", "DAIKIN_MAX_HEAT_KW", 3.0, 12.0),
+        ("max_bridge_cost_premium_ratio", "MAX_BRIDGE_COST_PREMIUM_RATIO", 1.0, 2.0),
+    )
 
     @classmethod
     def get_active_parameters(cls) -> Dict[str, Any]:
-        """Loads live calibrated parameters from heatpump_model_parameters.json with fallback to class constants."""
+        """Live envelope and heat-pump modulation parameters from heatpump_model_parameters.json with fallback to class constants."""
         params_file = Path("/config/heatpump_model_parameters.json")
         ua = cls.UA_BUILDING_KW_PER_K
-        reg_a = cls.REGRESSION_A
-        reg_b = cls.REGRESSION_B
         c_wind = cls.WIND_INFILTRATION_COEFF_KW_PER_K_PER_MS
-        c_solar = cls.SOLAR_GAIN_COEFFICIENT
-        c_floor = cls.C_FLOOR_KWH_PER_K
+        hp_vals: Dict[str, float] = {k: float(getattr(cls, attr)) for k, attr, _, _ in cls._HP_PARAM_SPECS}
         if params_file.exists():
             try:
                 p = json.loads(params_file.read_text(encoding="utf-8"))
-                b = p.get("building", {})
+            except (OSError, ValueError) as e:
+                if "parse" not in cls._warned_param_keys:
+                    cls._warned_param_keys.add("parse")
+                    print(f"[WARN] SpaceHeatingPolicy: cannot read {params_file}: {e}; using defaults")
+                p = {}
+            b = p.get("building", {}) if isinstance(p, dict) else {}
+            try:
                 ua_w = b.get("ua_base_w_per_k")
                 if ua_w is not None and float(ua_w) > 0:
                     ua = float(ua_w) / 1000.0  # W/K to kW/K
-                c_wind_w = b.get("c_wind_w_per_k_ms")
-                if c_wind_w is not None and float(c_wind_w) > 0:
-                    c_wind = float(c_wind_w) / 1000.0  # W/(K*m/s) to kW/(K*m/s)
-                c_sol = b.get("c_solar_passive")
-                if c_sol is not None and float(c_sol) > 0:
-                    c_solar = float(c_sol)
-                fl_cap = b.get("floor_capacity_kwh_per_k")
-                if fl_cap is not None and float(fl_cap) > 0:
-                    c_floor = float(fl_cap)
-                mod_curve = p.get("heat_pump", {}).get("modulation_curve", "")
-                if mod_curve and "-" in mod_curve:
-                    parts = mod_curve.split("-")
-                    reg_a = float(parts[0].strip())
-                    clean_b = parts[1].replace("·T", "").replace("*T", "").replace("·t", "").replace("*t", "").replace("W", "").strip()
-                    reg_b = float(clean_b)
-            except Exception:
+            except (TypeError, ValueError):
                 pass
-        return {
-            "ua_kw_per_k": ua,
-            "reg_a": reg_a,
-            "reg_b": reg_b,
-            "c_wind_kw_per_k_ms": c_wind,
-            "c_solar_passive": c_solar,
-            "floor_capacity_kwh_per_k": c_floor
-        }
+            c_wind_w = b.get("c_wind_w_per_k_ms")
+            try:
+                if c_wind_w is not None:
+                    lo, hi = cls.C_WIND_W_PER_K_MS_BOUNDS
+                    if lo <= float(c_wind_w) <= hi:
+                        c_wind = float(c_wind_w) / 1000.0  # W/(K*m/s) to kW/(K*m/s)
+                    elif "c_wind_w_per_k_ms" not in cls._warned_param_keys:
+                        cls._warned_param_keys.add("c_wind_w_per_k_ms")
+                        print(f"[WARN] SpaceHeatingPolicy: building.c_wind_w_per_k_ms={c_wind_w} outside "
+                              f"[{lo}, {hi}] W/(K·m/s); using default {cls.WIND_INFILTRATION_COEFF_KW_PER_K_PER_MS * 1000:.0f}")
+            except (TypeError, ValueError):
+                pass
+            hp = p.get("heat_pump", {}) if isinstance(p, dict) else {}
+            if isinstance(hp, dict):
+                for key, attr, lo_b, hi_b in cls._HP_PARAM_SPECS:
+                    raw_v = hp.get(key)
+                    if raw_v is not None:
+                        try:
+                            fv = float(raw_v)
+                            if lo_b <= fv <= hi_b:
+                                hp_vals[key] = fv
+                        except (TypeError, ValueError):
+                            pass
+        res = {"ua_kw_per_k": ua, "c_wind_kw_per_k_ms": c_wind}
+        res.update(hp_vals)
+        return res
+
+    # ------------------------------------------------------------------ physics
+    @classmethod
+    def calculate_cop(cls, outdoor_temp_c: float) -> float:
+        """Measured heat-pump COP for space heating at this outdoor temperature (linear interpolation)."""
+        pts = cls.COP_CURVE
+        t = float(outdoor_temp_c)
+        if t <= pts[0][0]:
+            (t0, c0), (t1, c1) = pts[0], pts[1]
+        elif t >= pts[-1][0]:
+            (t0, c0), (t1, c1) = pts[-2], pts[-1]
+        else:
+            k = next(i for i in range(len(pts) - 1) if pts[i][0] <= t <= pts[i + 1][0])
+            (t0, c0), (t1, c1) = pts[k], pts[k + 1]
+        cop = c0 + (c1 - c0) * (t - t0) / (t1 - t0)
+        lo, hi = cls.COP_BOUNDS
+        return round(max(lo, min(hi, cop)), 2)
 
     @classmethod
-    def calculate_modulating_power(
+    def calculate_run_power_kw(
         cls,
         outdoor_temp_c: float,
-        run_slot_idx: int = 1,
-        is_preheat: bool = False
+        slot_in_run: int = 1,
+        q_drive_th_kw: float = 0.0,
+        params: Optional[Dict[str, Any]] = None,
     ) -> float:
         """
-        Calculates realistic inverter compressor power (kW_el) based on outdoor temperature,
-        run phase (startup burst vs steady modulation vs warm floor taper), and preheat status.
+        Calculates electrical compressor power (kW_el) incorporating the physical
+        modulation floor and startup envelope calibrated on post-2026-11-07 telemetry.
         """
-        act_p = cls.get_active_parameters()
-        p_raw_w = act_p["reg_a"] - (act_p["reg_b"] * outdoor_temp_c)
-        p_steady_kw = max(cls.MODULATION_FLOOR_KW_EL, min(cls.MODULATION_MAX_KW_EL, p_raw_w / 1000.0))
+        act_p = params if params is not None else cls.get_active_parameters()
+        floor_min_kw = act_p.get("mod_floor_min_w", cls.MOD_FLOOR_MIN_W) / 1000.0
+        floor_max_kw = act_p.get("mod_floor_max_w", cls.MOD_FLOOR_MAX_W) / 1000.0
+        floor_ref_kw = act_p.get("mod_floor_ref_10c_w", cls.MOD_FLOOR_REF_10C_W) / 1000.0
+        floor_slope_kw = act_p.get("mod_floor_slope_w_per_k", cls.MOD_FLOOR_SLOPE_W_PER_K) / 1000.0
 
-        if run_slot_idx <= cls.STARTUP_BOOST_SLOTS:
-            p_kw = min(3.2, p_steady_kw * 1.25)
-        elif is_preheat:
-            p_kw = min(2.8, max(p_steady_kw, 2.0))
-        elif run_slot_idx > 12:
-            taper_factor = max(0.65, 1.0 - 0.05 * (run_slot_idx - 12))
-            p_kw = max(cls.MODULATION_FLOOR_KW_EL, p_steady_kw * taper_factor)
+        peak_min_kw = act_p.get("startup_peak_min_w", cls.STARTUP_PEAK_MIN_W) / 1000.0
+        peak_max_kw = act_p.get("startup_peak_max_w", cls.STARTUP_PEAK_MAX_W) / 1000.0
+        peak_ref_kw = act_p.get("startup_peak_ref_10c_w", cls.STARTUP_PEAK_REF_10C_W) / 1000.0
+        peak_slope_kw = act_p.get("startup_peak_slope_w_per_k", cls.STARTUP_PEAK_SLOPE_W_PER_K) / 1000.0
+
+        steady_max_kw = act_p.get("steady_max_power_w", cls.STEADY_MAX_POWER_W) / 1000.0
+        slot1_w = act_p.get("slot1_surge_weight", cls.SLOT1_SURGE_WEIGHT)
+        decay_slots = max(0.5, act_p.get("surge_decay_slots", cls.SURGE_DECAY_SLOTS))
+
+        p_floor = max(floor_min_kw, min(floor_max_kw, floor_ref_kw - floor_slope_kw * (outdoor_temp_c - 10.0)))
+        p_peak = max(peak_min_kw, min(peak_max_kw, peak_ref_kw - peak_slope_kw * (outdoor_temp_c - 10.0)))
+        cop = cls.calculate_cop(outdoor_temp_c)
+        p_drive = q_drive_th_kw / max(1.0, cop) if q_drive_th_kw > 0 else p_floor
+        p_steady = max(p_floor, min(steady_max_kw, p_drive))
+        p_surge = max(p_peak, p_steady)
+
+        if slot_in_run <= 1:
+            return round((1.0 - slot1_w) * p_floor + slot1_w * p_surge, 2)
+        elif slot_in_run == 2:
+            return round(p_surge, 2)
         else:
-            p_kw = p_steady_kw
+            decay = math.exp(-(slot_in_run - 2) / decay_slots)
+            p = p_steady + (p_surge - p_steady) * decay
+            return round(p, 2)
 
-        return round(p_kw, 2)
+    @classmethod
+    def daikin_heat_output_kw(cls, outdoor_temp_c: float, setpoint_c: float, t_room: float, t_floor: float) -> float:
+        """Mean heat output the Daikin delivers to the CV circuit in this state (kW_th)."""
+        drive = (cls.DAIKIN_LWT_BASE_C + cls.DAIKIN_LWT_OUTDOOR_SLOPE * outdoor_temp_c
+                 + cls.DAIKIN_ROOM_GAIN_K_PER_K * (setpoint_c - t_room) - t_floor)
+        return max(0.0, min(cls.DAIKIN_MAX_HEAT_KW, cls.DAIKIN_EMITTER_KW_PER_K * drive))
+
+    @classmethod
+    def _advance_thermal_state(
+        cls,
+        t_room: float,
+        t_floor: float,
+        q_heat_th_kw: float,
+        q_gain_room_kw: float,
+        t_out: float,
+        ua_kw_per_k: float,
+        step_hours: float,
+        floor_share: Optional[float] = None
+    ) -> Tuple[float, float]:
+        """
+        Advances the floor/room network with a fixed heat input over step_hours; returns (t_room, t_floor).
+        q_gain_room_kw are the gains entering the room node (internal + solar). The state is never rounded.
+        """
+        f = cls.FLOOR_HEAT_SHARE if floor_share is None else floor_share
+        n_sub = max(1, math.ceil(step_hours / cls.SUBSTEP_HOURS - 1e-9))
+        h = step_hours / n_sub
+        for _ in range(n_sub):
+            q_floor_to_room = (t_floor - t_room) / cls.R_FLOOR_ROOM_K_PER_KW
+            q_loss = ua_kw_per_k * max(0.0, t_room - t_out)
+            t_floor += (f * q_heat_th_kw - q_floor_to_room) / cls.C_FLOOR_KWH_PER_K * h
+            t_room += (q_floor_to_room + (1.0 - f) * q_heat_th_kw + q_gain_room_kw - q_loss) / cls.C_ROOM_KWH_PER_K * h
+        return t_room, t_floor
+
+    @classmethod
+    def _simulate_slot(
+        cls,
+        t_room: float,
+        t_floor: float,
+        heating_allowed: bool,
+        setpoint_c: float,
+        q_gain_room_kw: float,
+        t_out: float,
+        ua_kw_per_k: float,
+        step_hours: float
+    ) -> Tuple[float, float, float]:
+        """One slot with the Daikin in the loop (re-evaluated every sub-step); returns (t_room, t_floor, mean Q_th)."""
+        n_sub = max(1, math.ceil(step_hours / cls.SUBSTEP_HOURS - 1e-9))
+        h = step_hours / n_sub
+        q_sum = 0.0
+        for _ in range(n_sub):
+            q = cls.daikin_heat_output_kw(t_out, setpoint_c, t_room, t_floor) if heating_allowed else 0.0
+            q_sum += q
+            t_room, t_floor = cls._advance_thermal_state(t_room, t_floor, q, q_gain_room_kw, t_out, ua_kw_per_k, h)
+        return t_room, t_floor, q_sum / n_sub
 
     @classmethod
     def calculate_carnot_cop(cls, outdoor_temp_c: float, flow_temp_c: float = 35.0) -> float:
-        """Calculates temperature-dependent Carnot COP with empirical scaling via models.physics."""
+        """Legacy Carnot-scaled COP (models.physics). The planner uses calculate_cop (measured)."""
         from models.physics import calculate_carnot_cop as _calc_cop
         return _calc_cop(outdoor_temp_c, flow_temp_c=flow_temp_c, carnot_efficiency=cls.CARNOT_EFFICIENCY)
 
@@ -137,68 +282,131 @@ class SpaceHeatingPolicy:
         cls,
         price_eur: float,
         cop: float,
-        solar_kw: float = 0.0
+        solar_kw: float = 0.0,
+        unallocated_kw: float = 0.0,
+        export_price_eur: Optional[float] = None,
+        tariff_provider: Optional[Any] = None,
     ) -> float:
         """
         Calculates effective cost per thermal kWh (€/kWh_th = Price_eff / COP).
-        Solar surplus power has a lower opportunity cost (feed-in tariff ~€0.07/kWh).
+        1. Subtracts the dynamic household unallocated load (sluip-/overig verbruik) first:
+           surplus_kw = max(0.0, solar_kw - unallocated_kw)
+        2. Values the fraction of modulated heat pump demand (MOD_FLOOR_REF_10C_W) covered by
+           net solar surplus at the dynamic EPEX export price via calculate_slot_financials.
         """
-        effective_price = price_eur
-        if solar_kw >= 1.2:
-            effective_price = min(price_eur, 0.075)
-        elif solar_kw >= 0.5:
-            effective_price = min(price_eur, 0.12)
+        from layer3_scheduling.dhw_financials import calculate_slot_financials
+        p_ref_kw = max(0.50, cls.MOD_FLOOR_REF_10C_W / 1000.0)
+        if export_price_eur is not None:
+            surplus_kw = max(0.0, float(solar_kw) - max(0.0, float(unallocated_kw)))
+            solar_share = min(1.0, surplus_kw / p_ref_kw)
+            effective_price = solar_share * float(export_price_eur) + (1.0 - solar_share) * price_eur
+        else:
+            _, _, _, effective_price = calculate_slot_financials(
+                solar_kw=max(0.0, float(solar_kw)),
+                unalloc_kw=max(0.0, float(unallocated_kw)),
+                el_demand_kw=p_ref_kw,
+                price_all_in=price_eur,
+                step_hours=0.25,
+                tariff_provider=tariff_provider,
+            )
 
         return round(effective_price / max(1.0, cop), 4)
 
+    # ------------------------------------------------------------------ planning
     @classmethod
-    def _is_buffer_needed_for_peak(
+    def _rollout(
         cls,
-        current_slot: int,
-        t_room_cur: float,
-        t_floor_cur: float,
-        outdoor_temps_c: List[float],
-        solar_kw: List[float],
-        dynamic_peaks: List[Dict[str, Any]],
-        min_comfort_room_c: float,
-        step_hours: float = 0.25,
-        wind_speeds_ms: Optional[List[float]] = None
-    ) -> bool:
+        t_room0: float,
+        t_floor0: float,
+        allowed: List[bool],
+        setpoints: List[float],
+        gains: List[float],
+        outdoor: List[float],
+        ua: List[float],
+        step_hours: float,
+        soft: Optional[List[bool]] = None,
+        dhw_slots: Optional[Set[int]] = None,
+        thermal_costs: Optional[List[float]] = None,
+        max_bridge_ratio: Optional[float] = None,
+    ) -> Tuple[List[float], List[float], List[float]]:
         """
-        Model Predictive Control (MPC) check:
-        Simulates passive building coasting (zero heating) from current_slot through the upcoming peak.
-        Returns True if unheated passive temperature drops below min_comfort_room_c during the peak.
+        Simulates the horizon; returns room and floor temperature at the START of every slot and mean Q_th.
+        Enforces the Madoka -0.5 K autonomous start hysteresis: once the heat pump is off (above setpoint,
+        after a pre-heat, or after a lockout), it only turns on autonomously when T_room drops to
+        setpoint - MIN_COMFORT_DELTA_C (-0.5 K), or when Open HEMS actively commands a pre-heat (+1.0 K).
+        Ongoing runs are allowed to modulate through advised_off, and across a post-preheat bridge block when
+        the thermal cost is cheaper or within max_bridge_ratio (default 1.25 = +25% marginal cost).
         """
-        for peak in dynamic_peaks:
-            p_start = peak.get("start_idx", 0)
-            p_end = peak.get("end_idx", p_start)
-            # Only evaluate if we are in the preheat runway before this peak (up to 3.5h before)
-            if current_slot < p_start and (p_start - current_slot) <= int(3.5 / step_hours):
-                t_r = t_room_cur
-                t_f = t_floor_cur
-                act_p = cls.get_active_parameters()
-                ua_base = act_p["ua_kw_per_k"]
-                c_wind = act_p.get("c_wind_kw_per_k_ms", cls.WIND_INFILTRATION_COEFF_KW_PER_K_PER_MS)
-                c_solar = act_p.get("c_solar_passive", cls.SOLAR_GAIN_COEFFICIENT)
-                c_floor = act_p.get("floor_capacity_kwh_per_k", cls.C_FLOOR_KWH_PER_K)
-                for step_idx in range(current_slot, p_end + 1):
-                    if step_idx >= len(outdoor_temps_c):
-                        break
-                    t_out = outdoor_temps_c[step_idx]
-                    v_wind = wind_speeds_ms[step_idx] if (wind_speeds_ms and step_idx < len(wind_speeds_ms)) else 0.0
-                    effective_ua = ua_base + c_wind * max(0.0, v_wind - 2.0)
-                    q_loss = effective_ua * max(0.0, t_r - t_out)
-                    q_solar = c_solar * solar_kw[step_idx]
-                    r_fl = cls.R_FLOOR_AIR_K_PER_KW if t_f >= t_r else 2.75
-                    q_fl = (t_f - t_r) / r_fl
-                    dt_f = ((-q_fl) / c_floor) * step_hours
-                    dt_r = ((q_fl + q_solar - q_loss) / cls.C_AIR_KWH_PER_K) * step_hours
-                    t_f += dt_f
-                    t_r += dt_r
-                    # If temperature dips below comfort during the peak lockout:
-                    if step_idx >= p_start and t_r < min_comfort_room_c:
-                        return True
-        return False
+        rooms, floors, heats = [], [], []
+        t_r, t_f = t_room0, t_floor0
+        base_sp = min(setpoints) if setpoints else cls.TARGET_ROOM_TEMP_C
+        start_thresh = round(base_sp - cls.MIN_COMFORT_DELTA_C, 2)
+        is_running = (t_r <= base_sp + 0.15)
+        active_preheat_sp = base_sp + cls.PREHEAT_OFFSET_C
+        bridge_ratio = cls.MAX_BRIDGE_COST_PREMIUM_RATIO if max_bridge_ratio is None else max_bridge_ratio
+        mean_tc = (sum(thermal_costs) / max(1, len(thermal_costs))) if thermal_costs else 0.0
+        seen_hard_lockout = False
+        for i in range(len(outdoor)):
+            rooms.append(t_r)
+            floors.append(t_f)
+            sp = setpoints[i]
+            is_pre = sp > base_sp + 0.1
+            was_pre = (i > 0 and setpoints[i - 1] > base_sp + 0.1)
+            if not allowed[i]:
+                # 3-way valve pause for DHW preserves the Madoka room thermostat latch; hard lockout resets it
+                if not (dhw_slots and i in dhw_slots):
+                    is_running = False
+                    seen_hard_lockout = True
+            elif is_pre:
+                safety_ceiling = min(
+                    cls.MAX_PREHEAT_SAFETY_TEMP_C,
+                    round(base_sp + cls.MAX_PREHEAT_DELTA_ABOVE_BASE_C, 1)
+                )
+                if not was_pre:
+                    # Match Layer 4 RoomThermostatBufferController: elevate at least +1.0 K above current room temp,
+                    # capped at baseline + 3.0 K (e.g. 23.5 C at 20.5 C base, 17.0 C at 14.0 C vacation).
+                    active_preheat_sp = min(safety_ceiling, round(max(sp, t_r + cls.PREHEAT_OFFSET_C), 1))
+                sp = active_preheat_sp
+                is_running = (
+                    (t_r < sp)
+                    and (t_f < cls.MAX_PREHEAT_FLOOR_TEMP_C)
+                    and (t_r + cls.PREHEAT_OFFSET_C <= safety_ceiling + 0.25)
+                )
+            else:
+                if was_pre and t_r >= base_sp:
+                    can_bridge_financially = (
+                        thermal_costs is not None
+                        and i < len(thermal_costs)
+                        and thermal_costs[i] <= mean_tc * bridge_ratio
+                        and t_f < cls.MAX_PREHEAT_FLOOR_TEMP_C - 0.5
+                    )
+                    if not can_bridge_financially:
+                        is_running = False
+                if not is_running:
+                    # During advised_off (soft peak shoulder), avoid cold-starting a new run unless comfort is genuinely threatened
+                    in_soft = bool(soft and i < len(soft) and soft[i])
+                    eff_thresh = (start_thresh - 0.15) if in_soft else start_thresh
+                    lookahead_h = (2.5 * step_hours) if (seen_hard_lockout and not in_soft) else step_hours
+                    t_r_unh, _ = cls._advance_thermal_state(t_r, t_f, 0.0, gains[i], outdoor[i], ua[i], lookahead_h)
+                    if t_r <= eff_thresh + 0.03 or t_r_unh <= eff_thresh + 0.03:
+                        is_running = True
+            t_r, t_f, q = cls._simulate_slot(t_r, t_f, (is_running and allowed[i]), sp, gains[i], outdoor[i], ua[i], step_hours)
+            heats.append(q)
+        return rooms, floors, heats
+
+    @staticmethod
+    def _hard_lockout_blocks(hard: List[bool]) -> List[Tuple[int, int]]:
+        blocks, i = [], 0
+        while i < len(hard):
+            if hard[i]:
+                j = i
+                while j + 1 < len(hard) and hard[j + 1]:
+                    j += 1
+                blocks.append((i, j))
+                i = j + 1
+            else:
+                i += 1
+        return blocks
 
     @classmethod
     def plan_space_heating(
@@ -213,300 +421,321 @@ class SpaceHeatingPolicy:
         target_room_temp_c: Optional[float] = None,
         wind_speeds_ms: Optional[List[float]] = None,
         is_heating_enabled: bool = True,
-        step_hours: float = 0.25
+        step_hours: float = 0.25,
+        slot_lockout_map: Optional[Dict[int, Dict[str, Any]]] = None,
+        slot_datetimes: Optional[List[datetime]] = None,
+        solar_radiation_w_m2: Optional[List[float]] = None,
+        thermostat_setpoint_c: Optional[float] = None,
+        is_buffering: bool = False,
+        unallocated_kw: Optional[List[float]] = None,
+        tariff_provider: Optional[Any] = None,
     ) -> SpaceHeatingPlanSummary:
         """
-        Computes 24h space heating dispatch with 2R1C thermal floor buffering.
+        Plans space heating over the horizon with the Daikin in the loop.
+
+        slot_lockout_map: per-slot peak entries from detect_dynamic_price_peaks (is_hard_lockout is
+          True only inside the ≤150 min crest). When omitted it is rebuilt from the peak objects.
+        solar_radiation_w_m2: forecast global horizontal irradiance per slot; when omitted it is
+          approximated from solar_kw.
         """
         n_slots = len(outdoor_temps_c)
+        act_p = cls.get_active_parameters()
         mean_outdoor = sum(outdoor_temps_c) / n_slots if n_slots > 0 else 15.0
 
         target_room = round(target_room_temp_c, 1) if target_room_temp_c is not None else cls.TARGET_ROOM_TEMP_C
         min_comfort_room = round(target_room - cls.MIN_COMFORT_DELTA_C, 2)
         max_preheat_room = round(target_room + cls.MAX_PREHEAT_OVERSHOOT_C, 2)
-
-        # Check summer lockout and master enable status
         is_heating_season = (mean_outdoor < cls.SUMMER_LOCKOUT_OUTDOOR_C) and is_heating_enabled
 
-        # 1. Map dynamic peak lockouts
-        lockout_slot_map = {}
-        for peak in dynamic_peaks:
-            s_idx = peak.get("start_idx", 0)
-            e_idx = peak.get("end_idx", 0)
-            for idx in range(s_idx, min(n_slots, e_idx + 1)):
-                lockout_slot_map[idx] = peak
+        # 1. Per-slot peak lockouts (hard only inside the crest window)
+        if slot_lockout_map is not None:
+            lockout_slot_map = {k: v for k, v in slot_lockout_map.items() if 0 <= k < n_slots}
+        else:
+            lockout_slot_map = {}
+            for peak in dynamic_peaks:
+                s_idx = peak.get("start_idx", 0)
+                e_idx = peak.get("end_idx", 0)
+                hs_raw = peak.get("hard_start_idx")
+                he_raw = peak.get("hard_end_idx")
+                if hs_raw is None or he_raw is None:
+                    hs_raw, he_raw = s_idx, e_idx  # legacy peak object: the whole cluster is hard
+                hs, he = int(hs_raw), int(he_raw)
+                for idx in range(s_idx, min(n_slots, e_idx + 1)):
+                    entry = dict(peak)
+                    entry["is_hard_lockout"] = bool(peak.get("is_hard_lockout")) and hs >= 0 and hs <= idx <= he
+                    lockout_slot_map[idx] = entry
+        hard = [bool(lockout_slot_map.get(i, {}).get("is_hard_lockout")) for i in range(n_slots)]
+        soft = [(i in lockout_slot_map) and not hard[i] for i in range(n_slots)]
+        dhw = set(active_dhw_slots)
 
-        # 2. Compute COP and thermal cost for every slot
-        slot_cops = [cls.calculate_carnot_cop(outdoor_temps_c[i], cls.FLOW_TEMP_CV_C) for i in range(n_slots)]
+        # 2. Exogenous inputs per slot
+        ua_slots = []
+        gains = []
+        for i in range(n_slots):
+            v_wind = wind_speeds_ms[i] if (wind_speeds_ms and i < len(wind_speeds_ms)) else 0.0
+            ua_slots.append(act_p["ua_kw_per_k"] + act_p["c_wind_kw_per_k_ms"] * max(0.0, v_wind - 2.0))
+            if solar_radiation_w_m2 is not None and i < len(solar_radiation_w_m2):
+                ghi_kw_m2 = max(0.0, solar_radiation_w_m2[i]) / 1000.0
+            else:
+                ghi_kw_m2 = max(0.0, solar_kw[i]) / cls.PV_KW_PER_KW_M2_GHI
+            gains.append(cls.INTERNAL_GAINS_KW + cls.SOLAR_APERTURE_M2 * ghi_kw_m2)
+        cops = [cls.calculate_cop(t) for t in outdoor_temps_c]
         thermal_costs = [
-            cls.calculate_thermal_cost(prices_eur[i], slot_cops[i], solar_kw[i])
+            cls.calculate_thermal_cost(
+                prices_eur[i],
+                cops[i],
+                solar_kw[i],
+                unallocated_kw=(unallocated_kw[i] if (unallocated_kw and i < len(unallocated_kw)) else 0.0),
+                tariff_provider=tariff_provider,
+            )
             for i in range(n_slots)
         ]
 
-        # 3. Identify strategic buffer / pre-heat windows
-        preheat_candidate_slots = set()
-        if is_heating_season:
-            for peak in dynamic_peaks:
-                p_start = peak.get("start_idx", 0)
-                # Ensure the 2.5 - 3.0 hours immediately preceding the peak are buffered
-                runway_slots = int(3.0 / step_hours)
-                for idx in range(max(0, p_start - runway_slots), p_start):
-                    if idx not in active_dhw_slots and idx not in lockout_slot_map:
-                        preheat_candidate_slots.add(idx)
+        t_room0 = current_room_temp_c if current_room_temp_c is not None else target_room
+        t_floor0 = current_floor_temp_c if current_floor_temp_c is not None else t_room0 + (1.5 if is_heating_season else -0.2)
+        allowed = [is_heating_season and not hard[i] and i not in dhw for i in range(n_slots)]
+        preheat = [False] * n_slots
 
-                # In addition, include daytime solar surplus slots before the peak
-                earlier_lookback = int(6.0 / step_hours)
-                window_start = max(0, p_start - earlier_lookback)
-                for idx in range(window_start, max(0, p_start - runway_slots)):
-                    if idx not in active_dhw_slots and idx not in lockout_slot_map:
-                        if solar_kw[idx] >= 1.0 or thermal_costs[idx] <= 0.05:
-                            preheat_candidate_slots.add(idx)
+        def setpoints_for(pre: List[bool]) -> List[float]:
+            return [target_room + (cls.PREHEAT_OFFSET_C if pre[i] else 0.0) for i in range(n_slots)]
 
-            # Also evaluate cheap night valley slots (02:00 - 05:30) before morning wake-up
-            min_night_cost = min([thermal_costs[idx] for idx in range(min(n_slots, 24))] or [0.06])
-            for idx in range(min(n_slots, 24)):
-                slot_in_day = idx % 96
-                if 8 <= slot_in_day <= 22:  # 02:00 to 05:30
-                    if thermal_costs[idx] <= min_night_cost + 0.015:
-                        preheat_candidate_slots.add(idx)
+        mean_th_cost = sum(thermal_costs) / max(1, n_slots)
+        max_bridge_ratio = act_p.get("max_bridge_cost_premium_ratio", cls.MAX_BRIDGE_COST_PREMIUM_RATIO)
 
-        # 4. Simulate 2R1C thermal model slot by slot with Inverter Run State Machine
-        t_room = current_room_temp_c if current_room_temp_c is not None else target_room
-        t_floor = current_floor_temp_c if current_floor_temp_c is not None else (t_room - 0.2 if not is_heating_season else t_room + 1.2)
+        def evaluate(pre: List[bool], block: Tuple[int, int]) -> Tuple[float, Tuple[List[float], List[float], List[float]]]:
+            sim = cls._rollout(
+                t_room0, t_floor0, allowed, setpoints_for(pre), gains, outdoor_temps_c, ua_slots, step_hours,
+                soft=soft, dhw_slots=dhw, thermal_costs=thermal_costs, max_bridge_ratio=max_bridge_ratio
+            )
+            rooms, floors, heats = sim
+            if n_slots > 0:
+                t_r_end, t_f_end = cls._advance_thermal_state(
+                    rooms[-1], floors[-1], heats[-1], gains[-1], outdoor_temps_c[-1], ua_slots[-1], step_hours
+                )
+                e_end = cls.C_ROOM_KWH_PER_K * t_r_end + cls.C_FLOOR_KWH_PER_K * t_f_end
+            else:
+                e_end = 0.0
+            cost = sum(thermal_costs[i] * heats[i] * step_hours for i in range(n_slots)) - mean_th_cost * e_end
+            b0, b1 = block
+            recovery_end = min(n_slots, b1 + int(round(6.0 / step_hours)))
+            has_deficit = False
+            for i in range(b0, recovery_end):
+                deficit = min_comfort_room - rooms[i]
+                if deficit > 0:
+                    has_deficit = True
+                    cost += cls.COMFORT_PENALTY_EUR_PER_KH * deficit * step_hours
+            if has_deficit:
+                cost += 0.50
+            overheat_lookback = int(round(6.0 / step_hours))
+            safety_room_cap = min(
+                cls.MAX_PREHEAT_SAFETY_TEMP_C,
+                round(target_room + cls.MAX_PREHEAT_DELTA_ABOVE_BASE_C, 2)
+            )
+            preheat_overheated = any(
+                (rooms[i] > safety_room_cap + 0.05)
+                or (rooms[i] > max_preheat_room + 0.05 and floors[i] >= cls.MAX_PREHEAT_FLOOR_TEMP_C - 1.5)
+                for i in range(n_slots)
+                if any(pre[max(0, i - overheat_lookback):i + 1])
+            )
+            if max(floors) > cls.MAX_FLOOR_TEMP_C or preheat_overheated:
+                cost += 1e3
+            return cost, sim
 
-        # Inverter state machine
-        is_running = False
-        run_duration_slots = 0
-        is_preheat_active = False
+        # 3. Pre-heat decision per peak/evening block: cheapest of "none" and 1-4 h of setpoint offset
+        #    (sliding up to 4 h ahead of the block or ahead of its soft shoulder to capture midday solar/COP).
+        if is_heating_season and n_slots > 0:
+            target_blocks = list(cls._hard_lockout_blocks(hard))
+            for s0_blk, s1_blk in cls._hard_lockout_blocks(soft):
+                if not any(not (s1_blk < hb0 - 1 or s0_blk > hb1 + 1) for hb0, hb1 in target_blocks):
+                    target_blocks.append((s0_blk, s1_blk))
+            if (not target_blocks
+                    and slot_datetimes is None
+                    and max(thermal_costs) - min(thermal_costs) >= 0.008):
+                eve_start = int(16 / step_hours)
+                eve_end = min(n_slots - 1, int(20 / step_hours))
+                if eve_start < n_slots:
+                    target_blocks.append((eve_start, eve_end))
+            target_blocks.sort()
 
+            for b0, b1 in target_blocks:
+                s0 = b0
+                while s0 > 0 and soft[s0 - 1]:
+                    s0 -= 1
+                best_pre = list(preheat)
+                best_cost, (base_rooms, _, base_heats) = evaluate(preheat, (b0, b1))
+                base_cost = best_cost
+                # Skip pre-heating for this block if no heating occurs in the block + 8h recovery window and comfort already holds
+                local_check_end = min(n_slots, b1 + int(round(8.0 / step_hours)))
+                check_slice = base_rooms[b0:local_check_end]
+                if sum(base_heats[s0:local_check_end]) <= 1e-6 and (not check_slice or min(check_slice) >= min_comfort_room):
+                    continue
+                # Pre-heat should end at or before s0 (avoiding the advised_off / soft shoulder),
+                # so 'geadviseerd uit' does not collide with 'geadviseerd aan' unless strictly necessary for comfort.
+                comfort_violated = (not check_slice or min(check_slice) < min_comfort_room)
+                end_candidates = sorted({
+                    e for e in (
+                        [s0]
+                        + [s0 - int(round(g / step_hours)) for g in cls.PREHEAT_LEAD_GAP_HOURS]
+                        + ([b0] if (comfort_violated or s0 == b0) else [])
+                    ) if 0 < e <= b0
+                })
+                for end_slot in end_candidates:
+                    for hours in cls.PREHEAT_CANDIDATE_HOURS[1:]:
+                        dur_slots = int(round(hours / step_hours))
+                        cand = list(preheat)
+                        collected = 0
+                        idx = end_slot - 1
+                        max_lookback = dur_slots + len(dhw)
+                        while idx >= 0 and collected < dur_slots and (end_slot - idx) <= max_lookback:
+                            if idx in dhw:
+                                idx -= 1
+                                continue
+                            if not allowed[idx] or (soft[idx] and not (end_slot == b0 and s0 == 0)):
+                                break
+                            cand[idx] = True
+                            collected += 1
+                            idx -= 1
+                        if cand == preheat:
+                            continue
+                        c, _ = evaluate(cand, (b0, b1))
+                        if c < best_cost:
+                            best_pre, best_cost = cand, c
+                        # Financial bridge candidate: if cand ends before s0 and the intermediate block (end_slot..s0)
+                        # has an average thermal cost <= max_bridge_ratio (e.g. 1.25x) of mean_th_cost, also evaluate
+                        # holding the run continuously across that block to prevent pre-peak cooling.
+                        if end_slot < s0 and (s0 - end_slot) <= int(round(3.0 / step_hours)):
+                            bridge_slots = [k for k in range(end_slot, s0) if allowed[k] and not soft[k]]
+                            if bridge_slots:
+                                bridge_avg_cost = sum(thermal_costs[k] for k in bridge_slots) / len(bridge_slots)
+                                if bridge_avg_cost <= mean_th_cost * max_bridge_ratio:
+                                    cand_bridged = list(cand)
+                                    for k in bridge_slots:
+                                        cand_bridged[k] = True
+                                    cb, _ = evaluate(cand_bridged, (b0, b1))
+                                    if cb < best_cost:
+                                        best_pre, best_cost = cand_bridged, cb
+                if base_cost - best_cost >= cls.PREHEAT_MIN_SAVING_EUR:
+                    preheat = best_pre
+
+        rooms, floors, heats = cls._rollout(
+            t_room0, t_floor0, allowed, setpoints_for(preheat), gains,
+            outdoor_temps_c, ua_slots, step_hours,
+            soft=soft, dhw_slots=dhw, thermal_costs=thermal_costs, max_bridge_ratio=max_bridge_ratio
+        )
+
+        # 4. Slot results
         slot_results: List[SpaceHeatingSlotResult] = []
         total_kwh_el = 0.0
         total_kwh_th = 0.0
         preheat_slots_count = 0
         lockout_slots_count = 0
-
+        run_slot_idx = 0
+        thermo_off_kw = act_p.get("thermo_off_cutoff_w", cls.THERMO_OFF_CUTOFF_W) / 1000.0
+        thermo_off_margin_c = act_p.get("thermo_off_room_margin_c", cls.THERMO_OFF_ROOM_MARGIN_C)
         for i in range(n_slots):
-            t_room_slot = t_room
-            t_floor_slot = t_floor
-            t_out = outdoor_temps_c[i]
-            cop = slot_cops[i]
-            c_th = thermal_costs[i]
+            q_th_raw = heats[i]
+            cop = cops[i]
+            p_raw = q_th_raw / cop if cop > 0 and q_th_raw > 0 else 0.0
 
-            # Instantaneous building heat loss with wind infiltration correction
-            v_wind = wind_speeds_ms[i] if (wind_speeds_ms and i < len(wind_speeds_ms)) else 0.0
-            act_p = cls.get_active_parameters()
-            c_wind = act_p.get("c_wind_kw_per_k_ms", cls.WIND_INFILTRATION_COEFF_KW_PER_K_PER_MS)
-            c_solar = act_p.get("c_solar_passive", cls.SOLAR_GAIN_COEFFICIENT)
-            c_floor = act_p.get("floor_capacity_kwh_per_k", cls.C_FLOOR_KWH_PER_K)
-
-            effective_ua = act_p["ua_kw_per_k"] + c_wind * max(0.0, v_wind - 2.0)
-            q_loss = effective_ua * max(0.0, t_room - t_out)
-            # Passive window solar thermal gain
-            q_solar_gain = c_solar * solar_kw[i]
-
-            # Check constraints
-            is_dhw_running = (i in active_dhw_slots)
-            peak_info = lockout_slot_map.get(i)
-            is_hard_lockout = peak_info and peak_info.get("is_hard_lockout")
-
-            heating_el = 0.0
-            mode_code = "normal"
-            is_preheat = False
-            is_lockout = False
+            # Thermo-off cutoff: negligible drive below cutoff when room is comfortably at or above setpoint
+            if p_raw < thermo_off_kw and rooms[i] >= target_room - thermo_off_margin_c and not preheat[i]:
+                run_slot_idx = 0
+                heating_el = 0.0
+                q_th = 0.0
+            elif p_raw > 0.0:
+                run_slot_idx += 1
+                heating_el = cls.calculate_run_power_kw(
+                    outdoor_temps_c[i], slot_in_run=run_slot_idx, q_drive_th_kw=q_th_raw, params=act_p
+                )
+                q_th = heating_el * cop
+            else:
+                run_slot_idx = 0
+                heating_el = 0.0
+                q_th = 0.0
 
             if not is_heating_season:
-                is_running = False
-                run_duration_slots = 0
-                heating_el = 0.0
                 mode_code = "normal"
-            elif is_dhw_running:
-                # Hydraulic interlock: CV completely paused during DHW heating
-                is_running = False
-                run_duration_slots = 0
-                heating_el = 0.0
-                mode_code = "forced_on"  # DHW has precedence
-            elif is_hard_lockout:
-                # Hard peak lockout: Compressor forced off for CV (SG1)
-                is_running = False
-                run_duration_slots = 0
-                heating_el = 0.0
+            elif i in dhw:
+                mode_code = "forced_on"  # DHW has precedence; CV paused
+            elif hard[i]:
                 mode_code = "forced_off"
-                is_lockout = True
+                lockout_slots_count += 1
+            elif preheat[i]:
+                mode_code = "advised_on"
+                preheat_slots_count += 1
+            elif soft[i]:
+                mode_code = "advised_off"  # SG2 normal for the Daikin; shown as soft advice
                 lockout_slots_count += 1
             else:
-                # Normal or Pre-heat window: evaluate state transitions
-                is_soft_advice = bool(peak_info and not is_hard_lockout)
-                if not is_running:
-                    # Can we trigger a new run?
-                    # During soft advice (P75 elevated price), avoid triggering on mild dips;
-                    # only trigger if room temperature approaches the true comfort boundary!
-                    if is_soft_advice:
-                        comfort_trigger = (t_room <= min_comfort_room)
-                    else:
-                        comfort_trigger = (t_room <= target_room - 0.35)
-
-                    # Model Predictive Control (MPC) Pre-heat condition:
-                    # Pure physical deficit buffer: unheated coasting would violate comfort during upcoming peak
-                    needs_deficit_buffer = cls._is_buffer_needed_for_peak(
-                        i, t_room, t_floor, outdoor_temps_c, solar_kw, dynamic_peaks, min_comfort_room, step_hours, wind_speeds_ms
-                    )
-
-                    if needs_deficit_buffer and not is_soft_advice:
-                        preheat_allowed = (t_room < max_preheat_room)
-                    else:
-                        preheat_allowed = False
-
-                    # Guarantee preheat runway: never start an orphan micro-run (< 1 hour) before a lockout or DHW run
-                    min_runway_slots = int(1.0 / step_hours)  # 4 slots = 1 hour
-                    has_preheat_runway = all(
-                        (idx not in lockout_slot_map and idx not in active_dhw_slots)
-                        for idx in range(i, min(n_slots, i + min_runway_slots))
-                    )
-
-                    preheat_trigger = (
-                        i in preheat_candidate_slots and
-                        t_floor < cls.MAX_FLOOR_TEMP_C and
-                        preheat_allowed and
-                        has_preheat_runway
-                    )
-
-                    if comfort_trigger or preheat_trigger:
-                        is_running = True
-                        run_duration_slots = 1
-                        is_preheat_active = preheat_trigger and not comfort_trigger
-                else:
-                    # We are currently running. Check if we should shut off:
-                    if run_duration_slots >= cls.MIN_RUN_SLOTS:
-                        # Minimum run commitment (2.0h) satisfied:
-                        if is_preheat_active:
-                            if t_room >= max_preheat_room or t_floor >= cls.MAX_FLOOR_TEMP_C:
-                                is_running = False
-                                run_duration_slots = 0
-                                is_preheat_active = False
-                            else:
-                                run_duration_slots += 1
-                        else:
-                            if is_soft_advice and t_room >= min_comfort_room + 0.15:
-                                is_running = False
-                                run_duration_slots = 0
-                            elif t_room >= target_room:
-                                is_running = False
-                                run_duration_slots = 0
-                            else:
-                                run_duration_slots += 1
-                    else:
-                        run_duration_slots += 1
-
-                # If running, calculate modulating power
-                if is_running:
-                    if peak_info and not is_hard_lockout:
-                        # Soft peak: clamp to modulation floor
-                        heating_el = cls.MODULATION_FLOOR_KW_EL
-                        mode_code = "advised_off"
-                        is_lockout = True
-                        lockout_slots_count += 1
-                    else:
-                        heating_el = cls.calculate_modulating_power(
-                            t_out,
-                            run_slot_idx=run_duration_slots,
-                            is_preheat=is_preheat_active
-                        )
-                        if is_preheat_active:
-                            mode_code = "advised_on"
-                            is_preheat = True
-                            preheat_slots_count += 1
-                        else:
-                            mode_code = "normal"
-                else:
-                    heating_el = 0.0
-                    mode_code = "normal"
-
-            # Thermal heat delivered into the floor
-            q_heat_th = heating_el * cop
-
-            # Advance 2R1C model
-            # Downward heat transfer (warm room air above cooler floor) is convection-suppressed (h ~ 2.5 W/m2K)
-            if t_floor >= t_room:
-                r_floor_air = cls.R_FLOOR_AIR_K_PER_KW
-            else:
-                r_floor_air = 2.75  # ~0.36 kW/K downward thermal resistance for ~145 m2
-            q_floor_to_room = (t_floor - t_room) / r_floor_air
-            dt_floor = ((q_heat_th - q_floor_to_room) / c_floor) * step_hours
-            dt_room = ((q_floor_to_room + q_solar_gain - q_loss) / cls.C_AIR_KWH_PER_K) * step_hours
-
-            t_floor = round(t_floor + dt_floor, 2)
-            t_room = round(t_room + dt_room, 2)
-
+                mode_code = "normal"
+            q_loss = ua_slots[i] * max(0.0, rooms[i] - outdoor_temps_c[i])
             total_kwh_el += heating_el * step_hours
-            total_kwh_th += q_heat_th * step_hours
-
+            total_kwh_th += q_th * step_hours
             slot_results.append(
                 SpaceHeatingSlotResult(
                     slot_idx=i,
-                    heating_kw_el=heating_el,
-                    heating_kw_th=round(q_heat_th, 2),
-                    cop=cop,
-                    room_temp_c=round(t_room_slot, 2),
-                    floor_temp_c=round(t_floor_slot, 2),
-                    heat_loss_kw=round(max(0.0, q_loss - q_solar_gain), 2),
+                    heating_kw_el=round(heating_el, 2),
+                    heating_kw_th=round(q_th, 2),
+                    cop=cops[i],
+                    room_temp_c=round(rooms[i], 2),
+                    floor_temp_c=round(floors[i], 2),
+                    heat_loss_kw=round(max(0.0, q_loss - gains[i]), 2),
                     mode_code=mode_code,
-                    is_preheat_active=is_preheat,
-                    is_lockout_active=is_lockout,
-                    cost_th_eur_per_kwh=c_th,
-                    outdoor_temp_c=round(t_out, 2)
+                    is_preheat_active=preheat[i] and is_heating_season,
+                    is_lockout_active=is_heating_season and (hard[i] or soft[i]),
+                    cost_th_eur_per_kwh=thermal_costs[i],
+                    outdoor_temp_c=round(outdoor_temps_c[i], 2)
                 )
             )
 
-        # Determine the first slot where active heating occurs
-        first_heat_idx = None
-        for i, s in enumerate(slot_results):
-            if s.heating_kw_el > 0.05:
-                first_heat_idx = i
-                break
-
-        unheated_room_temps = []
+        # 5. Counterfactual without heating from the first heated slot onwards,
+        #    plus a second counterfactual branching off at the start of the second heating run (if any).
+        first_heat_idx = next((i for i, s in enumerate(slot_results) if s.heating_kw_el > 0.05), None)
+        unheated_second_run_temps: List[Optional[float]] = [None] * n_slots
         if first_heat_idx is None:
-            # No heating occurs: unheated is 100% identical to the planned trajectory
             unheated_room_temps = [s.room_temp_c for s in slot_results]
         else:
-            # Before heating starts: unheated is 100% identical to the planned trajectory
-            for i in range(first_heat_idx):
-                unheated_room_temps.append(slot_results[i].room_temp_c)
-            # From first heating slot onwards: simulate passive cooling without heating
-            if first_heat_idx > 0:
-                t_r_unh = slot_results[first_heat_idx - 1].room_temp_c
-                t_f_unh = slot_results[first_heat_idx - 1].floor_temp_c
-            else:
-                t_r_unh = current_room_temp_c if current_room_temp_c is not None else target_room
-                t_f_unh = current_floor_temp_c if current_floor_temp_c is not None else t_r_unh
+            no_heat = [False] * n_slots
+            u_rooms, _, _ = cls._rollout(rooms[first_heat_idx], floors[first_heat_idx], no_heat,
+                                         setpoints_for([False] * n_slots), gains[first_heat_idx:] + [0.0] * first_heat_idx,
+                                         outdoor_temps_c[first_heat_idx:] + [0.0] * first_heat_idx,
+                                         ua_slots[first_heat_idx:] + [0.0] * first_heat_idx, step_hours)
+            unheated_room_temps = ([s.room_temp_c for s in slot_results[:first_heat_idx]]
+                                   + [round(t, 2) for t in u_rooms[:n_slots - first_heat_idx]])
 
-            for i in range(first_heat_idx, n_slots):
-                t_out = outdoor_temps_c[i]
-                v_wind = wind_speeds_ms[i] if (wind_speeds_ms and i < len(wind_speeds_ms)) else 0.0
-                act_p = cls.get_active_parameters()
-                eff_ua = act_p["ua_kw_per_k"] + cls.WIND_INFILTRATION_COEFF_KW_PER_K_PER_MS * max(0.0, v_wind - 2.0)
-                q_loss = eff_ua * max(0.0, t_r_unh - t_out)
-                q_solar = cls.SOLAR_GAIN_COEFFICIENT * solar_kw[i]
-                r_fl = cls.R_FLOOR_AIR_K_PER_KW if t_f_unh >= t_r_unh else 2.75
-                q_fl = (t_f_unh - t_r_unh) / r_fl
-                dt_f = ((-q_fl) / cls.C_FLOOR_KWH_PER_K) * step_hours
-                dt_r = ((q_fl + q_solar - q_loss) / cls.C_AIR_KWH_PER_K) * step_hours
-                t_f_unh = round(t_f_unh + dt_f, 2)
-                t_r_unh = round(t_r_unh + dt_r, 2)
-                unheated_room_temps.append(round(t_r_unh, 2))
+            first_gap_idx = next(
+                (i for i in range(first_heat_idx + 1, n_slots) if slot_results[i].heating_kw_el <= 0.05),
+                None
+            )
+            if first_gap_idx is not None:
+                second_heat_idx = next(
+                    (i for i in range(first_gap_idx + 1, n_slots) if slot_results[i].heating_kw_el > 0.05),
+                    None
+                )
+                if second_heat_idx is not None:
+                    u2_rooms, _, _ = cls._rollout(
+                        rooms[second_heat_idx], floors[second_heat_idx], no_heat,
+                        setpoints_for([False] * n_slots),
+                        gains[second_heat_idx:] + [0.0] * second_heat_idx,
+                        outdoor_temps_c[second_heat_idx:] + [0.0] * second_heat_idx,
+                        ua_slots[second_heat_idx:] + [0.0] * second_heat_idx,
+                        step_hours
+                    )
+                    anchor_idx = max(0, second_heat_idx - 1)
+                    unheated_second_run_temps = (
+                        [None] * anchor_idx
+                        + [slot_results[i].room_temp_c for i in range(anchor_idx, second_heat_idx)]
+                        + [round(t, 2) for t in u2_rooms[:n_slots - second_heat_idx]]
+                    )
 
-        # Compute Prediction Uncertainty Margin Funnel (P05 lower bound, P95 upper bound)
-        room_p05 = []
-        room_p95 = []
-        unh_p05 = []
-        unh_p95 = []
+        # Prediction uncertainty band (P05/P95)
+        room_p05, room_p95, unh_p05, unh_p95 = [], [], [], []
         for i, s in enumerate(slot_results):
             spread = 0.40 * (i / max(1, n_slots - 1)) ** 0.65
             room_p05.append(round(s.room_temp_c - spread, 2))
             room_p95.append(round(s.room_temp_c + spread, 2))
-            unh_t = unheated_room_temps[i]
-            unh_p05.append(round(unh_t - spread, 2))
-            unh_p95.append(round(unh_t + spread, 2))
+            unh_p05.append(round(unheated_room_temps[i] - spread, 2))
+            unh_p95.append(round(unheated_room_temps[i] + spread, 2))
 
         all_r_temps = [s.room_temp_c for s in slot_results]
         if not is_heating_enabled:
@@ -520,7 +749,7 @@ class SpaceHeatingPolicy:
             season_status_label=season_label,
             total_heating_kwh_el=round(total_kwh_el, 2),
             total_heating_kwh_th=round(total_kwh_th, 2),
-            average_cop=round(sum(slot_cops) / len(slot_cops), 2) if slot_cops else 4.2,
+            average_cop=round(total_kwh_th / total_kwh_el, 2) if total_kwh_el > 0 else (round(sum(cops) / len(cops), 2) if cops else 3.5),
             preheat_hours=round(preheat_slots_count * step_hours, 1),
             lockout_hours=round(lockout_slots_count * step_hours, 1),
             min_projected_room_temp_c=min(all_r_temps) if all_r_temps else target_room,
@@ -530,7 +759,11 @@ class SpaceHeatingPolicy:
             min_comfort_room_c=min_comfort_room,
             max_preheat_room_c=max_preheat_room,
             max_floor_temp_c=cls.MAX_FLOOR_TEMP_C,
+            thermostat_setpoint_c=round(thermostat_setpoint_c, 1) if thermostat_setpoint_c is not None else target_room,
+            baseline_comfort_temp_c=target_room,
+            is_buffering=is_buffering,
             unheated_room_temps_c=unheated_room_temps,
+            unheated_second_run_temps_c=unheated_second_run_temps,
             room_temps_p05_c=room_p05,
             room_temps_p95_c=room_p95,
             unheated_temps_p05_c=unh_p05,

@@ -1,0 +1,42 @@
+#!/bin/bash
+set -Eeuo pipefail
+
+# -----------------------------------------------------------------------------
+# UniFi OS Server Diagnostics & Health Check Tool
+# -----------------------------------------------------------------------------
+
+echo "=== UniFi OS Server Health & Diagnostics ==="
+echo "Date: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+echo "Host Architecture: $(uname -m)"
+echo "App Model: ${APP_MODEL:-UOSSERVER}"
+echo "App Version: ${APP_VERSION:-6.0.19}"
+echo ""
+
+echo "--- 1. Service Supervision Status ---"
+if command -v systemctl >/dev/null 2>&1; then
+    for svc in postgresql mongodb rabbitmq-server ulp-go unifi-core unifi nginx; do
+        status=$(systemctl is-active "$svc" 2>/dev/null || echo "unknown/inactive")
+        printf "  %-20s: %s\n" "$svc" "$status"
+    done
+else
+    echo "  systemctl command not found"
+fi
+echo ""
+
+echo "--- 2. Port Listen Status ---"
+if command -v ss >/dev/null 2>&1; then
+    for port in 11443 8080 3478 10003; do
+        if ss -tuln | grep -q ":$port "; then
+            printf "  Port %-6s : LISTENING\n" "$port"
+        else
+            printf "  Port %-6s : NOT LISTENING\n" "$port"
+        fi
+    done
+fi
+echo ""
+
+echo "--- 3. Storage & Persistence Mounts ---"
+df -h /data /data/uos_storage 2>/dev/null || true
+echo ""
+
+echo "=== Diagnostics Completed ==="

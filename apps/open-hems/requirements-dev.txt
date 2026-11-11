@@ -1,0 +1,8 @@
+-r requirements.txt
+pytest>=7.0.0
+pytest-asyncio
+mcp>=1.0.0
+pytz>=2024.1
+ruff>=0.1.0
+mypy>=1.0.0
+bandit>=1.7.0

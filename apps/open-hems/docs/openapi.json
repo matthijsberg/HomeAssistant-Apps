@@ -200,7 +200,78 @@
         ],
         "responses": {
           "200": {
-            "description": "Quarter-hourly schedule and flows dataset"
+            "description": "Quarter-hourly schedule and flows dataset with canonical plan slots, target temperatures, and battery summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "hours": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "labels": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "interval_h": {
+                      "type": "number"
+                    },
+                    "plan_slots": {
+                      "type": "array",
+                      "description": "Canonical dispatch slots with temperature targets and data quality",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "slot_idx": {
+                            "type": "integer"
+                          },
+                          "time": {
+                            "type": "string"
+                          },
+                          "target_temp_c": {
+                            "type": "number",
+                            "description": "Target temperature for active DHW or preheating slot"
+                          },
+                          "price_quality": {
+                            "type": "string",
+                            "enum": [
+                              "good",
+                              "forecast",
+                              "interpolated"
+                            ],
+                            "description": "Price provenance quality"
+                          }
+                        }
+                      }
+                    },
+                    "battery_summary": {
+                      "type": "object",
+                      "description": "Authoritative Priority 3 battery dispatch summary from canonical plan",
+                      "properties": {
+                        "is_simulation": {
+                          "type": "boolean",
+                          "description": "True if battery dispatch is a projected simulation"
+                        },
+                        "capacity_kwh": {
+                          "type": "number"
+                        },
+                        "max_charge_kw": {
+                          "type": "number"
+                        },
+                        "max_discharge_kw": {
+                          "type": "number"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -225,7 +296,7 @@
           "Models & Forecasts"
         ],
         "summary": "Get stored energy valuation for DHW and home battery",
-        "description": "Calculates the buying value and actual market value (vs current EPEX electricity price) for energy stored in DHW boilervat (usable above setpoint - 10°C) and home battery (usable above minimum SoC).",
+        "description": "Calculates the buying value and actual market value (vs current EPEX electricity price) for energy stored in DHW boilervat (usable above setpoint - 10\u00b0C) and home battery (usable above minimum SoC).",
         "responses": {
           "200": {
             "description": "Storage valuation successfully calculated",
@@ -279,7 +350,47 @@
         ],
         "responses": {
           "200": {
-            "description": "Battery dispatch schedule and state-of-charge trajectory"
+            "description": "Battery dispatch schedule, state-of-charge trajectory, and operational decision metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "decision": {
+                      "type": "object",
+                      "description": "Operational battery dispatch decision and provenance flags",
+                      "properties": {
+                        "is_active": {
+                          "type": "boolean",
+                          "description": "True if live battery hardware is active and controlled"
+                        },
+                        "is_simulation": {
+                          "type": "boolean",
+                          "description": "True if schedule is simulated rather than physical telemetry"
+                        },
+                        "inactive_reason": {
+                          "type": "string",
+                          "nullable": true,
+                          "description": "Reason for inactivity when is_active is false"
+                        }
+                      }
+                    },
+                    "battery_soc_trajectory": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      }
+                    },
+                    "battery_power_kw": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -290,7 +401,7 @@
           "Models & Forecasts"
         ],
         "summary": "Get DHW 350L thermal trajectory and daytime arbitrage",
-        "description": "Returns live tank temperature, simulated heated vs unheated trajectories, calibrated empirical startup transient and ramp rates (3.75 min/°C to 50°C, 4.30 min/°C in SG4 boost to 60°C), thermal demand in kWh_th and V40 equivalent liters, and 24h economic arbitrage decisions.",
+        "description": "Returns live tank temperature, simulated heated vs unheated trajectories, calibrated empirical startup transient and ramp rates (3.75 min/\u00b0C to 50\u00b0C, 4.30 min/\u00b0C in SG4 boost to 60\u00b0C), thermal demand in kWh_th and V40 equivalent liters, and 24h economic arbitrage decisions.",
         "parameters": [
           {
             "name": "resolution",
@@ -519,7 +630,38 @@
         ],
         "responses": {
           "200": {
-            "description": "Battery historical trajectory and power time-series"
+            "description": "Battery historical trajectory, power time-series, and what-if simulation provenance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "initial_soc_source": {
+                      "type": "string",
+                      "description": "Provenance source for initial SoC (e.g. telemetry, configured_default, simulation)"
+                    },
+                    "timestamps": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "soc_values": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      }
+                    },
+                    "power_kw": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -752,11 +894,128 @@
         "tags": [
           "System & Health"
         ],
-        "summary": "Get system settings including DHW comfort margin",
-        "description": "Returns active baseload, solar cost, and DHW optimizer comfort margin settings.",
+        "summary": "Get system settings including the DHW policy",
+        "description": "Returns the effective Daikin-first DHW policy settings (dhw_policy), the deprecated optimizer comfort margin (dhw_optimizer) and battery settings.",
         "responses": {
           "200": {
-            "description": "Active settings object"
+            "description": "Active settings object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "dhw_policy": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "engine": {
+                          "type": "string",
+                          "enum": [
+                            "daikin_first",
+                            "dp"
+                          ],
+                          "default": "daikin_first",
+                          "description": "daikin_first (ADR-006) of dp (oude optimizer met dynamische programmering, terugvaloptie tot WP5)."
+                        },
+                        "preheat_margin_c": {
+                          "type": "number",
+                          "minimum": 0.0,
+                          "maximum": 5.0,
+                          "default": 1.0,
+                          "description": "Voorverwarmen als het vat in een spitsblok onder 40 \u00b0C + deze marge dreigt te zakken."
+                        },
+                        "preheat_window_hours": {
+                          "type": "number",
+                          "minimum": 0.5,
+                          "maximum": 12.0,
+                          "default": 4.0,
+                          "description": "Venster v\u00f3\u00f3r de spits waarin het goedkoopste startmoment voor voorverwarmen wordt gekozen."
+                        },
+                        "boost_max_start_temp_c": {
+                          "type": "number",
+                          "minimum": 45.0,
+                          "maximum": 59.0,
+                          "default": 57.0,
+                          "description": "Niet doorstoken naar 60 \u00b0C als het vat al minstens zo warm is."
+                        },
+                        "boost_standby_factor": {
+                          "type": "number",
+                          "minimum": 0.0,
+                          "maximum": 0.5,
+                          "default": 0.05,
+                          "description": "Extra stilstandsverlies van een 60 \u00b0C-vat, als fractie van de warmteprijs."
+                        },
+                        "boost_margin_eur_per_kwh_th": {
+                          "type": "number",
+                          "minimum": 0.0,
+                          "maximum": 0.1,
+                          "default": 0.005,
+                          "description": "Minimaal voordeel per kWh warmte voor doorstoken (voorkomt pendelen)."
+                        },
+                        "advance_margin": {
+                          "type": [
+                            "number",
+                            "null"
+                          ],
+                          "minimum": 0.0,
+                          "maximum": 1.0,
+                          "default": 0.1,
+                          "description": "Vervroegen naar 50 \u00b0C als warmte nu deze fractie goedkoper is dan wanneer de Daikin zelf zou stoken; null = uit."
+                        },
+                        "advance_max_start_temp_c": {
+                          "type": "number",
+                          "minimum": 40.0,
+                          "maximum": 49.0,
+                          "default": 47.0,
+                          "description": "Alleen vervroegen als het vat hooguit zo warm is (geen korte runs)."
+                        },
+                        "free_price_eur_per_kwh": {
+                          "type": [
+                            "number",
+                            "null"
+                          ],
+                          "minimum": -1.0,
+                          "maximum": 0.1,
+                          "default": 0.0,
+                          "description": "Effectieve stroomprijs waaronder altijd naar 60 \u00b0C wordt gestookt; null = uit."
+                        },
+                        "sg4_release_hysteresis_c": {
+                          "type": "number",
+                          "minimum": 0.0,
+                          "maximum": 1.0,
+                          "default": 0.2,
+                          "description": "Een run is klaar bij doel min deze waarde."
+                        },
+                        "sg4_no_effect_timeout_min": {
+                          "type": "number",
+                          "minimum": 3.0,
+                          "maximum": 60.0,
+                          "default": 10.0,
+                          "description": "Geforceerd aan (Smart Grid-stand 4) loslaten als er zo lang geen tapwaterverwarming wordt gemeten."
+                        },
+                        "sg4_no_effect_cooldown_min": {
+                          "type": "number",
+                          "minimum": 0.0,
+                          "maximum": 240.0,
+                          "default": 60.0,
+                          "description": "Wachttijd na een run zonder effect voordat opnieuw geforceerd mag worden."
+                        }
+                      },
+                      "description": "Daikin-first tapwatersturing (ADR-006). GET geeft de effectieve waarden incl. standaardwaarden."
+                    },
+                    "dhw_optimizer": {
+                      "type": "object",
+                      "deprecated": true,
+                      "description": "Verouderd: comfortmarge van de oude optimizer (dynamische programmering); alleen gebruikt bij dhw_policy.engine = dp. Verdwijnt in WP5."
+                    },
+                    "battery": {
+                      "type": "object",
+                      "description": "Vermogenslimieten en boost-instellingen van de thuisbatterij."
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       },
@@ -764,14 +1023,251 @@
         "tags": [
           "System & Health"
         ],
-        "summary": "Update system settings including DHW comfort margin",
-        "description": "Updates baseload, solar cost, or DHW optimizer comfort margin mode and parameters.",
+        "summary": "Update system settings including the DHW policy",
+        "description": "Updates dhw_policy (strictly validated: unknown keys, out-of-range or invalid values return 400 and nothing is saved), the deprecated dhw_optimizer comfort margin, or battery settings. Triggers a background re-plan.",
         "responses": {
           "200": {
-            "description": "Updated settings object"
+            "description": "Updated settings object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "dhw_policy": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "engine": {
+                          "type": "string",
+                          "enum": [
+                            "daikin_first",
+                            "dp"
+                          ],
+                          "default": "daikin_first",
+                          "description": "daikin_first (ADR-006) of dp (oude optimizer met dynamische programmering, terugvaloptie tot WP5)."
+                        },
+                        "preheat_margin_c": {
+                          "type": "number",
+                          "minimum": 0.0,
+                          "maximum": 5.0,
+                          "default": 1.0,
+                          "description": "Voorverwarmen als het vat in een spitsblok onder 40 \u00b0C + deze marge dreigt te zakken."
+                        },
+                        "preheat_window_hours": {
+                          "type": "number",
+                          "minimum": 0.5,
+                          "maximum": 12.0,
+                          "default": 4.0,
+                          "description": "Venster v\u00f3\u00f3r de spits waarin het goedkoopste startmoment voor voorverwarmen wordt gekozen."
+                        },
+                        "boost_max_start_temp_c": {
+                          "type": "number",
+                          "minimum": 45.0,
+                          "maximum": 59.0,
+                          "default": 57.0,
+                          "description": "Niet doorstoken naar 60 \u00b0C als het vat al minstens zo warm is."
+                        },
+                        "boost_standby_factor": {
+                          "type": "number",
+                          "minimum": 0.0,
+                          "maximum": 0.5,
+                          "default": 0.05,
+                          "description": "Extra stilstandsverlies van een 60 \u00b0C-vat, als fractie van de warmteprijs."
+                        },
+                        "boost_margin_eur_per_kwh_th": {
+                          "type": "number",
+                          "minimum": 0.0,
+                          "maximum": 0.1,
+                          "default": 0.005,
+                          "description": "Minimaal voordeel per kWh warmte voor doorstoken (voorkomt pendelen)."
+                        },
+                        "advance_margin": {
+                          "type": [
+                            "number",
+                            "null"
+                          ],
+                          "minimum": 0.0,
+                          "maximum": 1.0,
+                          "default": 0.1,
+                          "description": "Vervroegen naar 50 \u00b0C als warmte nu deze fractie goedkoper is dan wanneer de Daikin zelf zou stoken; null = uit."
+                        },
+                        "advance_max_start_temp_c": {
+                          "type": "number",
+                          "minimum": 40.0,
+                          "maximum": 49.0,
+                          "default": 47.0,
+                          "description": "Alleen vervroegen als het vat hooguit zo warm is (geen korte runs)."
+                        },
+                        "free_price_eur_per_kwh": {
+                          "type": [
+                            "number",
+                            "null"
+                          ],
+                          "minimum": -1.0,
+                          "maximum": 0.1,
+                          "default": 0.0,
+                          "description": "Effectieve stroomprijs waaronder altijd naar 60 \u00b0C wordt gestookt; null = uit."
+                        },
+                        "sg4_release_hysteresis_c": {
+                          "type": "number",
+                          "minimum": 0.0,
+                          "maximum": 1.0,
+                          "default": 0.2,
+                          "description": "Een run is klaar bij doel min deze waarde."
+                        },
+                        "sg4_no_effect_timeout_min": {
+                          "type": "number",
+                          "minimum": 3.0,
+                          "maximum": 60.0,
+                          "default": 10.0,
+                          "description": "Geforceerd aan (Smart Grid-stand 4) loslaten als er zo lang geen tapwaterverwarming wordt gemeten."
+                        },
+                        "sg4_no_effect_cooldown_min": {
+                          "type": "number",
+                          "minimum": 0.0,
+                          "maximum": 240.0,
+                          "default": 60.0,
+                          "description": "Wachttijd na een run zonder effect voordat opnieuw geforceerd mag worden."
+                        }
+                      },
+                      "description": "Daikin-first tapwatersturing (ADR-006). GET geeft de effectieve waarden incl. standaardwaarden."
+                    },
+                    "dhw_optimizer": {
+                      "type": "object",
+                      "deprecated": true,
+                      "description": "Verouderd: comfortmarge van de oude optimizer (dynamische programmering); alleen gebruikt bij dhw_policy.engine = dp. Verdwijnt in WP5."
+                    },
+                    "battery": {
+                      "type": "object",
+                      "description": "Vermogenslimieten en boost-instellingen van de thuisbatterij."
+                    }
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "Validation error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "dhw_policy": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "engine": {
+                        "type": "string",
+                        "enum": [
+                          "daikin_first",
+                          "dp"
+                        ],
+                        "default": "daikin_first",
+                        "description": "daikin_first (ADR-006) of dp (oude optimizer met dynamische programmering, terugvaloptie tot WP5)."
+                      },
+                      "preheat_margin_c": {
+                        "type": "number",
+                        "minimum": 0.0,
+                        "maximum": 5.0,
+                        "default": 1.0,
+                        "description": "Voorverwarmen als het vat in een spitsblok onder 40 \u00b0C + deze marge dreigt te zakken."
+                      },
+                      "preheat_window_hours": {
+                        "type": "number",
+                        "minimum": 0.5,
+                        "maximum": 12.0,
+                        "default": 4.0,
+                        "description": "Venster v\u00f3\u00f3r de spits waarin het goedkoopste startmoment voor voorverwarmen wordt gekozen."
+                      },
+                      "boost_max_start_temp_c": {
+                        "type": "number",
+                        "minimum": 45.0,
+                        "maximum": 59.0,
+                        "default": 57.0,
+                        "description": "Niet doorstoken naar 60 \u00b0C als het vat al minstens zo warm is."
+                      },
+                      "boost_standby_factor": {
+                        "type": "number",
+                        "minimum": 0.0,
+                        "maximum": 0.5,
+                        "default": 0.05,
+                        "description": "Extra stilstandsverlies van een 60 \u00b0C-vat, als fractie van de warmteprijs."
+                      },
+                      "boost_margin_eur_per_kwh_th": {
+                        "type": "number",
+                        "minimum": 0.0,
+                        "maximum": 0.1,
+                        "default": 0.005,
+                        "description": "Minimaal voordeel per kWh warmte voor doorstoken (voorkomt pendelen)."
+                      },
+                      "advance_margin": {
+                        "type": [
+                          "number",
+                          "null"
+                        ],
+                        "minimum": 0.0,
+                        "maximum": 1.0,
+                        "default": 0.1,
+                        "description": "Vervroegen naar 50 \u00b0C als warmte nu deze fractie goedkoper is dan wanneer de Daikin zelf zou stoken; null = uit."
+                      },
+                      "advance_max_start_temp_c": {
+                        "type": "number",
+                        "minimum": 40.0,
+                        "maximum": 49.0,
+                        "default": 47.0,
+                        "description": "Alleen vervroegen als het vat hooguit zo warm is (geen korte runs)."
+                      },
+                      "free_price_eur_per_kwh": {
+                        "type": [
+                          "number",
+                          "null"
+                        ],
+                        "minimum": -1.0,
+                        "maximum": 0.1,
+                        "default": 0.0,
+                        "description": "Effectieve stroomprijs waaronder altijd naar 60 \u00b0C wordt gestookt; null = uit."
+                      },
+                      "sg4_release_hysteresis_c": {
+                        "type": "number",
+                        "minimum": 0.0,
+                        "maximum": 1.0,
+                        "default": 0.2,
+                        "description": "Een run is klaar bij doel min deze waarde."
+                      },
+                      "sg4_no_effect_timeout_min": {
+                        "type": "number",
+                        "minimum": 3.0,
+                        "maximum": 60.0,
+                        "default": 10.0,
+                        "description": "Geforceerd aan (Smart Grid-stand 4) loslaten als er zo lang geen tapwaterverwarming wordt gemeten."
+                      },
+                      "sg4_no_effect_cooldown_min": {
+                        "type": "number",
+                        "minimum": 0.0,
+                        "maximum": 240.0,
+                        "default": 60.0,
+                        "description": "Wachttijd na een run zonder effect voordat opnieuw geforceerd mag worden."
+                      }
+                    },
+                    "description": "Daikin-first tapwatersturing (ADR-006). GET geeft de effectieve waarden incl. standaardwaarden."
+                  },
+                  "dhw_optimizer": {
+                    "type": "object",
+                    "deprecated": true,
+                    "description": "Verouderd: comfortmarge van de oude optimizer (dynamische programmering); alleen gebruikt bij dhw_policy.engine = dp. Verdwijnt in WP5."
+                  },
+                  "battery": {
+                    "type": "object",
+                    "description": "Vermogenslimieten en boost-instellingen van de thuisbatterij."
+                  }
+                }
+              }
+            }
           }
         }
       }

@@ -2,7 +2,6 @@
 import urllib
 import json
 import re
-import ssl
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
@@ -16,6 +15,7 @@ from api.secrets_store import (
     CONFIG_FILE, load_json, save_json, ensure_framework_defaults
 )
 from integrations.homeassistant.client import (
+    ha_ssl_context,
     get_ha_client_config, get_ha_states_map
 )
 from api.energy_feed import (
@@ -24,7 +24,7 @@ from api.energy_feed import (
 )
 from layer3_scheduling.plan_decision_evaluator import evaluate_and_apply_dhw_run_merger
 from layer3_scheduling.peak_detection import detect_dynamic_price_peaks
-from layer3_scheduling.battery_policy import BatteryPolicy, BatterySpec
+from layer3_scheduling.battery_policy import BatteryPolicy
 
 def handle_get(handler, path: str, qp: dict) -> bool:
     if path == "/api/control/status":
@@ -71,11 +71,12 @@ def handle_get(handler, path: str, qp: dict) -> bool:
         )
         is_battery_active = battery_installed or sim_battery_param or cfg.get("simulate_battery", False)
 
-        baseload_w = float(cfg.get("baseload_watts", 300.0))
-        baseload_kw = round(baseload_w / 1000.0, 3)
-
         now_ams = datetime.now(AMS_TZ)
         plan = ensure_active_canonical_plan()
+        # Dynamic unallocated baseload from canonical plan
+        plan_slots = plan.slots if plan is not None else []
+        baseload_kw = round(sum(s.unallocated_kw for s in plan_slots) / len(plan_slots), 3) if plan_slots else 0.300
+        baseload_w = round(baseload_kw * 1000.0, 1)
         today_str = now_ams.strftime("%d-%m-%Y")
         tomorrow_str = (now_ams + timedelta(days=1)).strftime("%d-%m-%Y")
 
@@ -236,9 +237,7 @@ def handle_get(handler, path: str, qp: dict) -> bool:
         try:
             ha_url, ha_tok = get_ha_client_config()
             if ha_tok and ha_url:
-                ctx = ssl.create_default_context()
-                ctx.check_hostname = False
-                ctx.verify_mode = ssl.CERT_NONE
+                ctx = ha_ssl_context(ha_url)
 
                 try:
                     req_in = urllib.request.Request(
@@ -330,14 +329,16 @@ def handle_get(handler, path: str, qp: dict) -> bool:
         GLOBAL_CENTRAL_CACHE["reason"] = planned_mode_label
 
         # Evaluate Live In-Flight DHW Heating & Run Merger
-        t_dhw_live = 49.2
+        t_dhw_live = None
         try:
             states_map_dhw = get_ha_states_map()
-            val_t = float(states_map_dhw.get("sensor.hc_dhw_temperature_r5t_dhw_tank", {}).get("state", 49.2))
-            if 20.0 <= val_t <= 75.0:
-                t_dhw_live = val_t
+            st_val = states_map_dhw.get("sensor.hc_dhw_temperature_r5t_dhw_tank", {}).get("state")
+            if st_val not in (None, "unavailable", "unknown"):
+                val_t = float(st_val)
+                if 20.0 <= val_t <= 75.0:
+                    t_dhw_live = val_t
         except Exception:
-            pass
+            t_dhw_live = None
 
         merge_res = evaluate_and_apply_dhw_run_merger(plan, t_dhw_live)
         active_dhw_status = {
@@ -458,34 +459,28 @@ def handle_get(handler, path: str, qp: dict) -> bool:
         if not is_battery_active:
             bat_msg = "Geen thuisaccu geactiveerd (zuiver echte apparaten)."
         else:
-            # Full physical & economic optimization via BatteryPolicy
-            residual_kw = [round(u + b + h - s, 3) for u, b, h, s in zip(unallocated, boiler, heating, solar)]
-            spec = BatterySpec.from_config(
-                cfg,
-                reserve_lookahead_slots=total_slots,
-                valley_lookahead_slots=total_slots
-            )
-            forced_lockouts = {
-                i for i in range(total_slots)
-                if advices[i] == "Geforceerd uit (spits)" or (plan and i < len(plan.slots) and plan.slots[i].mode_code == "forced_off")
-            }
-            bat_summary = BatteryPolicy.optimize(
-                residual_demand_kw=residual_kw,
-                import_prices=prices,
-                export_prices=export_prices,
-                spec=spec,
-                initial_soc_pct=50.0,
-                step_hours=step_h,
-                forced_off_indices=forced_lockouts
-            )
-            for s_idx, b_slot in enumerate(bat_summary.slots):
-                if s_idx < total_slots:
-                    if b_slot.power_kw > 0:
-                        battery_charge[s_idx] = round(b_slot.power_kw, 2)
-                    elif b_slot.power_kw < 0:
-                        battery_discharge[s_idx] = round(-b_slot.power_kw, 2)
+            # Dumb view: the battery plan is computed once by CentralPlanner (Priority 3, live SoC only).
+            bat_summary = getattr(plan, "battery_summary", None) if plan else None
+            if bat_summary is None or not bat_summary.is_active:
+                reason = bat_summary.inactive_reason if bat_summary is not None else "Geen batterijplan in het canonieke plan (zet simulate_battery of installeer de accu in config)."
+                bat_summary = BatteryPolicy._inactive_plan(total_slots, reason)
+            slot_stride = 1 if is_15m else 4
+            for s_idx in range(total_slots):
+                q = bat_summary.slots[s_idx * slot_stride:(s_idx + 1) * slot_stride]
+                if not q:
+                    continue
+                p_avg = sum(b.power_kw for b in q) / len(q)
+                if p_avg > 0:
+                    battery_charge[s_idx] = round(p_avg, 2)
+                elif p_avg < 0:
+                    battery_discharge[s_idx] = round(-p_avg, 2)
 
-            bat_msg = f"🔋 Thuisaccu (15 kWh): {bat_summary.total_charged_solar_kwh:.1f} kWh zon geladen, {bat_summary.total_discharged_kwh:.1f} kWh ontladen (Besparing €{bat_summary.net_financial_saving_eur:.2f})."
+            bat_msg = (
+                f"🔋 Thuisaccu{' (simulatie)' if getattr(bat_summary, 'is_simulation', False) else ''}: "
+                f"{bat_summary.total_charged_solar_kwh:.1f} kWh zon geladen, {bat_summary.total_discharged_kwh:.1f} kWh ontladen "
+                f"(Besparing €{bat_summary.net_financial_saving_eur:.2f})."
+                if bat_summary.is_active else f"🔋 Thuisaccu inactief: {bat_summary.inactive_reason}"
+            )
 
         # Calculate Dual-Polarity Datasets
         # Negative stack: Solar generation and Battery discharge (< 0 kW)
@@ -699,16 +694,46 @@ def handle_get(handler, path: str, qp: dict) -> bool:
 
         from layer3_scheduling.peak_detection import extract_plan_spitsblok_ranges, extract_plan_soft_advice_ranges
         from layer3_scheduling.storage_valuation import calculate_storage_valuation
+        from layer3_scheduling.cost_matrix_builder import build_cost_matrix_payload
 
         n_future = len(advices)
         display_slots = plan.slots[:(n_future if is_15m else n_future * 4)] if (plan and plan.slots) else []
         forced_off_ranges = extract_plan_spitsblok_ranges(display_slots, history_count=len(hist_pts), is_15m=is_15m)
         advised_off_ranges = extract_plan_soft_advice_ranges(display_slots, history_count=len(hist_pts), is_15m=is_15m)
 
+        future_lockouts = set()
+        for rng in forced_off_ranges:
+            for s_i in range(max(0, rng["start_idx"] - len(hist_pts)), max(0, rng["end_idx"] - len(hist_pts) + 1)):
+                future_lockouts.add(s_i)
+
+        cost_matrix_payload = build_cost_matrix_payload(
+            labels=labels,
+            prices=prices,
+            export_prices=export_prices,
+            solar_kw=solar,
+            unallocated_kw=unallocated,
+            boiler_kw=boiler,
+            heating_kw=heating,
+            battery_charge_kw=battery_charge,
+            battery_discharge_kw=battery_discharge,
+            step_h=step_h,
+            plan=plan,
+            bat_summary=locals().get("bat_summary"),
+            forced_off_indices=future_lockouts,
+        )
+
         # Calculate Storage Valuation for DHW & Battery
         cur_price_now = prices[0] if prices else 0.28
         ha_states = get_ha_states_map()
-        live_tank_temp = float(ha_states.get("sensor.hc_dhw_temperature_r5t_dhw_tank", {}).get("state", 49.2)) if ha_states else 49.2
+        raw_tank_state = ha_states.get("sensor.hc_dhw_temperature_r5t_dhw_tank", {}).get("state") if ha_states else None
+        live_tank_temp = None
+        if raw_tank_state not in (None, "unavailable", "unknown"):
+            try:
+                val_t = float(raw_tank_state)
+                if 20.0 <= val_t <= 75.0:
+                    live_tank_temp = val_t
+            except (ValueError, TypeError):
+                live_tank_temp = None
         live_battery_soc = float(ha_states.get("sensor.battery_state_of_charge", {}).get("state", 50.0)) if ha_states else 50.0
         dhw_cfg = cfg.get("dhw", {})
         bat_cfg = cfg.get("battery", {})
@@ -770,7 +795,8 @@ def handle_get(handler, path: str, qp: dict) -> bool:
             "total_gross_cost_eur": gross_cost_eur,
             "solar_savings_eur": solar_savings_eur,
             "forecast_kpis": forecast_kpis,
-            "storage_valuation": storage_val
+            "storage_valuation": storage_val,
+            "cost_matrix": cost_matrix_payload
         })
         return True
 

@@ -143,7 +143,7 @@
         </div>
 
         <div class="p-4 border-t border-[#1E293B] bg-[#0A0D14]/80 text-[10px] text-slate-500 flex justify-between">
-            <span>Versie: <strong class="text-slate-400">v0.108.23</strong></span>
+            <span>Versie: <strong class="text-slate-400">v0.108.26</strong></span>
             <span>Multi-Instance Laag 1</span>
         </div>
     </aside>
@@ -913,6 +913,51 @@
                                     </div>
                                 </div>
                             </div>
+                        </div>
+                    </div>
+
+                    <!-- Card 1.6: Kosten-Matrix, Waterval & Beslis-Heatmap Tabel (Sheet-View) -->
+                    <div class="bg-[#0e1422] border border-[#1E293B] rounded-2xl p-4 sm:p-5 shadow-2xl space-y-4" id="cost-matrix-heatmap-card">
+                        <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-slate-800/80 pb-3">
+                            <div class="flex items-center gap-2.5">
+                                <span class="text-xl">📊</span>
+                                <div>
+                                    <h3 class="text-sm font-bold text-white tracking-wide">Kosten-Matrix, Zon/Accu-Waterval &amp; Beslis-Heatmap (Sheet-View)</h3>
+                                    <p class="text-[11px] text-slate-400">Volledige uitsplitsing per tijdslot: 3-wegklep warmteprijs-heatmap (€/kWh_th), 5-staps Zon-Waterval, Tweezijdige Accu-Waterval (Hold/ZOM/Export) en Eindvoorraad-correctie.</p>
+                                </div>
+                            </div>
+                            <div class="flex items-center gap-2 flex-wrap font-mono text-[11px]">
+                                <span id="cm-badge-invoice" class="px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 font-bold">Factuur: €--</span>
+                                <span id="cm-badge-terminal" class="px-2.5 py-1 rounded-lg bg-cyan-950/60 border border-cyan-500/40 text-cyan-300 font-bold">ΔBuffer Waarde: €--</span>
+                                <span id="cm-badge-economic" class="px-2.5 py-1 rounded-lg bg-emerald-950/60 border border-emerald-500/40 text-emerald-300 font-bold">Echte Econ. Kosten: €--</span>
+                            </div>
+                        </div>
+
+                        <!-- Section Filter Pills -->
+                        <div class="flex items-center justify-between gap-2 flex-wrap">
+                            <div class="flex items-center gap-1.5 flex-wrap text-[11px] font-mono" id="cm-filter-pills">
+                                <button type="button" onclick="window.setCostMatrixFilter('all')" data-cm-filter="all" class="px-2.5 py-1 rounded-lg bg-purple-600 text-white font-bold transition">Alle 9 Secties</button>
+                                <button type="button" onclick="window.setCostMatrixFilter('heatmap')" data-cm-filter="heatmap" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition">🔥 Beslis-Heatmap (€/kWh_th)</button>
+                                <button type="button" onclick="window.setCostMatrixFilter('solar')" data-cm-filter="solar" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition">☀️ Zon &amp; Grid Waterval</button>
+                                <button type="button" onclick="window.setCostMatrixFilter('battery')" data-cm-filter="battery" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition">🔋 Accu Waterval &amp; Hold</button>
+                                <button type="button" onclick="window.setCostMatrixFilter('finance')" data-cm-filter="finance" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition">💶 Factuur &amp; Buffers</button>
+                            </div>
+                            <div class="flex items-center gap-3 text-[10px] font-mono text-slate-400">
+                                <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm bg-emerald-500/70 inline-block"></span> Goedkoopste slots</span>
+                                <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm bg-amber-400/70 inline-block"></span> Mediaan / Overbrugging</span>
+                                <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm bg-red-500/70 inline-block"></span> Duur / Spits</span>
+                                <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm border-2 border-purple-400 inline-block"></span> Gekozen Run</span>
+                            </div>
+                        </div>
+
+                        <!-- Horizontally Scrollable Sticky Matrix Table -->
+                        <div class="overflow-x-auto rounded-xl border border-slate-800 bg-[#070b13] max-h-[640px] overflow-y-auto">
+                            <table class="w-full text-left border-collapse font-mono text-[11px]" id="cost-matrix-table">
+                                <thead id="cost-matrix-thead" class="sticky top-0 z-20 bg-[#0f172a] text-slate-300 border-b border-slate-700">
+                                </thead>
+                                <tbody id="cost-matrix-tbody" class="divide-y divide-slate-800/60">
+                                </tbody>
+                            </table>
                         </div>
                     </div>
 
@@ -2034,10 +2079,16 @@
 
                     <!-- Top KPI Badges Bar & Timeframe Toggles -->
                     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 font-mono text-xs">
-                        <div class="flex items-center gap-2 flex-wrap">
-                            <span class="px-2.5 py-1 rounded-lg border bg-emerald-950/60 border-emerald-500/40 text-emerald-300 font-bold" id="val-kpi-accuracy">Kwaliteit: --%</span>
-                            <span class="px-2.5 py-1 rounded-lg border bg-slate-900 border-slate-700 text-slate-300 font-bold" id="val-kpi-mae">Gem. Afwijking: -- W</span>
-                            <span class="px-2.5 py-1 rounded-lg border bg-blue-950/60 border-blue-500/40 text-blue-300 font-bold" id="val-kpi-totals">Werkelijk: -- kWh | Voorspeld: -- kWh</span>
+                        <div class="flex flex-col gap-1.5">
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <span class="px-2.5 py-1 rounded-lg border bg-emerald-950/60 border-emerald-500/40 text-emerald-300 font-bold" id="val-kpi-accuracy">Kwaliteit: --%</span>
+                                <span class="px-2.5 py-1 rounded-lg border bg-slate-900 border-slate-700 text-slate-300 font-bold" id="val-kpi-mae">Gem. Afwijking: -- W</span>
+                                <span class="px-2.5 py-1 rounded-lg border bg-purple-950/60 border-purple-500/40 text-purple-200 font-bold" id="val-kpi-totals">Werkelijk: -- kWh | Voorspeld: -- kWh</span>
+                            </div>
+                            <div class="hidden items-center gap-2 flex-wrap text-[11px]" id="val-kpi-dhw-demand-row">
+                                <span class="px-2.5 py-1 rounded-lg border bg-sky-950/60 border-sky-500/40 text-sky-300 font-bold" id="val-kpi-dhw-demand-accuracy">🚿 Tapwater Aftap Kwaliteit: --%</span>
+                                <span class="px-2.5 py-1 rounded-lg border bg-slate-900/90 border-sky-500/30 text-sky-200 font-bold" id="val-kpi-dhw-demand-totals">Werkelijk getapt: -- kWh_th | Verwacht: -- kWh_th</span>
+                            </div>
                         </div>
 
                         <!-- Range & Resolution Selectors -->
@@ -2491,7 +2542,7 @@ def predict_space_heating_w(dt: datetime, t_outdoor_c: float) -> dict:
                     <div class="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-4">
                         <div class="space-y-1.5">
                             <div class="flex items-center gap-2.5">
-                                <span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold tracking-wider uppercase bg-emerald-950 text-emerald-300 border border-emerald-800">Kennisbank v0.108.23</span>
+                                <span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold tracking-wider uppercase bg-emerald-950 text-emerald-300 border border-emerald-800">Kennisbank v0.108.26</span>
                                 <span class="text-xs text-slate-400 font-mono">OpenAPI 3.1.0 Compliant</span>
                             </div>
                             <h2 class="text-xl font-bold text-white tracking-wide">Open HEMS Systeemdocumentatie &amp; API Gids</h2>
@@ -3839,11 +3890,11 @@ def predict_space_heating_w(dt: datetime, t_outdoor_c: float) -> dict:
 
 
         <!-- MODULAR DOMAIN MODULES & CONTROLLERS -->
-    <script src="./js/i18n.js?v=0.108.23"></script>
-    <script src="./js/modules/modal_decision.js?v=0.108.23"></script>
-    <script src="./js/modules/modal_kpi_detail.js?v=0.108.23"></script>
-    <script src="./js/modules/modal_param_history.js?v=0.108.23"></script>
-    <script src="./js/modules/charts_thermal.js?v=0.108.23"></script>
-    <script src="./js/app.js?v=0.108.23"></script>
+    <script src="./js/i18n.js?v=0.108.26"></script>
+    <script src="./js/modules/modal_decision.js?v=0.108.26"></script>
+    <script src="./js/modules/modal_kpi_detail.js?v=0.108.26"></script>
+    <script src="./js/modules/modal_param_history.js?v=0.108.26"></script>
+    <script src="./js/modules/charts_thermal.js?v=0.108.26"></script>
+    <script src="./js/app.js?v=0.108.26"></script>
 </body>
 </html>

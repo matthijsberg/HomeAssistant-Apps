@@ -1,13 +1,22 @@
 ---
 type: Invariant
 title: DHW Goldfish / Elephant Control Architecture
-description: Strict baseline retention (Elephant) and stateless per-tick evaluation (Goldfish) for heat pump and domestic hot water tank control.
-tags: [architecture, control, dhw, heatpump, elephant, goldfish, invariant]
+description: Strict baseline retention (Elephant) and stateless per-tick evaluation (Goldfish) with single-owner supervision for heat pump and domestic hot water tank control.
+tags: [architecture, control, dhw, heatpump, elephant, goldfish, invariant, layer4]
 status: stable
-generated: { by: "human:matthijs", at: "2026-09-29T00:00:00Z" }
+generated: { by: "agent:hermes", at: "2026-10-09T00:00:00Z" }
 verified:
-  - { by: "process:pytest_goldfish_elephant_dhw", at: "2026-09-29T00:00:00Z" }
+  - { by: "process:pytest_goldfish_elephant_dhw", at: "2026-10-09T00:00:00Z" }
+  - { by: "process:pytest_review_2026_10_09_regressions", at: "2026-10-09T00:00:00Z" }
 sources:
+  - id: dhw-run-supervisor
+    resource: layer4_control/dhw_run_supervisor.py
+    title: Layer 4 In-Flight DHW Run Supervisor & Lifetime Arbiter
+    author: agent:hermes
+  - id: dispatch-guard
+    resource: layer4_control/dispatch_guard.py
+    title: Fail-Safe Dispatch Guard & Timestamp Alignment
+    author: agent:hermes
   - id: daikin-interlocks
     resource: integrations/daikin_altherma/interlocks.py
     title: Daikin Altherma Hydraulic Interlocks & Relay Mapping
@@ -30,18 +39,12 @@ The control system enforces a strict, permanent default baseline for normal oper
 4. **Spitsblokkade:** Forced lockout during EPEX peak hours operates **solely via hardware relays** (`SG1 Geforceerd uit`: S10S = `off`, S11S = `on`). The climate thermostat remains on `heat` at 50 °C.
 5. **Post-Run Restoration:** Whenever a planned boost run ends or reaches its target temperature, the system unconditionally restores this Elephant baseline.
 
-### 🐠 Goldfish Execution (Stateless Dispatch per Tick)
-Every 60-second dispatch cycle evaluates the operational state statelessly:
-1. **Active Peak Lockout:** Engages SG1 relays.
-2. **Active Boost Run (SG4):**
-   - The DP Optimizer calculates the economically optimal peak buffering temperature (e.g., $55.8\text{ }^\circ\text{C}$ or $60.0\text{ }^\circ\text{C}$).
-   - While the run is in progress and $T_{\text{tank}} < T_{\text{target}} - 0.2\text{ }^\circ\text{C}$, relays remain in SG4 (S10S = `on`, S11S = `on`) and CV master switch is turned `off` (hydraulic interlock).
-3. **Normal / Idle State:**
-   - As soon as $T_{\text{tank}} \ge T_{\text{target}} - 0.2\text{ }^\circ\text{C}$ or the scheduled slot expires, the in-flight state is cleared.
-   - The system immediately and actively enforces the Elephant baseline (`50.0 °C`, `hvac_mode: heat`, SG2 relays).
-   - Inactive/idle slots never inherit future boost temperatures.
-
-## 2. Dynamic Optimal Temperature Definition
-- The system **is and remains fully empowered** to determine dynamic optimal target temperatures ($T_{\text{target}} \in [50.0\text{ }^\circ\text{C}, 60.0\text{ }^\circ\text{C}]$) for planned and future runs based on negative/cheap spot tariffs, solar surplus, and standing heat loss.
-- This optimal temperature is tracked in `sensor.openhems_dhw_target_temperature` and `CanonicalDispatchPlan.dhw_summary.target_temp_c`.
-- However, between runs, the physical thermostat setpoint never lingers at elevated temperatures, preventing unintentional autonomous reheating.
+### 🐠 Goldfish Execution & Single-Owner Supervision (Layer 4)
+Goldfish rule 3 is exclusively supervised by `layer4_control/dhw_run_supervisor.py`:
+1. **Single Owner Principle:** Only `DhwRunSupervisor` is permitted to arm, track, or clear in-flight DHW runs in `PlanStore`. Arming logic has been strictly stripped from `api/context.py`, `CentralPlanner`, and `plan_decision_evaluator.py`.
+2. **Telemetry-Only Run Detection:** In-flight runs are detected strictly from physical telemetry (`binary_sensor.hc_dhw_valve_dhw_tank == 'on'` combined with `sensor.warmtepomp_power > 600 W`), NEVER from relay actuation states (preventing positive feedback loops where commanded SG4 relatches itself).
+3. **Target per Mode & Release at Target:** Under the Daikin-first policy (ADR-006, `dhw_engine = daikin_first`) the mode decides the target: `forced_on` = 50 °C, `max_on` = 60 °C; a running 50 °C run may be upgraded to 60 °C when the plan says `max_on`, but a run is never re-armed to another plan target. Under the legacy DP engine (ADR-004, until its removal) each slot carries the DP target. When $T_{\text{tank}} \ge T_{\text{target}} - 0.2\text{ }^\circ\text{C}$, the run is immediately cleared and relays return to SG2, even if the plan still shows future forced slots.
+4. **Bounded Expiry & Fail-Safe:** Every in-flight run is stamped with a timeout bounded by $\max(45, \min(180, 2 \times \text{planned\_duration\_mins}))$. If the temperature sensor becomes unavailable or fails to reach target, the run times out and drops to SG2.
+5. **CV Master Switch Ownership:** To prevent 9 kW auxiliary heaters from firing during DHW runs, Open HEMS turns `switch.hc_mode_altherma_on` OFF. The switch is restored to ON if and only if Open HEMS was the party that turned it off (tracked via `layer4_control/dispatch_state.py` persisted flag `cv_forced_off_by_hems`). Manual user shutdowns are respected.
+6. **Stale-Plan Fail-Safe & HA Dead-Man:** If the published plan is older than 15 minutes, or lacks a slot covering the current timestamp, `layer4_control/dispatch_guard.py` unconditionally forces SG2 safe-mode. External dead-man automation (`ha/automations/openhems_dispatch_deadman.yaml`) alerts and resets relays if dispatch heartbeats stop for >10 minutes.
+7. **SG4 Effectiveness Check (ADR-006):** If no DHW heating is measured (3-way valve on DHW and compressor power > 600 W; unmeasured counts as not heating) within `sg4_no_effect_timeout_min` (10 min) after arming, the supervisor releases SG4 to SG2 (the actuator restores the CV master under the ownership rule) and does not re-arm for `sg4_no_effect_cooldown_min` (60 min). SG4 with the CV master off is never held blind.
