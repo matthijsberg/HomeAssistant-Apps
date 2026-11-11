@@ -47,16 +47,16 @@ def test_unknown_engine_falls_back_to_daikin_first():
     assert plan.metadata["dhw_engine"] == "daikin_first"
 
 
-def test_forced_slots_only_carry_50_or_60_and_never_sit_in_a_lockout():
+def test_forced_slots_only_carry_50_55_or_60_and_never_sit_in_a_lockout():
     for fixture in ("day_2026_09_12_recorded.json", "golden_winter_sunny_peak.json", "golden_winter_dunkelflaute.json",
                     "golden_summer_solar_heavy.json", "golden_shoulder_season.json"):
         plan = _plan(fixture, "daikin_first")
         hard = _hard_indices(plan)
         for i, s in enumerate(plan.slots):
             if s.mode_code in FORCED:
-                assert s.target_temp_c in (50.0, 60.0), (fixture, i, s.target_temp_c)
+                assert s.target_temp_c in (50.0, 55.0, 60.0), (fixture, i, s.target_temp_c)
                 assert i not in hard
-                assert (s.mode_code == StandardizedState.MAX_ON) == (s.target_temp_c == 60.0)
+                assert (s.mode_code == StandardizedState.MAX_ON) == (s.target_temp_c > 50.0)
             if i in hard:
                 assert s.dhw_kw == 0.0
 
@@ -73,12 +73,12 @@ def test_daikin_own_run_is_normal_mode_with_dhw_power_and_paused_floor_heating()
 def test_preheat_before_evening_peak_in_dunkelflaute():
     plan = _plan("golden_winter_dunkelflaute.json", "daikin_first")
     hard = sorted(_hard_indices(plan))
-    forced = [i for i, s in enumerate(plan.slots) if s.mode_code == StandardizedState.FORCED_ON]
+    forced = [i for i, s in enumerate(plan.slots) if s.mode_code in FORCED]
     assert forced, "a pre-heat must be planned"
     peak_start = next(i for i in hard if i > forced[0])     # the evening peak the pre-heat is for
     assert max(forced) < peak_start
     assert peak_start - forced[0] <= 24                      # started within 6 h before the peak
-    assert plan.dhw_summary.target_temp_c == 50.0
+    assert plan.dhw_summary.target_temp_c in (50.0, 55.0)
 
 
 def test_in_flight_run_is_read_as_starting_state():

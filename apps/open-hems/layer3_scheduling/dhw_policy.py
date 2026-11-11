@@ -504,7 +504,8 @@ class DhwPolicy:
             return self._start(BOOST, t60, eff_boost_ref, "boost",
                                f"Doorstoken naar 60 °C: warmte €{c_boost:.3f}/kWh tegen €{eff_boost_ref:.3f} voor {ref_label}")
         min_adv_start_c = min(p.advance_max_start_temp_c, t50 - 3.0)
-        if p.advance_margin is not None and t_c <= min_adv_start_c:
+        has_upcoming_lockout = any(j > k for j in inp.hard)
+        if p.advance_margin is not None and t_c <= min_adv_start_c and not has_upcoming_lockout:
             c_adv = self.heat_price(k, t50)
             if self._cheapest(k, horizon_end, slots_to_heat(inp, t_c, t50, k), t50) and c_adv * (1.0 + p.advance_margin) < ref_cost:
                 return self._start(ADVANCE, t50, ref_cost, "advance",

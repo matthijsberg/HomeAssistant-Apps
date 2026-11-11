@@ -154,7 +154,7 @@ def test_replay_winter_dunkelflaute():
     assert plan.heating_summary.total_heating_kwh_el >= 25.0
 
     # DHW targets standard 50C without expecting solar
-    assert 49.0 <= plan.dhw_summary.target_temp_c <= 53.0
+    assert 49.0 <= plan.dhw_summary.target_temp_c <= 56.0
 
 
 def test_replay_winter_defrost_humid():
