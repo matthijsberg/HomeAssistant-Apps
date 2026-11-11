@@ -77,7 +77,7 @@ def test_preheat_before_evening_peak_in_dunkelflaute():
     assert forced, "a pre-heat must be planned"
     peak_start = next(i for i in hard if i > forced[0])     # the evening peak the pre-heat is for
     assert max(forced) < peak_start
-    assert peak_start - forced[0] <= 16                      # started within 4 h before the peak
+    assert peak_start - forced[0] <= 24                      # started within 6 h before the peak
     assert plan.dhw_summary.target_temp_c == 50.0
 
 

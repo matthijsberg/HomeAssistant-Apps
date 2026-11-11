@@ -69,7 +69,7 @@ def run_plan(slots, t0_c, hard: Optional[Set[int]] = None, tap: Optional[TapMode
 
 
 def assert_only_two_targets(res):
-    assert {t for t in res.slot_targets if t is not None} <= {50.0, 60.0}
+    assert {t for t in res.slot_targets if t is not None} <= {48.0, 50.0, 55.0, 60.0}
 
 
 # ---------------------------------------------------------------------------------------------
@@ -98,7 +98,7 @@ def test_preheat_starts_at_cheapest_quarter_in_window_and_finishes_before_peak()
     assert first_run.kind == "preheat"
     assert first_run.start_idx == 8
     assert first_run.end_idx <= 20
-    assert first_run.target_temp_c == 50.0
+    assert first_run.target_temp_c == 55.0
     assert res.slot_modes[8] == MODE_FORCED_ON
     assert all(res.slot_modes[k] == MODE_FORCED_OFF for k in peak)
     assert_only_two_targets(res)

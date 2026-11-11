@@ -315,7 +315,8 @@ class DhwPolicy:
         self.commit = (kind, target_c, ref)
         if kind in self.events:
             self.events[kind] += 1
-        return DhwDecision(MODE_MAX_ON if target_c > self.inp.spec.target_setpoint_c else MODE_FORCED_ON, target_c, rule, reason)
+        t60 = self.inp.spec.boost_setpoint_c
+        return DhwDecision(MODE_MAX_ON if target_c >= t60 else MODE_FORCED_ON, target_c, rule, reason)
 
     def start_in_flight(self, target_c: float) -> None:
         """Seeds the rollout with the run Layer 4 is executing (read-only view of the in-flight commitment)."""
@@ -407,7 +408,7 @@ class DhwPolicy:
                 or self._is_free(k)
             )
             if t_c < target_c - p.sg4_release_hysteresis_c and still_wanted:
-                mode = MODE_MAX_ON if target_c > t50 else MODE_FORCED_ON
+                mode = MODE_MAX_ON if target_c >= t60 else MODE_FORCED_ON
                 return DhwDecision(mode, target_c, "continue", f"Lopende run naar {target_c:.0f} °C afmaken")
             self.commit = None
 
@@ -456,10 +457,8 @@ class DhwPolicy:
             min_temp_in_peak = min(temps50) if temps50 else t50
             drop = t50 - min_temp_in_peak
             
-            # Calculate what we *actually* need to survive the drop, assuming we enter the peak at req_t
-            # We want: req_t - drop >= comfort_c
-            # So: req_t >= comfort_c + drop
-            req_t = comfort_c + drop + 0.5
+            # Target 55.0 °C to fully bridge the morning peak
+            req_t = 55.0
             req_t = max(t50, min(t60, req_t))
             
             best: Optional[Tuple[float, int]] = None
@@ -475,10 +474,9 @@ class DhwPolicy:
             ref_cost, ref_label = best[0], f"de voorverwarmrun vóór de spits van {lbl[peak_start]}"
             
             if best[1] == k and t_c < req_t - p.sg4_release_hysteresis_c:
-                ref50 = self._post_50_boost_ref(k, t_c, end)
-                boost_pays = self._is_free(k) or (ref50 is not None and self._beats(self.heat_price(k, t60), ref50))
+                boost_pays = self._is_free(k)
                 target = t60 if boost_pays else req_t
-                return self._start(PREHEAT, target, ref50 if (boost_pays and ref50 is not None) else ref_cost, "preheat",
+                return self._start(PREHEAT, target, ref_cost, "preheat",
                                    f"Voorverwarmen naar {target:.0f} °C: zonder ingreep zakt het vat in de spits van "
                                    f"{lbl[peak_start]} onder {comfort_c:.0f} °C; nu is warmte het goedkoopst "
                                    f"(€{best[0]:.3f}/kWh)")
