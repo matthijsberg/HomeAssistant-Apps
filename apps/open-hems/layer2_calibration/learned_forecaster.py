@@ -78,6 +78,56 @@ def _persist_params(params: Dict[str, Any]) -> Dict[str, Any]:
     return merge_owned_keys(params, FORECASTER_OWNED_KEYS, PARAMS_FILE)
 
 
+# CV electrical envelope re-fitted 2026-11-11 on the 2026-11-05..11 low-and-slow runs (see SpaceHeatingPolicy).
+HP_PROFILE_CALIBRATION_TAG = "2026-11-11-low-and-slow"
+HP_PROFILE_PREVIOUS_DEFAULTS: Dict[str, float] = {
+    "mod_floor_min_w": 700.0,
+    "mod_floor_ref_10c_w": 730.0,
+    "mod_floor_slope_w_per_k": 45.0,
+    "steady_max_power_w": 3200.0,
+    "surge_decay_slots": 2.0,
+    "max_heat_kw": 8.4,
+}
+HP_PROFILE_CALIBRATED: Dict[str, float] = {
+    "mod_floor_min_w": 650.0,
+    "mod_floor_ref_10c_w": 700.0,
+    "mod_floor_slope_w_per_k": 30.0,
+    "steady_max_power_w": 1900.0,
+    "surge_decay_slots": 1.5,
+    "max_heat_kw": 7.0,
+}
+
+
+def migrate_hp_profile(heat_pump: Dict[str, Any]) -> bool:
+    """
+    One-shot migration of the CV electrical envelope to HP_PROFILE_CALIBRATED.
+    Only keys that are missing or still equal the previous shipped default are replaced, so hand-tuned
+    values survive. Returns True when the block changed.
+    """
+    if heat_pump.get("profile_calibration") == HP_PROFILE_CALIBRATION_TAG:
+        return False
+    for key, new_val in HP_PROFILE_CALIBRATED.items():
+        cur = heat_pump.get(key)
+        try:
+            is_old_default = cur is None or abs(float(cur) - HP_PROFILE_PREVIOUS_DEFAULTS[key]) < 1e-9
+        except (TypeError, ValueError):
+            is_old_default = False
+        if is_old_default:
+            heat_pump[key] = new_val
+    heat_pump["profile_calibration"] = HP_PROFILE_CALIBRATION_TAG
+    return True
+
+
+def _migrate_hp_profile_file() -> Dict[str, Any]:
+    from layer2_calibration.params_store import update_params
+
+    def _mut(data: Dict[str, Any]) -> bool:
+        hp = data.get("heat_pump")
+        return isinstance(hp, dict) and migrate_hp_profile(hp)
+
+    return update_params(_mut, PARAMS_FILE)
+
+
 def _add_missing_param_blocks(defaults: Dict[str, Any]) -> Dict[str, Any]:
     """Adds missing top-level blocks only (never overwrites existing values)."""
     from layer2_calibration.params_store import update_params
@@ -131,19 +181,21 @@ class HybridForecastingModel:
                 "nominal_power_w": 18000.0,
                 "standby_power_w": 34.0,
                 "average_heating_cop": legacy_cop,
-                "mod_floor_min_w": 700.0,
+                "mod_floor_min_w": 650.0,
                 "mod_floor_max_w": 2000.0,
-                "mod_floor_ref_10c_w": 730.0,
-                "mod_floor_slope_w_per_k": 45.0,
+                "mod_floor_ref_10c_w": 700.0,
+                "mod_floor_slope_w_per_k": 30.0,
                 "startup_peak_min_w": 950.0,
                 "startup_peak_max_w": 2600.0,
                 "startup_peak_ref_10c_w": 1050.0,
                 "startup_peak_slope_w_per_k": 60.0,
-                "steady_max_power_w": 3200.0,
+                "steady_max_power_w": 1900.0,
+                "max_heat_kw": 7.0,
                 "slot1_surge_weight": 0.10,
-                "surge_decay_slots": 2.0,
+                "surge_decay_slots": 1.5,
                 "thermo_off_cutoff_w": 350.0,
-                "thermo_off_room_margin_c": 0.15
+                "thermo_off_room_margin_c": 0.15,
+                "profile_calibration": HP_PROFILE_CALIBRATION_TAG
             }
 
         if "dhw_tank" not in self.params:
@@ -175,6 +227,13 @@ class HybridForecastingModel:
         self.params.setdefault("version", "1.0.0")
         self.params["learning_rate_ewma"] = self.params.get("learning_rate_ewma", 0.05)
         added = {k: self.params[k] for k in self.params if k not in keys_before}
+        hp_block = self.params.get("heat_pump")
+        if "heat_pump" in keys_before and isinstance(hp_block, dict) and migrate_hp_profile(hp_block) and persist:
+            try:
+                _migrate_hp_profile_file()
+                print(f"[INFO] heat_pump CV power envelope migrated to {HP_PROFILE_CALIBRATION_TAG}")
+            except Exception as e:
+                print(f"[WARN] Could not persist heat_pump profile migration: {e}")
         if persist and added:
             try:
                 _add_missing_param_blocks(added)

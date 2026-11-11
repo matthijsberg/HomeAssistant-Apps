@@ -48,23 +48,24 @@ class SpaceHeatingPolicy:
     DAIKIN_LWT_OUTDOOR_SLOPE = -0.192
     DAIKIN_ROOM_GAIN_K_PER_K = 8.0
     DAIKIN_EMITTER_KW_PER_K = 1.57
-    DAIKIN_MAX_HEAT_KW = 8.4
+    DAIKIN_MAX_HEAT_KW = 7.0            # low-and-slow settings (2026-11): sustained CV draw tops out ~1.6-2.0 kW_el
     # Measured seasonal COP per outdoor temperature (heat / electricity, defrost included)
     COP_CURVE = ((-2.0, 2.42), (2.0, 2.64), (6.0, 3.56), (10.0, 4.52), (14.0, 5.48))
     COP_BOUNDS = (1.8, 6.0)
 
-    # --- Compressor electrical modulation & startup profile (calibrated on post-2026-11-07 low-and-slow settings)
-    MOD_FLOOR_MIN_W = 700.0                # minimum steady compressor power floor (W)
+    # --- Compressor electrical modulation & startup profile (re-fitted 2026-11-11 on 2026-11-05..11 low-and-slow runs:
+    #     plateau 0.70-0.95 kW_el, surge 1.0-2.6 kW_el decaying with tau ~1.5 slots, sustained max ~1.6-2.0 kW_el)
+    MOD_FLOOR_MIN_W = 650.0                # minimum steady compressor power floor (W)
     MOD_FLOOR_MAX_W = 2000.0               # upper bound on temperature-dependent floor (W)
-    MOD_FLOOR_REF_10C_W = 730.0            # modulation floor at 10 C outdoor (W)
-    MOD_FLOOR_SLOPE_W_PER_K = 45.0         # floor increase per K below 10 C (W/K)
+    MOD_FLOOR_REF_10C_W = 700.0            # modulation floor at 10 C outdoor (W)
+    MOD_FLOOR_SLOPE_W_PER_K = 30.0         # floor increase per K below 10 C (W/K)
     STARTUP_PEAK_MIN_W = 950.0             # minimum startup peak power in mild weather (W)
     STARTUP_PEAK_MAX_W = 2600.0            # maximum startup peak power in frost weather (W)
     STARTUP_PEAK_REF_10C_W = 1050.0        # startup peak at 10 C outdoor (W)
     STARTUP_PEAK_SLOPE_W_PER_K = 60.0      # startup peak increase per K below 10 C (W/K)
-    STEADY_MAX_POWER_W = 3200.0            # maximum continuous CV electrical power (W)
+    STEADY_MAX_POWER_W = 1900.0            # maximum continuous CV electrical power (W)
     SLOT1_SURGE_WEIGHT = 0.10              # fraction of startup surge in slot 1 (0-15m); rest is floor
-    SURGE_DECAY_SLOTS = 2.0                # exponential decay time constant (in 15m slots) after slot 2
+    SURGE_DECAY_SLOTS = 1.5                # exponential decay time constant (in 15m slots) after slot 2
     THERMO_OFF_CUTOFF_W = 350.0            # thermo-off electrical cutoff when room >= target - margin (W)
     THERMO_OFF_ROOM_MARGIN_C = 0.15        # room margin below target where thermo-off applies (K)
 
@@ -183,7 +184,7 @@ class SpaceHeatingPolicy:
     ) -> float:
         """
         Calculates electrical compressor power (kW_el) incorporating the physical
-        modulation floor and startup envelope calibrated on post-2026-11-07 telemetry.
+        modulation floor and startup envelope calibrated on 2026-11-05..11 low-and-slow telemetry.
         """
         act_p = params if params is not None else cls.get_active_parameters()
         floor_min_kw = act_p.get("mod_floor_min_w", cls.MOD_FLOOR_MIN_W) / 1000.0
@@ -217,11 +218,23 @@ class SpaceHeatingPolicy:
             return round(p, 2)
 
     @classmethod
-    def daikin_heat_output_kw(cls, outdoor_temp_c: float, setpoint_c: float, t_room: float, t_floor: float) -> float:
-        """Mean heat output the Daikin delivers to the CV circuit in this state (kW_th)."""
+    def daikin_heat_output_kw(
+        cls,
+        outdoor_temp_c: float,
+        setpoint_c: float,
+        t_room: float,
+        t_floor: float,
+        heat_limits: Optional[Tuple[float, float]] = None,
+    ) -> float:
+        """
+        Mean heat output the Daikin delivers to the CV circuit in this state (kW_th).
+        heat_limits = (emitter_kw_per_k, max_heat_kw) from get_active_parameters(); class constants otherwise.
+        """
+        emitter_kw_per_k, max_heat_kw = heat_limits if heat_limits is not None else (
+            cls.DAIKIN_EMITTER_KW_PER_K, cls.DAIKIN_MAX_HEAT_KW)
         drive = (cls.DAIKIN_LWT_BASE_C + cls.DAIKIN_LWT_OUTDOOR_SLOPE * outdoor_temp_c
                  + cls.DAIKIN_ROOM_GAIN_K_PER_K * (setpoint_c - t_room) - t_floor)
-        return max(0.0, min(cls.DAIKIN_MAX_HEAT_KW, cls.DAIKIN_EMITTER_KW_PER_K * drive))
+        return max(0.0, min(max_heat_kw, emitter_kw_per_k * drive))
 
     @classmethod
     def _advance_thermal_state(
@@ -259,14 +272,15 @@ class SpaceHeatingPolicy:
         q_gain_room_kw: float,
         t_out: float,
         ua_kw_per_k: float,
-        step_hours: float
+        step_hours: float,
+        heat_limits: Optional[Tuple[float, float]] = None,
     ) -> Tuple[float, float, float]:
         """One slot with the Daikin in the loop (re-evaluated every sub-step); returns (t_room, t_floor, mean Q_th)."""
         n_sub = max(1, math.ceil(step_hours / cls.SUBSTEP_HOURS - 1e-9))
         h = step_hours / n_sub
         q_sum = 0.0
         for _ in range(n_sub):
-            q = cls.daikin_heat_output_kw(t_out, setpoint_c, t_room, t_floor) if heating_allowed else 0.0
+            q = cls.daikin_heat_output_kw(t_out, setpoint_c, t_room, t_floor, heat_limits) if heating_allowed else 0.0
             q_sum += q
             t_room, t_floor = cls._advance_thermal_state(t_room, t_floor, q, q_gain_room_kw, t_out, ua_kw_per_k, h)
         return t_room, t_floor, q_sum / n_sub
@@ -328,6 +342,7 @@ class SpaceHeatingPolicy:
         dhw_slots: Optional[Set[int]] = None,
         thermal_costs: Optional[List[float]] = None,
         max_bridge_ratio: Optional[float] = None,
+        heat_limits: Optional[Tuple[float, float]] = None,
     ) -> Tuple[List[float], List[float], List[float]]:
         """
         Simulates the horizon; returns room and floor temperature at the START of every slot and mean Q_th.
@@ -390,7 +405,9 @@ class SpaceHeatingPolicy:
                     t_r_unh, _ = cls._advance_thermal_state(t_r, t_f, 0.0, gains[i], outdoor[i], ua[i], lookahead_h)
                     if t_r <= eff_thresh + 0.03 or t_r_unh <= eff_thresh + 0.03:
                         is_running = True
-            t_r, t_f, q = cls._simulate_slot(t_r, t_f, (is_running and allowed[i]), sp, gains[i], outdoor[i], ua[i], step_hours)
+            t_r, t_f, q = cls._simulate_slot(
+                t_r, t_f, (is_running and allowed[i]), sp, gains[i], outdoor[i], ua[i], step_hours, heat_limits
+            )
             heats.append(q)
         return rooms, floors, heats
 
@@ -501,11 +518,16 @@ class SpaceHeatingPolicy:
 
         mean_th_cost = sum(thermal_costs) / max(1, n_slots)
         max_bridge_ratio = act_p.get("max_bridge_cost_premium_ratio", cls.MAX_BRIDGE_COST_PREMIUM_RATIO)
+        heat_limits = (
+            float(act_p.get("emitter_kw_per_k", cls.DAIKIN_EMITTER_KW_PER_K)),
+            float(act_p.get("max_heat_kw", cls.DAIKIN_MAX_HEAT_KW)),
+        )
 
         def evaluate(pre: List[bool], block: Tuple[int, int]) -> Tuple[float, Tuple[List[float], List[float], List[float]]]:
             sim = cls._rollout(
                 t_room0, t_floor0, allowed, setpoints_for(pre), gains, outdoor_temps_c, ua_slots, step_hours,
-                soft=soft, dhw_slots=dhw, thermal_costs=thermal_costs, max_bridge_ratio=max_bridge_ratio
+                soft=soft, dhw_slots=dhw, thermal_costs=thermal_costs, max_bridge_ratio=max_bridge_ratio,
+                heat_limits=heat_limits,
             )
             rooms, floors, heats = sim
             if n_slots > 0:
@@ -620,7 +642,8 @@ class SpaceHeatingPolicy:
         rooms, floors, heats = cls._rollout(
             t_room0, t_floor0, allowed, setpoints_for(preheat), gains,
             outdoor_temps_c, ua_slots, step_hours,
-            soft=soft, dhw_slots=dhw, thermal_costs=thermal_costs, max_bridge_ratio=max_bridge_ratio
+            soft=soft, dhw_slots=dhw, thermal_costs=thermal_costs, max_bridge_ratio=max_bridge_ratio,
+            heat_limits=heat_limits,
         )
 
         # 4. Slot results

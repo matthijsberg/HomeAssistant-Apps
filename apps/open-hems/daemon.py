@@ -2,7 +2,7 @@
 """
 Open HEMS Framework & Management Console
 ========================================
-Version: 0.108.29
+Version: 0.108.30
 Generic Energy Management Platform:
   - Multi-Vector Telemetry & Optimization Daemon
   - Domain Router Dispatch to api/routes_*.py
