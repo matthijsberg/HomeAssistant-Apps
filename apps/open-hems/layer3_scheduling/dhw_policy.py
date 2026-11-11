@@ -437,6 +437,10 @@ class DhwPolicy:
                     dip = first_peak_start # Force intervention because baseline isn't enough to survive this peak
         
         if dip is not None:
+            if t_c >= t50:
+                dip = None  # Tank is already at or above baseline target (50°C); no need to re-trigger pre-heat
+        
+        if dip is not None:
             peak_start = dip
             while peak_start - 1 >= k and (peak_start - 1) in inp.hard:
                 peak_start -= 1
