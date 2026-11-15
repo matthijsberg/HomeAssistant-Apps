@@ -1,0 +1,6 @@
+misconfigurations:
+  - id: DS-0002
+    statement: >-
+      Home Assistant OS Supervisor mounts /data/options.json as 0600 root:root
+      and /config with root ownership; s6-overlay/add-on entrypoints require root.
+      Container isolation is enforced by HAOS AppArmor and cgroups.

@@ -43,6 +43,7 @@ jobs:
           scanners: "vuln,misconfig,secret"
           severity: "HIGH,CRITICAL"
           ignore-unfixed: true
+          trivyignores: ".trivyignore.yaml"
           format: "table"
           exit-code: "1"
 
@@ -71,13 +72,14 @@ jobs:
           scanners: "vuln,secret"
           severity: "HIGH,CRITICAL"
           ignore-unfixed: true
+          trivyignores: ".trivyignore.yaml"
           format: "sarif"
           output: "trivy-langfuse.sarif"
           exit-code: "0"
 
       - name: Upload Trivy SARIF to GitHub Security
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         continue-on-error: true
         with:
           sarif_file: "trivy-langfuse.sarif"
@@ -92,6 +94,7 @@ jobs:
           scanners: "vuln,secret"
           severity: "HIGH,CRITICAL"
           ignore-unfixed: true
+          trivyignores: ".trivyignore.yaml"
           format: "table"
           exit-code: "1"
 

@@ -62,13 +62,14 @@ jobs:
           scanners: "vuln,misconfig,secret"
           severity: "HIGH,CRITICAL"
           ignore-unfixed: true
+          trivyignores: ".trivyignore.yaml"
           format: "sarif"
           output: "trivy-fs-apps.sarif"
           exit-code: "0"
 
       - name: Upload Trivy FS SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         continue-on-error: true
         with:
           sarif_file: "trivy-fs-apps.sarif"
@@ -82,6 +83,7 @@ jobs:
           scanners: "vuln,misconfig,secret"
           severity: "HIGH,CRITICAL"
           ignore-unfixed: true
+          trivyignores: ".trivyignore.yaml"
           format: "table"
           exit-code: "1"
 
@@ -144,13 +146,14 @@ jobs:
           scanners: "vuln,secret"
           severity: "HIGH,CRITICAL"
           ignore-unfixed: true
+          trivyignores: ".trivyignore.yaml"
           format: "sarif"
           output: "trivy-${{ matrix.app }}.sarif"
           exit-code: "0"
 
       - name: Upload SARIF to GitHub Security
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         continue-on-error: true
         with:
           sarif_file: "trivy-${{ matrix.app }}.sarif"
@@ -165,5 +168,6 @@ jobs:
           scanners: "vuln,secret"
           severity: "HIGH,CRITICAL"
           ignore-unfixed: true
+          trivyignores: ".trivyignore.yaml"
           format: "table"
           exit-code: "1"
