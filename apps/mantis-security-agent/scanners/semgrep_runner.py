@@ -28,6 +28,15 @@ def run_semgrep(target_dir: Path, custom_rules_dir: Path = None, timeout: int = 
         "--no-git-ignore",
         "--disable-version-check",
         "--metrics=off",
+        "--exclude", ".venv",
+        "--exclude", "venv",
+        "--exclude", "node_modules",
+        "--exclude", ".git",
+        "--exclude", "__pycache__",
+        "--exclude", ".pytest_cache",
+        "--exclude", ".mypy_cache",
+        "--exclude", ".ruff_cache",
+        "--exclude", "site-packages",
     ]
 
     if custom_rules_dir and custom_rules_dir.exists():
