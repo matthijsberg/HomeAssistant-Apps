@@ -91,3 +91,28 @@ def test_mcp_review_diff_flagged():
     assert res_data["verdict"] == "FLAGGED"
     assert len(res_data["findings"]) >= 1
     assert res_data["findings"][0]["cwe"] == "CWE-78"
+
+
+def test_resolve_provider_config_openrouter(monkeypatch):
+    import server
+    monkeypatch.setitem(server.APP_OPTIONS, "providers", {"openrouter": {"api_key": "sk-or-test-123"}})
+    cfg = server._resolve_provider_config({"provider": "openrouter", "model": "z-ai/glm-5.3"}, "deep")
+    assert cfg["provider"] == "openrouter"
+    assert cfg["model"] == "z-ai/glm-5.3"
+    assert cfg["api_key"] == "sk-or-test-123"
+    assert cfg["base_url"] == "https://openrouter.ai/api/v1"
+
+
+def test_auto_approve_scheduled_paths_default_blocked(monkeypatch):
+    import server
+    monkeypatch.setitem(server.APP_OPTIONS, "auto_approve_scheduled_paths", [])
+    assert server._targets_match_auto_approve(["/homeassistant/projects/HomeAssistant-Apps/apps"]) is False
+
+    monkeypatch.setitem(
+        server.APP_OPTIONS,
+        "auto_approve_scheduled_paths",
+        ["/homeassistant/projects/HomeAssistant-Apps/apps"],
+    )
+    assert server._targets_match_auto_approve(["/homeassistant/projects/HomeAssistant-Apps/apps"]) is True
+    assert server._targets_match_auto_approve(["/homeassistant/projects/HomeAssistant-Apps/apps/langfuse"]) is True
+    assert server._targets_match_auto_approve(["/homeassistant/secrets"]) is False

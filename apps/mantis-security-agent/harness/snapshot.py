@@ -80,6 +80,22 @@ def validate_target_path(target_path: str, allow_list: Optional[List[str]] = Non
     return resolved
 
 
+SKIP_HASH_DIRS = {
+    ".git",
+    ".venv",
+    "venv",
+    "node_modules",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    "cache",
+    "spillover",
+    "state-snapshots",
+    "pydeps",
+}
+
+
 def compute_tree_content_hash(root_dir: Path) -> str:
     """
     Compute deterministic SHA-256 hash of all non-denied files in directory tree.
@@ -88,7 +104,8 @@ def compute_tree_content_hash(root_dir: Path) -> str:
     hasher = hashlib.sha256()
     file_entries = []
 
-    for root, _, files in os.walk(root_dir):
+    for root, dirs, files in os.walk(root_dir):
+        dirs[:] = sorted(d for d in dirs if d not in SKIP_HASH_DIRS)
         for f in sorted(files):
             abs_p = Path(root) / f
             if abs_p.is_symlink():

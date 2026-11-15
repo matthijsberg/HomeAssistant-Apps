@@ -167,6 +167,63 @@ async def api_reject_job(job_id: str, request: Request):
     return JSONResponse({"status": "rejected", "job_id": job_id})
 
 
+def _resolve_provider_config(role_cfg: Optional[Dict[str, Any]], role_name: str = "triage") -> Dict[str, Any]:
+    """Merge role model config with configured provider credentials/base_url in APP_OPTIONS or env."""
+    defaults = APP_OPTIONS.get("defaults", {})
+    base_cfg = dict(defaults.get(role_name) or defaults.get("triage") or {})
+    if isinstance(role_cfg, dict):
+        base_cfg.update({k: v for k, v in role_cfg.items() if v is not None})
+
+    provider = str(base_cfg.get("provider") or "gemini")
+    prov_opts = (APP_OPTIONS.get("providers") or {}).get(provider) or {}
+
+    api_key = base_cfg.get("api_key") or (prov_opts.get("api_key") if isinstance(prov_opts, dict) else "")
+    if not api_key:
+        env_map = {
+            "gemini": "GEMINI_API_KEY",
+            "openrouter": "OPENROUTER_API_KEY",
+            "anthropic": "ANTHROPIC_API_KEY",
+            "openai": "OPENAI_API_KEY",
+        }
+        env_var = env_map.get(provider)
+        if env_var:
+            api_key = os.environ.get(env_var, "")
+
+    base_url = base_cfg.get("base_url") or (prov_opts.get("base_url") if isinstance(prov_opts, dict) else "")
+    if not base_url:
+        if provider == "openrouter":
+            base_url = "https://openrouter.ai/api/v1"
+        elif provider == "ollama":
+            base_url = os.environ.get("OLLAMA_BASE_URL", "http://172.30.32.1:11434")
+
+    return {
+        "provider": provider,
+        "model": str(base_cfg.get("model") or "gemini-2.5-flash"),
+        "api_key": api_key or "",
+        "base_url": base_url or "",
+    }
+
+
+def _targets_match_auto_approve(validated_targets: List[str]) -> bool:
+    """Return True only when every target resides inside an operator-configured auto_approve_scheduled_paths entry."""
+    allowed_roots = APP_OPTIONS.get("auto_approve_scheduled_paths") or []
+    if not allowed_roots or not validated_targets:
+        return False
+    resolved_roots = []
+    for root in allowed_roots:
+        try:
+            resolved_roots.append(Path(root).resolve())
+        except Exception:
+            continue
+    if not resolved_roots:
+        return False
+    for tgt in validated_targets:
+        tp = Path(tgt).resolve()
+        if not any(tp == r or r in tp.parents for r in resolved_roots):
+            return False
+    return True
+
+
 def is_job_cancelled(job_id: str) -> bool:
     job = get_job(job_id)
     return bool(job and job.get("status") in ("cancelled", "interrupted"))
@@ -247,18 +304,24 @@ async def execute_campaign_job(job_id: str):
 
         update_job_status(job_id, status="running", progress=75, stage="critic_and_patch")
 
-        # LOGIC-01: LLM Critic, Patch Generation, and Budget Tracking
+        # LOGIC-01: LLM Critic, Patch Generation, Executive Assessment, and Budget Tracking
         models = job.get("egress_manifest", {}).get("models", {})
-        triage_cfg = models.get("triage") or models.get("deep") or APP_OPTIONS.get("defaults", {}).get("triage")
-        api_key = triage_cfg.get("api_key") if isinstance(triage_cfg, dict) else os.environ.get("GEMINI_API_KEY")
+        triage_cfg = _resolve_provider_config(models.get("triage") or models.get("deep"), "triage")
+        deep_cfg = _resolve_provider_config(models.get("deep") or models.get("triage"), "deep")
         total_cost_eur = 0.0
+        ai_assessment_md = ""
 
-        if api_key and isinstance(triage_cfg, dict):
+        def _can_invoke(cfg: Dict[str, Any]) -> bool:
+            return cfg.get("provider") == "ollama" or bool(cfg.get("api_key"))
+
+        if _can_invoke(triage_cfg):
             patch_base_dir = Path(targets[0].get("target") if isinstance(targets[0], dict) else targets[0]).resolve() if targets else Path(".")
+            crit_high_count = 0
             for f in all_findings:
                 if is_job_cancelled(job_id):
                     return
-                if f.get("severity") in ("CRITICAL", "HIGH", "ERROR"):
+                if f.get("severity") in ("CRITICAL", "HIGH", "ERROR") and crit_high_count < 15:
+                    crit_high_count += 1
                     prompt = (
                         f"Context: {env_context}\n"
                         f"Vulnerability: {f.get('title')} ({f.get('cwe')}) at file {f.get('file')}:{f.get('start_line')}\n"
@@ -278,7 +341,7 @@ async def execute_campaign_job(job_id: str):
                         out_tok = llm_resp.get("tokens_out", 0)
                         total_tokens_in += in_tok
                         total_tokens_out += out_tok
-                        cost_delta = (in_tok / 1_000_000 * 0.15) + (out_tok / 1_000_000 * 0.60)
+                        cost_delta = (in_tok / 1_000_000 * 0.60) + (out_tok / 1_000_000 * 2.20)
                         total_cost_eur += cost_delta
                         check_and_update_budget(
                             DATA_DIR / "jobs.db",
@@ -302,6 +365,51 @@ async def execute_campaign_job(job_id: str):
                     except Exception:
                         pass
 
+        # Executive deep AI assessment across findings & surface risks
+        if _can_invoke(deep_cfg) and not is_job_cancelled(job_id):
+            top_items = "\n".join(
+                f"- [{f.get('severity')}] {f.get('cwe')}: {f.get('title')} ({f.get('file', 'config')}:{f.get('start_line', 0)})"
+                for f in all_findings[:40]
+            ) or "- No static scanner leads detected."
+            assess_prompt, _ = redact_secrets(
+                f"Environment context: {env_context or 'Home Assistant OS add-ons'}\n"
+                f"Targets: {targets}\n"
+                f"Total static findings: {len(all_findings)}\n"
+                f"Findings sample:\n{top_items}\n\n"
+                "Provide a concise, actionable security assessment (max 15 bullet points): "
+                "1) Real critical/high risks vs HAOS false positives, "
+                "2) Top 3 concrete hardening actions ordered by impact."
+            )
+            try:
+                deep_resp = await asyncio.to_thread(
+                    call_llm,
+                    assess_prompt,
+                    "You are Mantis Security Agent performing an executive architecture & code security review.",
+                    deep_cfg,
+                    "deep",
+                    120,
+                )
+                in_tok = deep_resp.get("tokens_in", 0)
+                out_tok = deep_resp.get("tokens_out", 0)
+                total_tokens_in += in_tok
+                total_tokens_out += out_tok
+                cost_delta = (in_tok / 1_000_000 * 0.60) + (out_tok / 1_000_000 * 2.20)
+                total_cost_eur += cost_delta
+                check_and_update_budget(
+                    DATA_DIR / "jobs.db",
+                    job_id,
+                    in_tok,
+                    out_tok,
+                    cost_delta,
+                    APP_OPTIONS.get("budgets", {}),
+                )
+                ai_assessment_md = (deep_resp.get("text") or "").strip()
+            except BudgetExceededError as be:
+                update_job_status(job_id, status="interrupted", stage="budget_exceeded", error_message=str(be))
+                return
+            except Exception as e:
+                ai_assessment_md = f"(AI assessment unavailable: {e})"
+
         # Synthesize Markdown Report
         summary = {
             "total_findings": len(all_findings),
@@ -310,10 +418,19 @@ async def execute_campaign_job(job_id: str):
             "high": len([f for f in all_findings if f.get("severity") == "HIGH"]),
             "medium": len([f for f in all_findings if f.get("severity") in ("MEDIUM", "WARNING")]),
             "info": len([f for f in all_findings if f.get("severity") == "INFO"]),
+            "model": f"{deep_cfg.get('provider')}/{deep_cfg.get('model')}",
         }
 
         context_hdr = f"\n**Environment Context:** {env_context}\n" if env_context else ""
-        report_md = f"# Mantis Security Audit Report\n\n**Job ID:** `{job_id}`  \n**Status:** Completed{context_hdr}\n**Total Findings:** {len(all_findings)}\n\n"
+        report_md = (
+            f"# Mantis Security Audit Report\n\n"
+            f"**Job ID:** `{job_id}`  \n"
+            f"**Status:** Completed  \n"
+            f"**Model:** `{deep_cfg.get('provider')}/{deep_cfg.get('model')}`{context_hdr}\n"
+            f"**Total Findings:** {len(all_findings)}\n\n"
+        )
+        if ai_assessment_md:
+            report_md += f"## AI Security Assessment ({deep_cfg.get('model')})\n\n{ai_assessment_md}\n\n"
         for f in all_findings:
             report_md += f"### [{f.get('severity')}] {f.get('title')}\n- **CWE:** {f.get('cwe')}\n- **Location:** `{f.get('file', 'system')}:{f.get('start_line', 0)}`\n- **Details:** {f.get('rationale', '')}\n\n"
 
@@ -389,7 +506,9 @@ MCP_TOOLS = [
                 "focus": {"type": "string", "description": "Optional plain-language audit objective"},
                 "context": {"type": "string", "description": "Environment, runtime architecture, and trust boundary context (e.g. 'Home Assistant add-on on HAOS, behind Ingress, internal network only')"},
                 "passes": {"type": "integer", "description": "Number of research passes (default 1)"},
-                "include_git_history": {"type": "boolean", "description": "Whether to audit past git commit history"}
+                "include_git_history": {"type": "boolean", "description": "Whether to audit past git commit history"},
+                "llm": {"type": "object", "description": "Optional provider/model override for triage and deep stages"},
+                "auto_approve": {"type": "boolean", "description": "Auto-start only when all targets match operator-configured auto_approve_scheduled_paths"}
             },
             "required": ["targets"]
         }
@@ -579,7 +698,7 @@ async def handle_tool_call(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             
             if t_type == "local_path":
                 p = validate_target_path(t_path, APP_OPTIONS.get("allow_list"))
-                snap_id, _ = compute_snapshot_id(p)
+                snap_id, _ = await asyncio.to_thread(compute_snapshot_id, p)
                 validated_targets.append(str(p))
                 snapshot_ids[str(p)] = snap_id
             elif t_type == "upload":
@@ -639,16 +758,30 @@ async def handle_tool_call(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         approval_url = f"{APP_OPTIONS.get('ha_external_url', 'https://hass.b3rg.nl:8123')}/api/hassio_ingress/{job_id}"
         warning_text = format_warning_text(egress_manifest, approval_url)
 
+        auto_start = bool(args.get("auto_approve")) and _targets_match_auto_approve(validated_targets)
+        initial_status = "running" if auto_start else "waiting_confirmation"
+
         # LOGIC-03: Persist validated_targets (not raw base64 upload targets)
         create_job(
             job_id=job_id,
             job_type="campaign",
             targets=[{"type": "local_path", "target": vt} for vt in validated_targets],
-            status="waiting_confirmation",
+            status=initial_status,
             snapshot_ids=snapshot_ids,
             egress_manifest=egress_manifest,
             manifest_hash=egress_manifest["manifest_hash"],
         )
+
+        if auto_start:
+            update_job_status(job_id, status="running", approved=True, stage="auto_approved_scheduled")
+            asyncio.create_task(execute_campaign_job(job_id))
+            return {
+                "job_id": job_id,
+                "status": "running",
+                "targets": validated_targets,
+                "snapshot_ids": snapshot_ids,
+                "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            }
 
         return {
             "job_id": job_id,

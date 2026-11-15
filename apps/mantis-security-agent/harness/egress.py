@@ -15,6 +15,7 @@ SECRET_PATTERNS = [
 # Estimated token costs (EUR per 1M tokens) - conservative pricing
 MODEL_COSTS_EUR = {
     "gemini": {"input": 0.15, "output": 0.60},
+    "openrouter": {"input": 0.60, "output": 2.20},
     "anthropic": {"input": 3.00, "output": 15.00},
     "openai": {"input": 2.50, "output": 10.00},
     "ollama": {"input": 0.0, "output": 0.0},

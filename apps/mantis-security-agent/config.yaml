@@ -1,6 +1,6 @@
 name: "Mantis Security Agent"
 description: "Sandboxed AI code & configuration security auditing service with MCP interface"
-version: "1.1.1"
+version: "1.1.2"
 slug: "mantis_security_agent"
 init: false
 arch:
@@ -27,6 +27,8 @@ options:
   bearer_token: ""
   providers:
     gemini:
+      api_key: ""
+    openrouter:
       api_key: ""
     anthropic:
       api_key: ""
@@ -55,10 +57,13 @@ options:
     - "/homeassistant"
     - "/addon_configs"
     - "/share/projects"
+  auto_approve_scheduled_paths: []
 schema:
   bearer_token: "str?"
   providers:
     gemini:
+      api_key: "password?"
+    openrouter:
       api_key: "password?"
     anthropic:
       api_key: "password?"
@@ -83,4 +88,6 @@ schema:
   ha_external_url: "str"
   confirm_wait_seconds: "int"
   allow_list:
+    - "str"
+  auto_approve_scheduled_paths:
     - "str"
