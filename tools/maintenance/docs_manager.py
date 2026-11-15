@@ -5,7 +5,7 @@ Synchronizes config.yaml version, CHANGELOG.md, README.md, and DOCS.md.
 from datetime import datetime
 from pathlib import Path
 import re
-from typing import Optional
+from typing import List, Optional
 import yaml
 
 def sync_manifest_version(app_dir: Path, new_version: str) -> bool:
@@ -19,6 +19,41 @@ def sync_manifest_version(app_dir: Path, new_version: str) -> bool:
     updated = re.sub(r'^(version:\s*["\']?)([^"\'\n]+)(["\']?)', rf'\g<1>{new_version}\g<3>', content, flags=re.MULTILINE)
     manifest_path.write_text(updated, encoding="utf-8")
     return True
+
+def sync_app_version_references(app_dir: Path, old_version: str, new_version: str) -> List[str]:
+    """Synchronizes matching old_version tags/args in Dockerfile, build.yaml, and pyproject.toml."""
+    if not old_version or old_version == new_version:
+        return []
+    modified: List[str] = []
+    esc_old = re.escape(old_version)
+
+    dockerfile_path = app_dir / "Dockerfile"
+    if dockerfile_path.exists():
+        df_text = dockerfile_path.read_text(encoding="utf-8")
+        # Update FROM ...:<old_version> and ARG/ENV *_VERSION=<old_version>
+        new_df = re.sub(rf'(:){esc_old}(\b)', rf'\g<1>{new_version}\g<2>', df_text)
+        new_df = re.sub(rf'(VERSION\s*=\s*["\']?){esc_old}(["\']?)', rf'\g<1>{new_version}\g<2>', new_df)
+        if new_df != df_text:
+            dockerfile_path.write_text(new_df, encoding="utf-8")
+            modified.append("Dockerfile")
+
+    build_yaml_path = app_dir / "build.yaml"
+    if build_yaml_path.exists():
+        bld_text = build_yaml_path.read_text(encoding="utf-8")
+        new_bld = re.sub(rf'(_VERSION:\s*["\']?){esc_old}(["\']?)', rf'\g<1>{new_version}\g<2>', bld_text)
+        if new_bld != bld_text:
+            build_yaml_path.write_text(new_bld, encoding="utf-8")
+            modified.append("build.yaml")
+
+    pyproject_path = app_dir / "pyproject.toml"
+    if pyproject_path.exists():
+        pyp_text = pyproject_path.read_text(encoding="utf-8")
+        new_pyp = re.sub(rf'^(version\s*=\s*["\']){esc_old}(["\'])', rf'\g<1>{new_version}\g<2>', pyp_text, flags=re.MULTILINE)
+        if new_pyp != pyp_text:
+            pyproject_path.write_text(new_pyp, encoding="utf-8")
+            modified.append("pyproject.toml")
+
+    return modified
 
 def prepend_changelog_entry(app_dir: Path, new_version: str, summary: str, details: Optional[str] = None) -> bool:
     changelog_path = app_dir / "CHANGELOG.md"

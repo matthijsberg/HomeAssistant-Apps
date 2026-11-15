@@ -8,8 +8,10 @@ healthcheck:
   endpoint: "/api/version"
   timeout_seconds: 30
 security:
-  cve_check: false
+  cve_check: true
+  ghsa_check: true
   secret_scan: true
+  dockerfile_audit: true
   okf_required: true
 docs:
   sync_changelog: true

@@ -12,7 +12,12 @@ class UpstreamConfig:
     docker_image: Optional[str] = None
     base_image: Optional[str] = None
     pip_file: Optional[str] = None
+    uv_lock: Optional[str] = None
+    pyproject_toml: Optional[str] = None
     package_json: Optional[str] = None
+    package_lock: Optional[str] = None
+    dockerfile: Optional[str] = None
+    build_yaml: Optional[str] = None
 
 @dataclass
 class HealthcheckConfig:
@@ -24,7 +29,9 @@ class HealthcheckConfig:
 @dataclass
 class SecurityConfig:
     cve_check: bool = True
+    ghsa_check: bool = True
     secret_scan: bool = True
+    dockerfile_audit: bool = True
     okf_required: bool = True
     mantis_review: bool = True
     mantis_model: str = "gemini-4-argon"
@@ -62,6 +69,11 @@ def _read_manifest(app_dir: Path) -> Dict[str, Any]:
     except Exception:
         return {}
 
+def _detect_rel(app_dir: Path, override: Optional[str], default_name: str) -> Optional[str]:
+    if override:
+        return override
+    return default_name if (app_dir / default_name).exists() else None
+
 def load_app_maintenance_config(app_dir: Path) -> AppMaintenanceConfig:
     manifest = _read_manifest(app_dir)
     slug = manifest.get("slug", app_dir.name.replace("-", "_"))
@@ -84,8 +96,13 @@ def load_app_maintenance_config(app_dir: Path) -> AppMaintenanceConfig:
         github_repo=up_data.get("github_repo"),
         docker_image=up_data.get("docker_image"),
         base_image=up_data.get("base_image"),
-        pip_file=up_data.get("pip_file", "requirements.txt" if (app_dir / "requirements.txt").exists() else None),
-        package_json=up_data.get("package_json", "package.json" if (app_dir / "package.json").exists() else None)
+        pip_file=_detect_rel(app_dir, up_data.get("pip_file"), "requirements.txt"),
+        uv_lock=_detect_rel(app_dir, up_data.get("uv_lock"), "uv.lock"),
+        pyproject_toml=_detect_rel(app_dir, up_data.get("pyproject_toml"), "pyproject.toml"),
+        package_json=_detect_rel(app_dir, up_data.get("package_json"), "package.json"),
+        package_lock=_detect_rel(app_dir, up_data.get("package_lock"), "package-lock.json"),
+        dockerfile=_detect_rel(app_dir, up_data.get("dockerfile"), "Dockerfile"),
+        build_yaml=_detect_rel(app_dir, up_data.get("build_yaml"), "build.yaml"),
     )
 
     hc_data = data.get("healthcheck", {})
@@ -99,7 +116,9 @@ def load_app_maintenance_config(app_dir: Path) -> AppMaintenanceConfig:
     sec_data = data.get("security", {})
     security = SecurityConfig(
         cve_check=bool(sec_data.get("cve_check", True)),
+        ghsa_check=bool(sec_data.get("ghsa_check", True)),
         secret_scan=bool(sec_data.get("secret_scan", True)),
+        dockerfile_audit=bool(sec_data.get("dockerfile_audit", True)),
         okf_required=bool(sec_data.get("okf_required", (app_dir / "knowledge").exists())),
         mantis_review=bool(sec_data.get("mantis_review", True)),
         mantis_model=str(sec_data.get("mantis_model", "gemini-4-argon"))

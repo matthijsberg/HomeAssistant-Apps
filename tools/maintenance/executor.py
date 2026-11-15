@@ -9,7 +9,7 @@ from typing import Optional, Tuple
 from .config import AppMaintenanceConfig, load_app_maintenance_config
 from .smoke_test import run_app_mock_and_smoke_test, SmokeTestResult
 from .checkers.security import run_mantis_diff_review
-from .docs_manager import sync_manifest_version, prepend_changelog_entry, sync_readme_version
+from .docs_manager import sync_manifest_version, sync_app_version_references, prepend_changelog_entry, sync_readme_version
 from .okf_manager import append_okf_maintenance_log, validate_okf_bundle
 
 @dataclass
@@ -28,6 +28,7 @@ def _run_git(args: list, cwd: Path) -> Tuple[int, str, str]:
 
 def execute_app_update(app_dir: Path, target_version: str, summary: str, urgency: str = "LOW") -> ExecutionResult:
     config = load_app_maintenance_config(app_dir)
+    old_version = config.current_version
     repo_root = app_dir.parent.parent
     branch_name = f"maint/{config.slug}-v{target_version}"
 
@@ -37,7 +38,7 @@ def execute_app_update(app_dir: Path, target_version: str, summary: str, urgency
         # If branch already exists, checkout
         _run_git(["checkout", branch_name], repo_root)
 
-    # 2. Bump version in manifest
+    # 2. Bump version in manifest and matching container/package references
     if not sync_manifest_version(app_dir, target_version):
         _run_git(["checkout", "main"], repo_root)
         return ExecutionResult(
@@ -46,6 +47,7 @@ def execute_app_update(app_dir: Path, target_version: str, summary: str, urgency
             success=False,
             error_message="Failed to update version in config.yaml"
         )
+    updated_refs = sync_app_version_references(app_dir, old_version, target_version)
 
     # Reload config with new version
     config = load_app_maintenance_config(app_dir)
@@ -88,7 +90,8 @@ def execute_app_update(app_dir: Path, target_version: str, summary: str, urgency
             mantis_summary = f"Security: {mantis_msg}"
 
     # 5. Synchronize documentation & OKF bundle
-    full_summary = f"{summary}. {mantis_summary}".strip()
+    ref_note = f" (synced: {', '.join(updated_refs)})" if updated_refs else ""
+    full_summary = f"{summary}{ref_note}. {mantis_summary}".strip()
     prepend_changelog_entry(app_dir, target_version, full_summary)
     sync_readme_version(app_dir, target_version)
     if config.docs.sync_okf:

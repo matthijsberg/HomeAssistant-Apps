@@ -43,10 +43,19 @@ def cmd_check(args):
         print(f"{status_icon} [{proposal.urgency}] {cfg.app_name} ({cfg.slug})")
         print(f"   Version: {cfg.current_version} -> {proposal.target_version}")
         print(f"   Summary: {proposal.summary}")
+        if proposal.security_result.scanned_targets:
+            print(f"   Scope: {', '.join(proposal.security_result.scanned_targets)}")
         if proposal.security_result.secrets_found:
             print(f"   ⚠️ Secrets: {proposal.security_result.secrets_found}")
         if proposal.security_result.vulnerabilities:
-            print(f"   ⚠️ CVEs: {len(proposal.security_result.vulnerabilities)} vulnerabilities found")
+            print(f"   ⚠️ CVEs/Advisories ({len(proposal.security_result.vulnerabilities)}):")
+            for v in proposal.security_result.vulnerabilities[:5]:
+                fix_info = f" (fix: {v.fixed_version})" if v.fixed_version else ""
+                print(f"      - [{v.severity}] {v.vuln_id}: {v.package} {v.version}{fix_info} — {v.summary}")
+        if proposal.upstream_result.release_security_mentions:
+            print(f"   🔒 Release security mentions: {proposal.upstream_result.release_security_mentions}")
+        if proposal.security_result.supply_chain_warnings:
+            print(f"   ⚠️ Supply-chain / Dockerfile notes: {proposal.security_result.supply_chain_warnings}")
         print()
 
 def cmd_plan(args):

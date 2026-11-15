@@ -35,3 +35,14 @@ jobs:
         run: |
           cd apps/hermes-agent
           ./scripts/setup.sh
+
+      - name: Trivy Filesystem, Misconfig & Secret Scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: "fs"
+          scan-ref: "apps/hermes-agent"
+          scanners: "vuln,misconfig,secret"
+          severity: "HIGH,CRITICAL"
+          ignore-unfixed: true
+          format: "table"
+          exit-code: "1"

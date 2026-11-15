@@ -7,8 +7,10 @@ healthcheck:
   endpoint: "/"
   timeout_seconds: 30
 security:
-  cve_check: false
+  cve_check: true
+  ghsa_check: false
   secret_scan: true
+  dockerfile_audit: true
   okf_required: false
 docs:
   sync_changelog: true

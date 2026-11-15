@@ -54,6 +54,13 @@ def evaluate_app_maintenance(app_dir: Path) -> AppMaintenanceProposal:
             if urgency not in ("HIGH", "MEDIUM"):
                 urgency = "LOW"
             summary_parts.append(f"Upstream: Patch update available ({config.current_version} -> {target_version})")
+        if up_res.release_security_mentions:
+            if urgency == "LOW":
+                urgency = "MEDIUM"
+            summary_parts.append(f"Release notes security: {up_res.release_security_mentions[0]}")
+
+    if sec_res.supply_chain_warnings:
+        summary_parts.append(f"Hygiene: {sec_res.supply_chain_warnings[0]}")
 
     if not summary_parts:
         summary = "All checks passed. Version and dependencies are up to date."
@@ -82,6 +89,12 @@ def format_telegram_plan(proposals: List[AppMaintenanceProposal]) -> str:
     if not actionable:
         lines.append("✅ All Home Assistant apps are fully up to date and verified clean.")
         lines.append(f"Checked {len(proposals)} apps. No maintenance required.")
+        hygiene_apps = [p for p in up_to_date if p.security_result.supply_chain_warnings]
+        if hygiene_apps:
+            lines.append("")
+            lines.append("Hygiene notes:")
+            for p in hygiene_apps:
+                lines.append(f"• {p.config.app_name}: {'; '.join(p.security_result.supply_chain_warnings)}")
         return "\n".join(lines)
 
     lines.append(f"Found {len(actionable)} app(s) requiring maintenance attention:\n")
@@ -94,17 +107,39 @@ def format_telegram_plan(proposals: List[AppMaintenanceProposal]) -> str:
 
     for idx, prop in enumerate(actionable, 1):
         app = prop.config
+        sec = prop.security_result
+        up = prop.upstream_result
         lines.append(f"*{idx}. {app.app_name}* (`{app.slug}`)")
         lines.append(f"• Urgency: {urgency_emojis.get(prop.urgency, prop.urgency)}")
         lines.append(f"• Current Version: `{app.current_version}` ➔ Target: `{prop.target_version}`")
         lines.append(f"• Proposed Changes: {prop.summary}")
-        if prop.upstream_result.release_notes_url:
-            lines.append(f"• Release Notes: {prop.upstream_result.release_notes_url}")
+        if sec.scanned_targets:
+            lines.append(f"• Security Scope: {', '.join(sec.scanned_targets)}")
+        if sec.vulnerabilities:
+            top_v = sec.vulnerabilities[:3]
+            v_str = "; ".join(
+                f"{v.vuln_id} ({v.package} {v.version}" + (f", fix: {v.fixed_version}" if v.fixed_version else "") + ")"
+                for v in top_v
+            )
+            lines.append(f"• Advisories/CVEs: {v_str}")
+        if up.release_security_mentions:
+            lines.append(f"• Release Security Hints: {'; '.join(up.release_security_mentions[:2])}")
+        if sec.supply_chain_warnings:
+            lines.append(f"• Container Hygiene: {'; '.join(sec.supply_chain_warnings[:2])}")
+        if up.release_notes_url:
+            lines.append(f"• Release Notes: {up.release_notes_url}")
         lines.append(f"• Approval Request: Reply `Approve {app.slug}` or `Approve all` to execute.")
         lines.append("")
 
     if up_to_date:
         up_to_date_names = ", ".join(f"`{p.config.app_name}`" for p in up_to_date)
         lines.append(f"✓ Up to date ({len(up_to_date)}): {up_to_date_names}")
+        hygiene_notes = [
+            f"{p.config.app_name}: {p.security_result.supply_chain_warnings[0]}"
+            for p in up_to_date
+            if p.security_result.supply_chain_warnings
+        ]
+        if hygiene_notes:
+            lines.append(f"• Hygiene notes: {' | '.join(hygiene_notes)}")
 
     return "\n".join(lines)

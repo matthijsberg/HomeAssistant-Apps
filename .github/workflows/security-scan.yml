@@ -1,0 +1,169 @@
+name: Security & Maintenance Audit
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/**"
+      - "tools/maintenance/**"
+      - ".github/workflows/security-scan.yml"
+  pull_request:
+    paths:
+      - "apps/**"
+      - "tools/maintenance/**"
+      - ".github/workflows/security-scan.yml"
+  schedule:
+    # Weekly Sunday 09:00 UTC (before 11:00 CET/CEST HA maintenance cron)
+    - cron: "0 9 * * 0"
+  workflow_dispatch:
+
+jobs:
+  maintenance-checks:
+    name: Maintenance Framework & OSV/GHSA Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyyaml pytest
+
+      - name: Run Maintenance Unit Tests
+        run: python3 -m pytest tools/maintenance/tests/ -v
+
+      - name: Run Weekly Maintenance Check (OSV, GHSA, Dockerfile)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 tools/maintenance/main.py check
+
+  trivy-fs-all-apps:
+    name: Trivy Filesystem & Dockerfile Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Trivy FS scan (SARIF)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: "fs"
+          scan-ref: "apps"
+          scanners: "vuln,misconfig,secret"
+          severity: "HIGH,CRITICAL"
+          ignore-unfixed: true
+          format: "sarif"
+          output: "trivy-fs-apps.sarif"
+          exit-code: "0"
+
+      - name: Upload Trivy FS SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true
+        with:
+          sarif_file: "trivy-fs-apps.sarif"
+          category: "trivy-fs-apps"
+
+      - name: Enforce Trivy FS Gate
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: "fs"
+          scan-ref: "apps"
+          scanners: "vuln,misconfig,secret"
+          severity: "HIGH,CRITICAL"
+          ignore-unfixed: true
+          format: "table"
+          exit-code: "1"
+
+  trivy-image-scan:
+    name: Container Image Scan (${{ matrix.app }})
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        app:
+          - open-hems
+          - mantis-security-agent
+          - langfuse
+          - ollama
+          - hermes-agent
+          - ha-system-1
+          - laya
+          - unifi-os-server
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Free disk space for large container builds
+        if: matrix.app == 'ollama' || matrix.app == 'ha-system-1' || matrix.app == 'laya' || matrix.app == 'hermes-agent'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          docker system prune -af || true
+
+      - name: Build amd64 image from build.yaml & Dockerfile
+        run: |
+          python3 - <<'PY'
+          import subprocess, yaml
+          from pathlib import Path
+
+          app_dir = Path("apps/${{ matrix.app }}")
+          build_yaml = app_dir / "build.yaml"
+          cmd = ["docker", "build", "-t", "scan-${{ matrix.app }}:ci"]
+          if build_yaml.exists():
+              bld = yaml.safe_load(build_yaml.read_text()) or {}
+              amd64_from = (bld.get("build_from") or {}).get("amd64")
+              if amd64_from:
+                  cmd.extend(["--build-arg", f"BUILD_FROM={amd64_from}"])
+              for k, v in (bld.get("args") or {}).items():
+                  cmd.extend(["--build-arg", f"{k}={v}"])
+          cmd.append(str(app_dir))
+          print("Running:", " ".join(cmd))
+          subprocess.run(cmd, check=True)
+          PY
+
+      - name: Trivy Image Scan (OS + Libraries)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: "image"
+          image-ref: "scan-${{ matrix.app }}:ci"
+          vuln-type: "os,library"
+          scanners: "vuln,secret"
+          severity: "HIGH,CRITICAL"
+          ignore-unfixed: true
+          format: "sarif"
+          output: "trivy-${{ matrix.app }}.sarif"
+          exit-code: "0"
+
+      - name: Upload SARIF to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true
+        with:
+          sarif_file: "trivy-${{ matrix.app }}.sarif"
+          category: "trivy-image-${{ matrix.app }}"
+
+      - name: Enforce Trivy Image Gate
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: "image"
+          image-ref: "scan-${{ matrix.app }}:ci"
+          vuln-type: "os,library"
+          scanners: "vuln,secret"
+          severity: "HIGH,CRITICAL"
+          ignore-unfixed: true
+          format: "table"
+          exit-code: "1"
