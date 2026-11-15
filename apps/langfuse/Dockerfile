@@ -1,7 +1,7 @@
 ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base-debian:trixie
 FROM ghcr.io/langfuse/langfuse:4.76.0 AS langfuse-web-source
 FROM ghcr.io/langfuse/langfuse-worker:4.76.0 AS langfuse-worker-source
-FROM chrislusf/seaweedfs:latest AS seaweedfs-source
+FROM chrislusf/seaweedfs:4.53 AS seaweedfs-source
 FROM clickhouse/clickhouse-server:26.3-alpine AS clickhouse-source
 
 FROM ${BUILD_FROM}
@@ -10,7 +10,7 @@ ENV LANG=C.UTF-8
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install dependencies in Debian: Node.js, PostgreSQL 16 (via official pgdg repo), Redis, Nginx, gosu, tools
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     curl \
     gnupg \
     lsb-release \
@@ -41,7 +41,7 @@ RUN case "${TARGETARCH:-amd64}" in \
       aarch64) arch=arm64 ;; \
       *) arch=amd64 ;; \
     esac \
-    && curl -fsSL "https://github.com/golang-migrate/migrate/releases/download/v4.18.2/migrate.linux-${arch}.tar.gz" | tar -xz -C /usr/local/bin migrate \
+    && curl -fsSL "https://github.com/golang-migrate/migrate/releases/download/v4.20.1/migrate.linux-${arch}.tar.gz" | tar -xz -C /usr/local/bin migrate \
     && chmod +x /usr/local/bin/migrate
 
 # Copy binaries and global node modules (Prisma CLI) from Langfuse Web
