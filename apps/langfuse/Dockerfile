@@ -4,6 +4,16 @@ FROM ghcr.io/langfuse/langfuse-worker:4.76.0 AS langfuse-worker-source
 FROM chrislusf/seaweedfs:4.53 AS seaweedfs-source
 FROM clickhouse/clickhouse-server:26.3-alpine AS clickhouse-source
 
+FROM --platform=$BUILDPLATFORM golang:1.27.4-trixie AS migrate-builder
+ARG TARGETARCH
+RUN mkdir -p /out && git clone --branch v4.20.1 --depth 1 https://github.com/golang-migrate/migrate.git /src \
+    && cd /src \
+    && case "${TARGETARCH:-amd64}" in \
+         aarch64) goarch=arm64 ;; \
+         *) goarch="${TARGETARCH:-amd64}" ;; \
+       esac \
+    && CGO_ENABLED=0 GOOS=linux GOARCH="${goarch}" go build -ldflags='-s -w -X main.Version=4.20.1' -tags 'clickhouse file' -o /out/migrate ./cmd/migrate
+
 FROM ${BUILD_FROM}
 
 ENV LANG=C.UTF-8
@@ -33,16 +43,9 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
     && ln -s /usr/lib/postgresql/16/bin/* /usr/local/bin/ \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install golang-migrate CLI for ClickHouse migrations
-ARG TARGETARCH
-RUN case "${TARGETARCH:-amd64}" in \
-      amd64) arch=amd64 ;; \
-      arm64) arch=arm64 ;; \
-      aarch64) arch=arm64 ;; \
-      *) arch=amd64 ;; \
-    esac \
-    && curl -fsSL "https://github.com/golang-migrate/migrate/releases/download/v4.20.1/migrate.linux-${arch}.tar.gz" | tar -xz -C /usr/local/bin migrate \
-    && chmod +x /usr/local/bin/migrate
+# Copy golang-migrate CLI (built from source with Go 1.27.4, clickhouse + file drivers only)
+COPY --from=migrate-builder /out/migrate /usr/local/bin/migrate
+RUN chmod +x /usr/local/bin/migrate
 
 # Copy binaries and global node modules (Prisma CLI) from Langfuse Web
 COPY --from=langfuse-web-source /usr/local/bin /usr/local/bin

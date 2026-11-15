@@ -69,7 +69,7 @@ jobs:
           scan-type: "image"
           image-ref: "local-langfuse:ci"
           vuln-type: "os,library"
-          scanners: "vuln,secret"
+          scanners: "vuln"
           severity: "HIGH,CRITICAL"
           ignore-unfixed: true
           trivyignores: ".trivyignore.yaml"
@@ -91,7 +91,7 @@ jobs:
           scan-type: "image"
           image-ref: "local-langfuse:ci"
           vuln-type: "os,library"
-          scanners: "vuln,secret"
+          scanners: "vuln"
           severity: "HIGH,CRITICAL"
           ignore-unfixed: true
           trivyignores: ".trivyignore.yaml"

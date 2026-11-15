@@ -4,3 +4,117 @@ misconfigurations:
       Home Assistant OS Supervisor mounts /data/options.json as 0600 root:root
       and /config with root ownership; s6-overlay/add-on entrypoints require root.
       Container isolation is enforced by HAOS AppArmor and cgroups.
+
+vulnerabilities:
+  # Upstream Langfuse (4.76.0 & 4.80.0) and Prisma ship deepmerge-ts 7.1.5
+  - id: CVE-2026-40345
+    paths:
+      - "opt/langfuse-web-pristine/node_modules/.pnpm/deepmerge-ts@7.1.5/node_modules/deepmerge-ts/package.json"
+      - "usr/local/lib/node_modules/prisma/node_modules/deepmerge-ts/package.json"
+    expired_at: 2026-12-15
+    statement: "Upstream Langfuse & Prisma transitive dependency; no upstream fix in 4.80.0 yet."
+
+  # Upstream SeaweedFS 4.53 (latest release) includes golang.org/x/net v0.61.0
+  - id: CVE-2026-78661
+    paths:
+      - "usr/bin/weed"
+    expired_at: 2026-12-15
+    statement: "Upstream SeaweedFS 4.53 is latest release; awaiting upstream Go dependency bump."
+
+  # Home Assistant base image (amd64-base-debian:trixie) bundles /usr/bin/tempio
+  - id: CVE-2025-22869
+    paths: ["usr/bin/tempio"]
+    expired_at: 2026-12-15
+    statement: "Bundled in upstream ghcr.io/home-assistant/amd64-base-debian:trixie; not invoked by app."
+  - id: CVE-2025-47913
+    paths: ["usr/bin/tempio"]
+    expired_at: 2026-12-15
+    statement: "Bundled in upstream ghcr.io/home-assistant/amd64-base-debian:trixie; not invoked by app."
+  - id: CVE-2026-33818
+    paths: ["usr/bin/tempio"]
+    expired_at: 2026-12-15
+    statement: "Bundled in upstream ghcr.io/home-assistant/amd64-base-debian:trixie; not invoked by app."
+  - id: CVE-2026-39821
+    paths: ["usr/bin/tempio"]
+    expired_at: 2026-12-15
+    statement: "Bundled in upstream ghcr.io/home-assistant/amd64-base-debian:trixie; not invoked by app."
+  - id: CVE-2026-39828
+    paths: ["usr/bin/tempio"]
+    expired_at: 2026-12-15
+    statement: "Bundled in upstream ghcr.io/home-assistant/amd64-base-debian:trixie; not invoked by app."
+  - id: CVE-2026-39829
+    paths: ["usr/bin/tempio"]
+    expired_at: 2026-12-15
+    statement: "Bundled in upstream ghcr.io/home-assistant/amd64-base-debian:trixie; not invoked by app."
+  - id: CVE-2026-39830
+    paths: ["usr/bin/tempio"]
+    expired_at: 2026-12-15
+    statement: "Bundled in upstream ghcr.io/home-assistant/amd64-base-debian:trixie; not invoked by app."
+  - id: CVE-2026-39831
+    paths: ["usr/bin/tempio"]
+    expired_at: 2026-12-15
+    statement: "Bundled in upstream ghcr.io/home-assistant/amd64-base-debian:trixie; not invoked by app."
+  - id: CVE-2026-39832
+    paths: ["usr/bin/tempio"]
+    expired_at: 2026-12-15
+    statement: "Bundled in upstream ghcr.io/home-assistant/amd64-base-debian:trixie; not invoked by app."
+  - id: CVE-2026-39835
+    paths: ["usr/bin/tempio"]
+    expired_at: 2026-12-15
+    statement: "Bundled in upstream ghcr.io/home-assistant/amd64-base-debian:trixie; not invoked by app."
+  - id: CVE-2026-42508
+    paths: ["usr/bin/tempio"]
+    expired_at: 2026-12-15
+    statement: "Bundled in upstream ghcr.io/home-assistant/amd64-base-debian:trixie; not invoked by app."
+  - id: CVE-2026-46595
+    paths: ["usr/bin/tempio"]
+    expired_at: 2026-12-15
+    statement: "Bundled in upstream ghcr.io/home-assistant/amd64-base-debian:trixie; not invoked by app."
+  - id: CVE-2026-46597
+    paths: ["usr/bin/tempio"]
+    expired_at: 2026-12-15
+    statement: "Bundled in upstream ghcr.io/home-assistant/amd64-base-debian:trixie; not invoked by app."
+  - id: CVE-2026-46600
+    paths: ["usr/bin/tempio"]
+    expired_at: 2026-12-15
+    statement: "Bundled in upstream ghcr.io/home-assistant/amd64-base-debian:trixie; not invoked by app."
+  - id: CVE-2026-56853
+    paths: ["usr/bin/tempio"]
+    expired_at: 2026-12-15
+    statement: "Bundled in upstream ghcr.io/home-assistant/amd64-base-debian:trixie; not invoked by app."
+  - id: CVE-2026-56854
+    paths: ["usr/bin/tempio"]
+    expired_at: 2026-12-15
+    statement: "Bundled in upstream ghcr.io/home-assistant/amd64-base-debian:trixie; not invoked by app."
+  - id: CVE-2026-56858
+    paths: ["usr/bin/tempio"]
+    expired_at: 2026-12-15
+    statement: "Bundled in upstream ghcr.io/home-assistant/amd64-base-debian:trixie; not invoked by app."
+  - id: CVE-2026-56859
+    paths: ["usr/bin/tempio"]
+    expired_at: 2026-12-15
+    statement: "Bundled in upstream ghcr.io/home-assistant/amd64-base-debian:trixie; not invoked by app."
+  - id: CVE-2026-56860
+    paths: ["usr/bin/tempio"]
+    expired_at: 2026-12-15
+    statement: "Bundled in upstream ghcr.io/home-assistant/amd64-base-debian:trixie; not invoked by app."
+  - id: CVE-2026-56862
+    paths: ["usr/bin/tempio"]
+    expired_at: 2026-12-15
+    statement: "Bundled in upstream ghcr.io/home-assistant/amd64-base-debian:trixie; not invoked by app."
+  - id: CVE-2026-78667
+    paths: ["usr/bin/tempio"]
+    expired_at: 2026-12-15
+    statement: "Bundled in upstream ghcr.io/home-assistant/amd64-base-debian:trixie; not invoked by app."
+  - id: CVE-2026-78669
+    paths: ["usr/bin/tempio"]
+    expired_at: 2026-12-15
+    statement: "Bundled in upstream ghcr.io/home-assistant/amd64-base-debian:trixie; not invoked by app."
+  - id: CVE-2026-97031
+    paths: ["usr/bin/tempio"]
+    expired_at: 2026-12-15
+    statement: "Bundled in upstream ghcr.io/home-assistant/amd64-base-debian:trixie; not invoked by app."
+  - id: CVE-2026-111943
+    paths: ["usr/bin/tempio"]
+    expired_at: 2026-12-15
+    statement: "Bundled in upstream ghcr.io/home-assistant/amd64-base-debian:trixie; not invoked by app."
