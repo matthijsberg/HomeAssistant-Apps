@@ -39,7 +39,7 @@ def test_security_posture_and_ports():
     assert cfg.get("full_access") is not True
 
     ports = cfg.get("ports", {})
-    assert ports.get("11443/tcp") == 11443
+    assert ports.get("443/tcp") == 11443
     assert ports.get("8080/tcp") == 8080
     assert ports.get("3478/udp") == 3478
     assert "5432/tcp" not in ports, "PostgreSQL must remain localhost-only"

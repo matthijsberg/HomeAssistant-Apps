@@ -1,5 +1,13 @@
 # Changelog
 
+## [6.0.21-0] - 2026-11-16 (Early Access Target)
+
+### Changed
+- Upgraded target installer to UniFi OS Server `6.0.21` EA (`amd64` and `arm64` SHA-256 checksums verified), bundling UniFi Network `10.6.109` and Identity Sync `1.8.8`.
+- Isolated UniFi OS Server backups under `/backup/unifi-os-server/` (preventing collisions with legacy `/backup/unifi/`) while selecting the newest `.unf` backup by mtime for dropzone auto-restore.
+- Added `scripts/extract_oci.py` (Python `zipfile` + whiteout-aware OCI extraction) to handle SFX installer extra-bytes cleanly.
+- Added `systemd-dbus-shim.py` (`org.freedesktop.systemd1` D-Bus shim backed by `systemctl3.py`), D-Bus daemon startup, PostgreSQL 14 cluster init (`14-main` + `14-apps`), `unifi-mongodb.service` enablement, UUIDv5 `uos_uuid` generation, and `443/tcp -> 11443` port mapping.
+
 ## [6.0.19-0] - 2026-11-05 (Early Access Target)
 
 ### Added

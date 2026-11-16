@@ -9,14 +9,14 @@ echo "=== UniFi OS Server Health & Diagnostics ==="
 echo "Date: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 echo "Host Architecture: $(uname -m)"
 echo "App Model: ${APP_MODEL:-UOSSERVER}"
-echo "App Version: ${APP_VERSION:-6.0.19}"
+echo "App Version: ${APP_VERSION:-6.0.21}"
 echo ""
 
 echo "--- 1. Service Supervision Status ---"
 if command -v systemctl >/dev/null 2>&1; then
-    for svc in postgresql mongodb rabbitmq-server ulp-go unifi-core unifi nginx; do
+    for svc in postgresql@14-main postgresql@14-apps unifi-mongodb rabbitmq-server ulp-go unifi-core unifi nginx uos-agent; do
         status=$(systemctl is-active "$svc" 2>/dev/null || echo "unknown/inactive")
-        printf "  %-20s: %s\n" "$svc" "$status"
+        printf "  %-22s: %s\n" "$svc" "$status"
     done
 else
     echo "  systemctl command not found"
@@ -25,7 +25,7 @@ echo ""
 
 echo "--- 2. Port Listen Status ---"
 if command -v ss >/dev/null 2>&1; then
-    for port in 11443 8080 3478 10003; do
+    for port in 443 8080 3478 10001 10003; do
         if ss -tuln | grep -q ":$port "; then
             printf "  Port %-6s : LISTENING\n" "$port"
         else

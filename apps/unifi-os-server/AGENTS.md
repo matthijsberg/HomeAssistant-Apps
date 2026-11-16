@@ -1,8 +1,8 @@
 # AGENTS.md — UniFi OS Server HA App (`unifi_os_server`)
 
 ## 1. Current State & Execution Gate
-- **ACTIVE TARGET:** UniFi OS Server **6.0.19** Early Access (EA) target enabled and actively staging.
-- The manifest `config.yaml` is active (`version: "6.0.19-0"`).
+- **ACTIVE TARGET:** UniFi OS Server **6.0.21** Early Access (EA) target enabled and actively staging.
+- The manifest `config.yaml` is active (`version: "6.0.21-0"`).
 - Base build image: `ghcr.io/home-assistant/{arch}-base-debian:trixie`.
 - Full implementation plan: `/config/.hermes/plans/2026-10-16_152500-unifi-os-server-ha-app.md`.
 

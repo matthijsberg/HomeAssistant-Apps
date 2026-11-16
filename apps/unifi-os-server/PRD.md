@@ -2,7 +2,7 @@
 
 **Project Slug:** `unifi_os_server`  
 **Directory:** `/config/projects/HomeAssistant-Apps/apps/unifi-os-server/`  
-**Version:** `0.2.0` (Targeting UniFi OS Server 6.0.19 EA)  
+**Version:** `0.2.1` (Targeting UniFi OS Server 6.0.21 EA)  
 **Status:** Architecture Specified / Scaffolding Active  
 
 ---

@@ -13,7 +13,7 @@ def test_dockerfile_structure():
     content = DOCKERFILE_PATH.read_text(encoding="utf-8")
     assert "AS extractor" in content, "Dockerfile must use a multi-stage extractor"
     assert "FROM scratch" in content, "Final stage must be clean scratch"
-    assert "6.0.19" in content, "Dockerfile must reference 6.0.19"
+    assert "6.0.21" in content, "Dockerfile must reference 6.0.21"
     assert "systemctl3.py" in content, "Dockerfile must install systemctl3.py"
     assert 'ENTRYPOINT ["/run.sh"]' in content
 

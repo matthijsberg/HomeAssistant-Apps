@@ -61,7 +61,7 @@ def validate_config() -> None:
     }, "Only NET_ADMIN and NET_RAW capabilities are allowed"
 
     ports = cfg.get("ports", {})
-    assert ports.get("11443/tcp") == 11443, "11443/tcp must map to 11443 for UOS Console & HA integration"
+    assert ports.get("443/tcp") == 11443, "443/tcp must map to host 11443 for UOS Console & HA integration"
     assert ports.get("8080/tcp") == 8080, "8080/tcp must map to 8080 for seamless device inform"
     assert ports.get("3478/udp") == 3478, "3478/udp must map to 3478 for STUN"
     assert "5432/tcp" not in ports, "PostgreSQL port 5432 must never be exposed externally"
