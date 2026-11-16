@@ -1,6 +1,6 @@
 ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base-debian:trixie
-FROM ghcr.io/langfuse/langfuse:4.76.0 AS langfuse-web-source
-FROM ghcr.io/langfuse/langfuse-worker:4.76.0 AS langfuse-worker-source
+FROM ghcr.io/langfuse/langfuse:4.81.0 AS langfuse-web-source
+FROM ghcr.io/langfuse/langfuse-worker:4.81.0 AS langfuse-worker-source
 FROM chrislusf/seaweedfs:4.53 AS seaweedfs-source
 FROM clickhouse/clickhouse-server:26.3-alpine AS clickhouse-source
 

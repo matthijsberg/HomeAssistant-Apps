@@ -8,6 +8,13 @@ trust: verified
 
 # Knowledge Maintenance Log
 
+### [2026-11-16] Maintenance: Upgrade to v4.81.0
+- **Date**: 2026-11-16
+- **Urgency**: MEDIUM
+- **Action**: Upstream upgrade to Langfuse v4.81.0
+- **Summary**: Upstream update to Langfuse v4.81.0 on Debian 13 Trixie base (`ghcr.io/home-assistant/{arch}-base-debian:trixie`). Mantis Security review passed clean (`rev_3d425edbfd`).
+- **Status**: active
+
 ### [2026-11-08] Maintenance: Upgrade to v4.76.0 (Debian Trixie base)
 - **Date**: 2026-11-08
 - **Urgency**: MEDIUM

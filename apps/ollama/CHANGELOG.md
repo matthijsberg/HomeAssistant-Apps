@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.40.16] - 2026-11-16
+
+## What’s changed
+
+## ⬆️ Dependency updates
+
+- ⬆️ Update Ollama upstream inference engine to v0.40.16 (reduced memory usage on Qwen3.8 Flash Next, `/v1/responses` truncation fix, `/v1/models` empty list fix, updated llama.cpp)
+- 📌 Pin `ollama/ollama:0.40.16` in `build.yaml` and `Dockerfile` (eliminating unpinned `:latest` tag)
+
+## 🧰 Maintenance
+
+- 🛡️ Verified clean security diff review via Mantis Security Agent (openrouter/z-ai/glm-5.3) [Job: rev_33660e7627, Verdict: CLEAN]
+- 🏷️ Synchronized Web UI version badge and pyproject.toml to v0.40.16
+
 ## [0.40.15] - 2026-11-08
 
 ## What’s changed

@@ -72,17 +72,26 @@ EOF
 chmod 644 /etc/clickhouse-server/users.d/01-memory.xml
 echo "[init-config] ClickHouse memory limits configured: ${CLICKHOUSE_MEM_MB} MB (server: ${CH_MEM_BYTES} B, query: ${CH_QUERY_MEM_BYTES} B)."
 
-# Ensure Prisma query engine links and environment variable for Debian
-PRISMA_ENGINE_FILE=$(find /opt/langfuse-web/node_modules -name "libquery_engine-rhel-openssl-3.0.x.so.node" 2>/dev/null | head -n 1)
+# Ensure Prisma query engine links, /tmp/prisma-engines fallback, and env variable for Debian
+PRISMA_ENGINE_FILE=$(find /opt/langfuse-web-pristine /opt/langfuse-worker /opt/langfuse-web -name "libquery_engine-rhel-openssl-3.0.x.so.node" 2>/dev/null | head -n 1)
 if [ -n "${PRISMA_ENGINE_FILE}" ] && [ -f "${PRISMA_ENGINE_FILE}" ]; then
-  PRISMA_DIR="$(dirname "${PRISMA_ENGINE_FILE}")"
-  ln -sf "libquery_engine-rhel-openssl-3.0.x.so.node" "${PRISMA_DIR}/libquery_engine-debian-openssl-3.0.x.so.node" 2>/dev/null || true
-  ln -sf "libquery_engine-rhel-openssl-3.0.x.so.node" "${PRISMA_DIR}/libquery_engine-linux-openssl-3.0.x.so.node" 2>/dev/null || true
+  mkdir -p /tmp/prisma-engines
+  cp -f "${PRISMA_ENGINE_FILE}" /tmp/prisma-engines/libquery_engine-debian-openssl-3.0.x.so.node
+  cp -f "${PRISMA_ENGINE_FILE}" /tmp/prisma-engines/libquery_engine-rhel-openssl-3.0.x.so.node
+  cp -f "${PRISMA_ENGINE_FILE}" /tmp/prisma-engines/libquery_engine-linux-openssl-3.0.x.so.node
+  while IFS= read -r eng_file; do
+    eng_dir="$(dirname "${eng_file}")"
+    ln -sf "libquery_engine-rhel-openssl-3.0.x.so.node" "${eng_dir}/libquery_engine-debian-openssl-3.0.x.so.node" 2>/dev/null || true
+    ln -sf "libquery_engine-rhel-openssl-3.0.x.so.node" "${eng_dir}/libquery_engine-linux-openssl-3.0.x.so.node" 2>/dev/null || true
+  done < <(find /opt/langfuse-web-pristine /opt/langfuse-worker /opt/langfuse-web -name "libquery_engine-rhel-openssl-3.0.x.so.node" 2>/dev/null)
+  PRISMA_QUERY_ENGINE_LIBRARY="/tmp/prisma-engines/libquery_engine-debian-openssl-3.0.x.so.node"
+else
+  PRISMA_QUERY_ENGINE_LIBRARY=""
 fi
 
 # Write environment file for Langfuse Web and Worker processes
 cat <<EOF > /run/langfuse.env
-PRISMA_QUERY_ENGINE_LIBRARY=${PRISMA_ENGINE_FILE}
+PRISMA_QUERY_ENGINE_LIBRARY=${PRISMA_QUERY_ENGINE_LIBRARY}
 DATABASE_URL=postgresql://langfuse:${POSTGRES_PASSWORD}@127.0.0.1:5432/langfuse
 CLICKHOUSE_URL=http://127.0.0.1:8123
 CLICKHOUSE_MIGRATION_URL=clickhouse://127.0.0.1:9000

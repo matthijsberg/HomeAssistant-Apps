@@ -5,6 +5,23 @@ All notable changes to the `Langfuse` Home Assistant Add-on will be documented i
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.81.0] - 2026-11-16
+
+## What’s changed
+
+## ⬆️ Dependency updates
+
+- ⬆️ Update Langfuse upstream web and worker to v4.81.0 (includes 4.77.0–4.81.0 features, Vertex AI gateway support, and security/deps-upgrader maintenance)
+- ⬆️ Sync SeaweedFS v4.53 and Go 1.27.4 source-built `golang-migrate` v4.20.1
+
+## 🐛 Bug fixes
+
+- 🐛 Search `/opt/langfuse-web-pristine` and `/opt/langfuse-worker` during `init_config.sh` and stage Prisma query engine into `/tmp/prisma-engines/` so worker and web start reliably regardless of `init-basepath` ordering
+
+## 🧰 Maintenance
+
+- 🛡️ Verified clean security diff review via Mantis Security Agent (openrouter/z-ai/glm-5.3) [Job: rev_3d425edbfd / rev_fc06a7a7a8, Verdict: CLEAN]
+
 ## [4.76.0] - 2026-11-08
 
 ## What’s changed

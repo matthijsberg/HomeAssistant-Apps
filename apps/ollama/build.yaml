@@ -1,6 +1,6 @@
 build_from:
-  amd64: "ollama/ollama:latest"
-  aarch64: "ollama/ollama:latest"
+  amd64: "ollama/ollama:0.40.16"
+  aarch64: "ollama/ollama:0.40.16"
 args:
-  OLLAMA_VERSION: "0.40.15"
+  OLLAMA_VERSION: "0.40.16"
   BASHIO_VERSION: "v0.19.0"
