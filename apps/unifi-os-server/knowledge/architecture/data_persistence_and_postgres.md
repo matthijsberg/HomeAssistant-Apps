@@ -6,7 +6,7 @@ status: "active"
 trust: "human_reviewed"
 generated: { by: "hermes/gemini-4-argon", at: "2026-10-16T15:30:00Z" }
 verified:
-  - { by: "human:matthijs", at: "2026-10-16T15:30:00Z" }
+  - { by: "maintainer", at: "2026-10-16T15:30:00Z" }
 tags: [postgresql, mongodb, persistence, unifi-network-11, storage]
 sources:
   - id: unifi-network-11-release

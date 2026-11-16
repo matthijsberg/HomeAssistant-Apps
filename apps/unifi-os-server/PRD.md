@@ -1,9 +1,8 @@
 # Product Requirements Document (PRD) — UniFi OS Server & Network 11 HA App
 
 **Project Slug:** `unifi_os_server`  
-**Directory:** `/config/projects/HomeAssistant-Apps/apps/unifi-os-server/`  
 **Version:** `0.2.1` (Targeting UniFi OS Server 6.0.21 EA)  
-**Status:** Architecture Specified / Scaffolding Active  
+**Status:** Early Access / Live Boot Verified (`amd64`)  
 
 ---
 

@@ -6,7 +6,7 @@ status: "active"
 trust: "human_reviewed"
 generated: { by: "hermes/gemini-4-argon", at: "2026-10-16T15:30:00Z" }
 verified:
-  - { by: "human:matthijs", at: "2026-10-16T15:30:00Z" }
+  - { by: "maintainer", at: "2026-10-16T15:30:00Z" }
 tags: [ci-cd, security, trivy, cve-2026-34908, github-actions]
 sources:
   - id: ubiquiti-download-api

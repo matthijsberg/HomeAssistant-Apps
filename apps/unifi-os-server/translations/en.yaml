@@ -15,14 +15,18 @@ configuration:
   show_journal:
     name: "Stream Service Journal to Add-on Logs"
     description: "Forward internal UniFi OS service logs (unifi-core, unifi, postgresql, nginx) to the Home Assistant add-on log output."
+  use_ha_ssl:
+    name: "Use Home Assistant SSL Certificate"
+    description: "Automatically apply a valid SSL certificate from /ssl (e.g., Let's Encrypt) to the UniFi OS Console. Falls back to UniFi's built-in self-signed certificate when disabled or when no valid certificate exists."
   ssl_cert:
     name: "SSL Certificate"
-    description: "Optional certificate filename in /ssl (e.g., fullchain.pem). If left empty, UniFi OS uses its internal SSL certificate."
+    description: "Certificate filename in /ssl (default: fullchain.pem). Used when 'Use Home Assistant SSL Certificate' is enabled."
   ssl_key:
     name: "SSL Private Key"
-    description: "Optional private key filename in /ssl (e.g., privkey.pem) matching the SSL certificate."
+    description: "Private key filename in /ssl (default: privkey.pem) matching the SSL certificate."
 network:
   443/tcp: "UniFi OS Console Web UI & HA Integration HTTPS port"
+  80/tcp: "Optional HTTP port (disabled by default; UniFi OS requires HTTPS)"
   8080/tcp: "UniFi Device Inform & adoption communication"
   8443/tcp: "Legacy UniFi Network API port (optional)"
   8444/tcp: "UniFi OS HTTPS Hotspot Captive Portal"

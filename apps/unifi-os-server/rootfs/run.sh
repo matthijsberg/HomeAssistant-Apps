@@ -21,8 +21,9 @@ LOG_LEVEL="info"
 MEMORY_INIT=512
 MEMORY_MAX=1536
 SHOW_JOURNAL=false
-SSL_CERT=""
-SSL_KEY=""
+USE_HA_SSL=true
+SSL_CERT="fullchain.pem"
+SSL_KEY="privkey.pem"
 
 if [ -f "$OPTIONS_FILE" ] && command -v jq >/dev/null 2>&1; then
     SYSTEM_IP=$(jq -r '.system_ip // empty' "$OPTIONS_FILE")
@@ -30,11 +31,12 @@ if [ -f "$OPTIONS_FILE" ] && command -v jq >/dev/null 2>&1; then
     MEMORY_INIT=$(jq -r '.memory_init // 512' "$OPTIONS_FILE")
     MEMORY_MAX=$(jq -r '.memory_max // 1536' "$OPTIONS_FILE")
     SHOW_JOURNAL=$(jq -r '.show_journal // false' "$OPTIONS_FILE")
-    SSL_CERT=$(jq -r '.ssl_cert // empty' "$OPTIONS_FILE")
-    SSL_KEY=$(jq -r '.ssl_key // empty' "$OPTIONS_FILE")
+    USE_HA_SSL=$(jq -r 'if has("use_ha_ssl") then .use_ha_ssl else true end' "$OPTIONS_FILE")
+    SSL_CERT=$(jq -r '.ssl_cert // "fullchain.pem"' "$OPTIONS_FILE")
+    SSL_KEY=$(jq -r '.ssl_key // "privkey.pem"' "$OPTIONS_FILE")
 fi
 
-info "Loaded options: SYSTEM_IP='${SYSTEM_IP}', MEMORY_INIT=${MEMORY_INIT}M, MEMORY_MAX=${MEMORY_MAX}M, LOG_LEVEL='${LOG_LEVEL}'"
+info "Loaded options: SYSTEM_IP='${SYSTEM_IP}', MEMORY_INIT=${MEMORY_INIT}M, MEMORY_MAX=${MEMORY_MAX}M, LOG_LEVEL='${LOG_LEVEL}', USE_HA_SSL=${USE_HA_SSL}"
 
 # 2. Dynamic Memory Scaling via Cgroup v2
 if [ -f "/sys/fs/cgroup/memory.max" ]; then
@@ -119,29 +121,30 @@ if [ -d "/backup" ]; then
     info "UniFi backup destination mapped to external host storage: ${UOS_BACKUP_DIR}/"
 fi
 
-# 5. SSL Directory Integration (/ssl)
-CERT_SOURCE=""
-KEY_SOURCE=""
+# 5. SSL Directory Integration (/ssl -> synced via uos-supervisor-shim to unifi-core userCertificates API)
+CORE_CFG_DIR="${STORAGE_ROOT}/unifi-core/config"
+CORE_CRT="${CORE_CFG_DIR}/unifi-core.crt"
+CORE_KEY="${CORE_CFG_DIR}/unifi-core.key"
+CORE_CRT_DEFAULT="${CORE_CFG_DIR}/unifi-core.crt.default"
+CORE_KEY_DEFAULT="${CORE_CFG_DIR}/unifi-core.key.default"
+mkdir -p "${CORE_CFG_DIR}"
+rm -f "${CORE_CFG_DIR}/server.crt" "${CORE_CFG_DIR}/server.key"
 
-if [ -d "/ssl" ]; then
-    if [ -n "$SSL_CERT" ] && [ -n "$SSL_KEY" ] && [ -f "/ssl/${SSL_CERT}" ] && [ -f "/ssl/${SSL_KEY}" ]; then
-        CERT_SOURCE="/ssl/${SSL_CERT}"
-        KEY_SOURCE="/ssl/${SSL_KEY}"
-    elif [ -f "/ssl/fullchain.pem" ] && [ -f "/ssl/privkey.pem" ]; then
-        CERT_SOURCE="/ssl/fullchain.pem"
-        KEY_SOURCE="/ssl/privkey.pem"
-    fi
+# Restore UniFi's original self-signed cert if previously replaced directly on disk
+if [ -f "${CORE_CRT_DEFAULT}" ] && [ -f "${CORE_KEY_DEFAULT}" ]; then
+    cp -f "${CORE_CRT_DEFAULT}" "${CORE_CRT}"
+    cp -f "${CORE_KEY_DEFAULT}" "${CORE_KEY}"
+    chmod 644 "${CORE_CRT}"
+    chmod 600 "${CORE_KEY}"
+    rm -f "${CORE_CRT_DEFAULT}" "${CORE_KEY_DEFAULT}"
+fi
 
-    if [ -n "$CERT_SOURCE" ] && [ -n "$KEY_SOURCE" ]; then
-        info "Applying SSL certificate from ${CERT_SOURCE} and key from ${KEY_SOURCE}..."
-        mkdir -p "${STORAGE_ROOT}/unifi-core/config"
-        cp -L "$CERT_SOURCE" "${STORAGE_ROOT}/unifi-core/config/server.crt"
-        cp -L "$KEY_SOURCE" "${STORAGE_ROOT}/unifi-core/config/server.key"
-        chmod 600 "${STORAGE_ROOT}/unifi-core/config/server.key"
-        notice "Custom SSL certificates successfully deployed for UniFi OS Console."
-    else
-        info "No custom SSL certificates detected in /ssl. UniFi OS will manage internal certificates."
-    fi
+if [ "$USE_HA_SSL" = "true" ] && [ -d "/ssl" ]; then
+    info "Home Assistant SSL integration enabled (cert='${SSL_CERT}', key='${SSL_KEY}'); uos-supervisor-shim will sync valid certificates."
+elif [ "$USE_HA_SSL" != "true" ]; then
+    info "use_ha_ssl is disabled; UniFi OS will use its built-in self-signed certificate."
+else
+    info "No /ssl directory mounted; UniFi OS will use its built-in self-signed certificate."
 fi
 
 # 6. Generate & Persist UOS UUID (must be UUIDv5 — UniFi Network validates version == 5)

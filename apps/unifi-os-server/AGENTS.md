@@ -4,10 +4,9 @@
 - **ACTIVE TARGET:** UniFi OS Server **6.0.21** Early Access (EA) target enabled and actively staging.
 - The manifest `config.yaml` is active (`version: "6.0.21-0"`).
 - Base build image: `ghcr.io/home-assistant/{arch}-base-debian:trixie`.
-- Full implementation plan: `/config/.hermes/plans/2026-10-16_152500-unifi-os-server-ha-app.md`.
 
 ## 2. Quality Gates & Test Commands
-Run the complete verification suite from `/config/projects/HomeAssistant-Apps/apps/unifi-os-server`:
+Run the complete verification suite from the app root directory:
 ```bash
 ./scripts/setup.sh
 ```

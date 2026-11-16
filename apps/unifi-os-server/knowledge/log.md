@@ -17,3 +17,9 @@
   - Diff Snapshot: `diff:d89fe3137463`
   - Reviewer: Mantis Security Agent
   - Verdict: **CLEAN** (0 CWE findings, 0 secrets, 7.2 KB diff scanned).
+
+- **2026-11-16T21:30:00Z** — `rev_bb0ec9595c`
+  - Target: `apps/unifi-os-server/` (HA SSL integration via `userCertificates` IPC API, Early Access rename, PII/path hygiene)
+  - Diff Snapshot: `diff:820a8a044fc6`
+  - Reviewer: Mantis Security Agent
+  - Verdict: **CLEAN** (0 CWE findings, 0 secrets, 13.4 KB diff scanned).

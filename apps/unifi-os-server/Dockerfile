@@ -45,13 +45,13 @@ RUN rm -f /rootfs/usr/bin/systemctl /rootfs/sbin/init /rootfs/usr/sbin/init && \
 
 # 4. Copy custom entrypoint and diagnostics tools
 COPY rootfs/ /rootfs/
-RUN chmod 755 /rootfs/run.sh /rootfs/usr/local/bin/uos-diagnostics
+RUN chmod 755 /rootfs/run.sh /rootfs/usr/local/bin/uos-diagnostics /rootfs/usr/local/bin/systemd-dbus-shim.py /rootfs/usr/local/bin/uos-supervisor-shim.mjs
 
 # --- Stage 2: Final Runtime Image ---
 FROM scratch
-LABEL maintainer="Matthijs van den Berg <matthijs@b3rg.nl>"
-LABEL org.opencontainers.image.title="UniFi OS Server"
-LABEL org.opencontainers.image.description="Self-hosted UniFi OS Server 6+ & UniFi Network 11+ for Home Assistant OS"
+LABEL org.opencontainers.image.authors="HomeAssistant-Apps Contributors"
+LABEL org.opencontainers.image.title="UniFi OS - Early Access"
+LABEL org.opencontainers.image.description="Self-hosted UniFi OS Server 6+ & UniFi Network controller for Home Assistant OS"
 LABEL org.opencontainers.image.source="https://github.com/matthijsberg/HomeAssistant-Apps"
 
 ENV UOS_SERVER_VERSION="6.0.21" \
@@ -62,6 +62,6 @@ ENV UOS_SERVER_VERSION="6.0.21" \
 
 COPY --from=extractor /rootfs /
 
-EXPOSE 11443/tcp 8080/tcp 8443/tcp 8444/tcp 8880/tcp 6789/tcp 3478/udp 10003/udp 10001/udp 5514/udp
+EXPOSE 443/tcp 80/tcp 8080/tcp 8443/tcp 8444/tcp 8880/tcp 6789/tcp 3478/udp 10003/udp 10001/udp 5514/udp
 
 ENTRYPOINT ["/run.sh"]

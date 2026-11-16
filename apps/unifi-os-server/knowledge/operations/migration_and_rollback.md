@@ -6,7 +6,7 @@ status: "active"
 trust: "human_reviewed"
 generated: { by: "hermes/gemini-4-argon", at: "2026-10-16T15:30:00Z" }
 verified:
-  - { by: "human:matthijs", at: "2026-10-16T15:30:00Z" }
+  - { by: "maintainer", at: "2026-10-16T15:30:00Z" }
 tags: [migration, rollback, uxg-lite, home-assistant-integration]
 sources:
   - id: ha-app-unifi-eol

@@ -22,7 +22,7 @@ def test_staged_manifest_isolation():
     """Ensure config.yaml is valid and store branding assets exist."""
     assert CONFIG_DISABLED.exists() or CONFIG_ACTIVE.exists()
     cfg = _load_manifest()
-    assert cfg["name"] == "UniFi OS Server"
+    assert cfg["name"] == "UniFi OS - Early Access"
     assert cfg["slug"] == "unifi_os_server"
     assert cfg["init"] is False
     assert cfg["timeout"] == 120
