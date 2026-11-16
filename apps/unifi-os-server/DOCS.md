@@ -3,6 +3,8 @@
 ## Overview
 This app runs **UniFi OS Server `6.0.21` (Early Access)** and **UniFi Network `10.6.109`** on Home Assistant OS. It provides a modern replacement path for the end-of-life legacy UniFi Network Application add-on (`a0d7b954_unifi`).
 
+> **Updates:** Software and application updates are managed through Home Assistant App updates rather than UniFi OS in-container auto-updates, so scheduled auto-updates are automatically disabled on startup.
+
 ## Configuration
 
 ```yaml

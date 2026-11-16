@@ -147,6 +147,28 @@ else
     info "No /ssl directory mounted; UniFi OS will use its built-in self-signed certificate."
 fi
 
+# 5b. Disable in-container UniFi OS / Application Auto-Update Schedules (updates are managed by Home Assistant)
+if command -v node24 >/dev/null 2>&1 && [ -d "/usr/share/unifi-core/app/node_modules/js-yaml" ]; then
+    node24 -e '
+        const fs = require("fs");
+        const { load, dump, CORE_SCHEMA } = require("/usr/share/unifi-core/app/node_modules/js-yaml");
+        const cfgDir = process.argv[1];
+        const fwPath = `${cfgDir}/firmware.yaml`;
+        if (fs.existsSync(fwPath)) {
+            const fw = load(fs.readFileSync(fwPath, "utf8"), { schema: CORE_SCHEMA }) || {};
+            fw.autoUpdate = { schedule: null, includeApplications: false, preferencesPrompt: null };
+            fw.schedule = null;
+            fs.writeFileSync(fwPath, dump(fw), "utf8");
+        }
+        const prefsPath = `${cfgDir}/apps.userPrefs.yaml`;
+        if (fs.existsSync(prefsPath)) {
+            const prefs = load(fs.readFileSync(prefsPath, "utf8"), { schema: CORE_SCHEMA }) || {};
+            prefs.updateSchedules = {};
+            fs.writeFileSync(prefsPath, dump(prefs), "utf8");
+        }
+    ' "${CORE_CFG_DIR}" && info "Disabled UniFi OS in-container auto-update schedules (updates managed via Home Assistant)." || warn "Failed to update UniFi OS auto-update settings."
+fi
+
 # 6. Generate & Persist UOS UUID (must be UUIDv5 — UniFi Network validates version == 5)
 UUID_FILE="/data/uos_uuid"
 NEED_UUID=true

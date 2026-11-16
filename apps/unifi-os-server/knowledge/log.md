@@ -23,3 +23,9 @@
   - Diff Snapshot: `diff:820a8a044fc6`
   - Reviewer: Mantis Security Agent
   - Verdict: **CLEAN** (0 CWE findings, 0 secrets, 13.4 KB diff scanned).
+
+- **2026-11-16T21:42:00Z** — `rev_bf51850b9f`
+  - Target: `apps/unifi-os-server/` (Disable in-container UniFi OS / application auto-update schedules on startup)
+  - Diff Snapshot: `diff:b9170aaac3db`
+  - Reviewer: Mantis Security Agent
+  - Verdict: **CLEAN** (0 CWE findings, 0 secrets, 3.9 KB diff scanned).
