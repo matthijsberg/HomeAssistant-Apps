@@ -11,3 +11,9 @@
   - Diff Snapshot: `diff:a5d2264d39b2`
   - Reviewer: Mantis Security Agent
   - Verdict: **CLEAN** (0 CWE findings, 0 secrets, 40.4 KB diff scanned).
+
+- **2026-11-16T20:28:00Z** — `rev_ae9f4fe171`
+  - Target: `apps/unifi-os-server/` (UCP4 supervisor shim + MainPID /proc liveness check)
+  - Diff Snapshot: `diff:d89fe3137463`
+  - Reviewer: Mantis Security Agent
+  - Verdict: **CLEAN** (0 CWE findings, 0 secrets, 7.2 KB diff scanned).

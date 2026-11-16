@@ -306,6 +306,10 @@ if command -v dbus-daemon >/dev/null 2>&1; then
     fi
 fi
 
+if [ -x /usr/local/bin/uos-supervisor-shim.mjs ] && [ -x /usr/bin/node24 ]; then
+    /usr/bin/node24 /usr/local/bin/uos-supervisor-shim.mjs >/var/log/uos-supervisor-shim.log 2>&1 &
+fi
+
 notice "Starting UniFi OS Server services via supervisor..."
 
 if [ "$SHOW_JOURNAL" = "true" ]; then

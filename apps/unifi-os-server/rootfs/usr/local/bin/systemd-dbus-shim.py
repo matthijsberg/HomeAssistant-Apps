@@ -49,9 +49,19 @@ def read_unit_state(unit: str) -> Tuple[str, str, str]:
     if status_file.is_file():
         try:
             text = status_file.read_text(encoding="utf-8", errors="ignore")
-            m = re.search(r"ActiveState\s*=\s*(\S+)", text)
-            if m:
-                active = m.group(1).strip()
+            m_state = re.search(r"ActiveState\s*=\s*(\S+)", text)
+            m_pid = re.search(r"MainPID\s*=\s*(\d+)", text)
+            if m_pid:
+                pid = int(m_pid.group(1))
+                stat_path = Path(f"/proc/{pid}/stat")
+                if pid > 0 and stat_path.is_file():
+                    stat_txt = stat_path.read_text(encoding="utf-8", errors="ignore")
+                    rparen = stat_txt.rfind(")")
+                    proc_state = stat_txt[rparen + 2 : rparen + 3] if rparen != -1 else ""
+                    if proc_state and proc_state != "Z":
+                        active = "active"
+            if active != "active" and m_state:
+                active = m_state.group(1).strip()
         except OSError:
             pass
 

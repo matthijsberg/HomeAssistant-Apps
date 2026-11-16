@@ -7,6 +7,7 @@
 - Isolated UniFi OS Server backups under `/backup/unifi-os-server/` (preventing collisions with legacy `/backup/unifi/`) while selecting the newest `.unf` backup by mtime for dropzone auto-restore.
 - Added `scripts/extract_oci.py` (Python `zipfile` + whiteout-aware OCI extraction) to handle SFX installer extra-bytes cleanly.
 - Added `systemd-dbus-shim.py` (`org.freedesktop.systemd1` D-Bus shim backed by `systemctl3.py`), D-Bus daemon startup, PostgreSQL 14 cluster init (`14-main` + `14-apps`), `unifi-mongodb.service` enablement, UUIDv5 `uos_uuid` generation, and `443/tcp -> 11443` port mapping.
+- Added `uos-supervisor-shim.mjs` (UCP4 `/api/ws/supervisor` client using `@ubnt/ucp4`) and `MainPID` `/proc` liveness check in `systemd-dbus-shim.py` so `unifi-core` reaches `deviceState: notSetup` with `network.info.isReadyForSetup: true` and `GET /api/backup/setup/has-legacy-net` returns HTTP 200.
 
 ## [6.0.19-0] - 2026-11-05 (Early Access Target)
 
