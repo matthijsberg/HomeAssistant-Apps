@@ -1,7 +1,7 @@
 # UniFi OS - Early Access — Home Assistant App Documentation
 
 ## Overview
-This app runs **UniFi OS Server `6.0.21` (Early Access)** and **UniFi Network `10.6.109`** on Home Assistant OS. It provides a modern replacement path for the end-of-life legacy UniFi Network Application add-on (`a0d7b954_unifi`).
+This app runs **UniFi OS Server `6.0.21` (Early Access)**, **UniFi Network `11.0.99`**, **UniFi Matter Controller `1.0.0`**, and optional **UniFi InnerSpace `1.4.3`** on Home Assistant OS. It provides a modern replacement path for the end-of-life legacy UniFi Network Application add-on (`a0d7b954_unifi`).
 
 > **Updates:** Software and application updates are managed through Home Assistant App updates rather than UniFi OS in-container auto-updates, so scheduled auto-updates are automatically disabled on startup.
 
@@ -13,6 +13,7 @@ log_level: "info"
 memory_init: 512
 memory_max: 1536
 show_journal: false
+enable_innerspace: false
 use_ha_ssl: true
 ssl_cert: "fullchain.pem"
 ssl_key: "privkey.pem"
@@ -21,6 +22,7 @@ ssl_key: "privkey.pem"
 - **`system_ip` (Required):** Set this to the LAN IPv4 address of your Home Assistant host so UniFi devices know where to send inform packets (`http://<system_ip>:8080/inform`).
 - **`memory_init` / `memory_max`:** Initial and maximum JVM heap size (in MB) for the UniFi Network Application.
 - **`show_journal`:** Forward internal service logs to the Home Assistant add-on log viewer.
+- **`enable_innerspace` (Default: `false`):** Enable and start the bundled UniFi InnerSpace application (`v1.4.3`). Disabled by default to reduce memory usage.
 - **`use_ha_ssl` (Default: `true`):** Automatically deploys your valid Home Assistant SSL certificate from `/ssl` (for example Let's Encrypt `fullchain.pem` / `privkey.pem`) to the UniFi OS Console (`unifi-core.crt` / `unifi-core.key`). If disabled (`false`) or no valid certificate exists in `/ssl`, UniFi OS falls back to its built-in self-signed certificate.
 - **`ssl_cert` / `ssl_key`:** Certificate and private key filenames inside `/ssl` (defaults: `fullchain.pem` and `privkey.pem`).
 

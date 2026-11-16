@@ -14,6 +14,7 @@ from tools.maintenance.config import load_app_maintenance_config
 from tools.maintenance.checkers.upstream import (
     UpstreamCheckResult,
     _extract_security_mentions,
+    check_app_upstream,
     inspect_container_dependencies,
 )
 from tools.maintenance.checkers.security import (
@@ -225,6 +226,43 @@ class TestMaintenanceSecurityAndUpstream(unittest.TestCase):
             self.assertIn("GHSA-1111", msg)
             self.assertIn("Container Hygiene:", msg)
             self.assertIn("CVE-2026-12345", msg)
+
+    def test_ubiquiti_fus_upstream_check(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            app_dir = Path(tmp)
+            (app_dir / "config.yaml").write_text("name: UOS\nversion: '6.0.21-1'\nslug: unifi_os_server\n", encoding="utf-8")
+            (app_dir / "build.yaml").write_text(
+                "args:\n  UOS_SERVER_VERSION: '6.0.21'\n  UNIFI_NETWORK_TARGET: '10.6.109'\n",
+                encoding="utf-8",
+            )
+            (app_dir / "maintenance.yaml").write_text(
+                "upstream:\n"
+                "  ubiquiti_products:\n"
+                "    - product: unifi-os-server\n"
+                "      label: UniFi OS Server\n"
+                "      platform: linux-x64\n"
+                "      build_arg: UOS_SERVER_VERSION\n"
+                "    - product: unifi\n"
+                "      label: UniFi Network\n"
+                "      platform: uos-deb13-amd64\n"
+                "      build_arg: UNIFI_NETWORK_TARGET\n",
+                encoding="utf-8",
+            )
+            cfg = load_app_maintenance_config(app_dir)
+
+            def fake_fus(url, timeout=10):
+                if "unifi-os-server" in url:
+                    return {"_embedded": {"firmware": [{"version": "v5.1.42", "_links": {"data": {"href": "https://example.com/uos"}}}]}}
+                if "product~~unifi" in url:
+                    return {"_embedded": {"firmware": [{"version": "v11.0.99-37236-1", "_links": {"data": {"href": "https://example.com/net.deb"}}}]}}
+                return None
+
+            with patch("tools.maintenance.checkers.upstream._http_get_json", side_effect=fake_fus):
+                res = check_app_upstream(cfg)
+            self.assertTrue(res.update_available)
+            self.assertEqual(res.update_type, "major")
+            self.assertIn("UniFi Network", " ".join(res.details))
+            self.assertNotIn("5.1.42 ->", " ".join(res.details))
 
 
 if __name__ == "__main__":

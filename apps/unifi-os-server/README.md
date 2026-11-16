@@ -1,6 +1,6 @@
 # UniFi OS - Early Access (Home Assistant App)
 
-> **Early Access Notice:** This app currently targets **Ubiquiti UniFi OS Server `6.0.21` (Early Access)** bundling **UniFi Network `10.6.109`**. Early Access releases can change rapidly compared to GA (`5.1.x`).
+> **Early Access Notice:** This app currently targets **Ubiquiti UniFi OS Server `6.0.21` (Early Access)** bundling **UniFi Network `11.0.99`**, **UniFi Matter Controller `1.0.0`**, and optional **UniFi InnerSpace `1.4.3`**. Early Access releases can change rapidly compared to GA (`5.1.x`).
 
 Self-hosted **UniFi OS Server 6+** and **UniFi Network Application** packaged as a clean, zero-nested-container Home Assistant OS App.
 

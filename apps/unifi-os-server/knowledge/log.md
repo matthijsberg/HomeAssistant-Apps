@@ -29,3 +29,9 @@
   - Diff Snapshot: `diff:b9170aaac3db`
   - Reviewer: Mantis Security Agent
   - Verdict: **CLEAN** (0 CWE findings, 0 secrets, 3.9 KB diff scanned).
+
+- **2026-11-16T22:35:00Z** — `rev_240fa4c1aa`
+  - Target: `apps/unifi-os-server/` + `tools/maintenance/` (v6.0.21-1: UniFi Network 11.0.99-37236-1, Matter Controller 1.0.0, optional InnerSpace 1.4.3, systemctl3.py PermissionsStartOnly patch, and Ubiquiti FUS upstream polling)
+  - Diff Snapshot: `diff:45cf9e0b2acd`
+  - Reviewer: Mantis Security Agent
+  - Verdict: **CLEAN** (0 CWE findings, 0 secrets, 21.3 KB diff scanned).

@@ -1,6 +1,6 @@
 ---
 name: UniFi OS - Early Access
-version: "6.0.21-0"
+version: "6.0.21-1"
 slug: unifi_os_server
 description: "Self-hosted UniFi OS Server 6+ & UniFi Network 11+ controller for Home Assistant OS"
 url: "https://github.com/matthijsberg/HomeAssistant-Apps"
@@ -50,6 +50,7 @@ options:
   memory_init: 512
   memory_max: 1536
   show_journal: false
+  enable_innerspace: false
   use_ha_ssl: true
   ssl_cert: "fullchain.pem"
   ssl_key: "privkey.pem"
@@ -59,6 +60,7 @@ schema:
   memory_init: "int(256,4096)"
   memory_max: "int(1024,8192)"
   show_journal: "bool"
+  enable_innerspace: "bool"
   use_ha_ssl: "bool"
   ssl_cert: "str?"
   ssl_key: "str?"

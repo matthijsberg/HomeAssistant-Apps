@@ -18,6 +18,7 @@ class UpstreamConfig:
     package_lock: Optional[str] = None
     dockerfile: Optional[str] = None
     build_yaml: Optional[str] = None
+    ubiquiti_products: List[Dict[str, str]] = field(default_factory=list)
 
 @dataclass
 class HealthcheckConfig:
@@ -103,6 +104,7 @@ def load_app_maintenance_config(app_dir: Path) -> AppMaintenanceConfig:
         package_lock=_detect_rel(app_dir, up_data.get("package_lock"), "package-lock.json"),
         dockerfile=_detect_rel(app_dir, up_data.get("dockerfile"), "Dockerfile"),
         build_yaml=_detect_rel(app_dir, up_data.get("build_yaml"), "build.yaml"),
+        ubiquiti_products=list(up_data.get("ubiquiti_products") or []),
     )
 
     hc_data = data.get("healthcheck", {})

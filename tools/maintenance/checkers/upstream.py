@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import urllib.parse
 import urllib.request
 import urllib.error
 from typing import Any, Dict, List, Optional, Tuple
@@ -249,6 +250,30 @@ def check_docker_hub(image_name: str) -> Optional[str]:
             return m.group(1)
     return None
 
+def check_ubiquiti_fus_product(
+    product: str,
+    platform: str,
+    channel: str = "release",
+) -> Tuple[Optional[str], Optional[str]]:
+    """Query Ubiquiti's Firmware Update Service for latest version & download URL."""
+    qs = "&".join([
+        f"filter=eq~~product~~{urllib.parse.quote(product, safe='')}",
+        f"filter=eq~~platform~~{urllib.parse.quote(platform, safe='')}",
+        f"filter=eq~~channel~~{urllib.parse.quote(channel, safe='')}",
+    ])
+    url = f"https://fw-update.ui.com/api/firmware-latest?{qs}"
+    data = _http_get_json(url)
+    if not isinstance(data, dict):
+        return None, None
+    items = data.get("_embedded", {}).get("firmware", [])
+    if not items:
+        return None, None
+    fw = items[0]
+    ver = _clean_version(str(fw.get("version", "")))
+    dl_url = fw.get("_links", {}).get("data", {}).get("href")
+    return (ver or None), dl_url
+
+
 def check_app_upstream(config: AppMaintenanceConfig) -> UpstreamCheckResult:
     result = UpstreamCheckResult(
         app_name=config.app_name,
@@ -288,6 +313,43 @@ def check_app_upstream(config: AppMaintenanceConfig) -> UpstreamCheckResult:
     if unpinned:
         result.details.append(f"Unpinned container tags: {', '.join(unpinned)}")
 
+    # 3b. Ubiquiti Firmware Update Service (FUS) component checks
+    if config.upstream.ubiquiti_products:
+        build_args = {
+            c["name"]: c["version"]
+            for c in components
+            if c.get("source") == "build.yaml arg"
+        }
+        rank_map = {"none": 0, "patch": 1, "minor": 2, "major": 3}
+        best_rank = 0
+        for item in config.upstream.ubiquiti_products:
+            prod = str(item.get("product", "")).strip()
+            plat = str(item.get("platform", "")).strip()
+            if not prod or not plat:
+                continue
+            chan = str(item.get("channel", "release")).strip()
+            label = str(item.get("label", prod)).strip()
+            arg_key = item.get("build_arg")
+            cur = str(build_args.get(arg_key, "") if arg_key else item.get("current", config.current_version)).strip()
+            u_ver, u_url = check_ubiquiti_fus_product(prod, plat, chan)
+            if not u_ver:
+                result.details.append(f"Ubiquiti FUS ({label}): check unavailable")
+                continue
+            u_type = compare_versions(cur, u_ver) if cur else "none"
+            if u_type != "none":
+                result.update_available = True
+                if rank_map[u_type] > best_rank:
+                    best_rank = rank_map[u_type]
+                    result.update_type = u_type
+                if prod == "unifi-os-server":
+                    latest_ver = u_ver
+                    notes_url = u_url
+                elif not latest_ver:
+                    result.latest_version = f"{config.current_version} ({label} {u_ver})"
+                result.details.append(f"Ubiquiti FUS ({label}): update {cur} -> {u_ver} ({u_type})")
+            else:
+                result.details.append(f"Ubiquiti FUS ({label}): {cur or u_ver} (latest {chan}: {u_ver})")
+
     if latest_ver:
         result.latest_version = latest_ver
         result.release_notes_url = notes_url
@@ -298,7 +360,7 @@ def check_app_upstream(config: AppMaintenanceConfig) -> UpstreamCheckResult:
             result.details.append(f"Update available: {config.current_version} -> {latest_ver} ({update_type})")
         else:
             result.details.append(f"Version is up to date ({config.current_version})")
-    else:
+    elif not result.update_available:
         result.details.append("No newer upstream release detected.")
 
     return result

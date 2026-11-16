@@ -15,6 +15,9 @@ configuration:
   show_journal:
     name: "Stream Service Journal to Add-on Logs"
     description: "Forward internal UniFi OS service logs (unifi-core, unifi, postgresql, nginx) to the Home Assistant add-on log output."
+  enable_innerspace:
+    name: "Enable UniFi InnerSpace"
+    description: "Start the bundled UniFi InnerSpace application (v1.4.3) inside UniFi OS Server. Disabled by default to save RAM."
   use_ha_ssl:
     name: "Use Home Assistant SSL Certificate"
     description: "Automatically apply a valid SSL certificate from /ssl (e.g., Let's Encrypt) to the UniFi OS Console. Falls back to UniFi's built-in self-signed certificate when disabled or when no valid certificate exists."

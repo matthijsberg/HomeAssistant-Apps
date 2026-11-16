@@ -1,5 +1,10 @@
 # Changelog
 
+## [6.0.21-1] - 2026-11-16 (Early Access Target)
+- Upgraded bundled UniFi Network Application from `10.6.109` to `11.0.99-37236-1` along with required `unifi-matter-controller` (`1.0.0`) via SHA-256 verified build-time `.deb` installation (`amd64` & `aarch64`).
+- Added bundled UniFi InnerSpace (`1.4.3`) gated by a new `enable_innerspace` option (default `false`) with persistent `/data/unifi-innerspace` storage.
+- Configured Ubiquiti Firmware Update Service (`fw-update.ui.com`) upstream polling in `maintenance.yaml` and `tools/maintenance/` across `unifi-os-server`, `unifi`, `unifi-innerspace`, and `unifi-matter-controller`, and documented component requirements in `PRD.md`.
+
 ## [6.0.21-0] - 2026-11-16 (Early Access Target)
 
 ### Changed

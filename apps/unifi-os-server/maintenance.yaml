@@ -1,19 +1,43 @@
-name: "UniFi OS Server"
+name: "UniFi OS - Early Access"
 app_type: "infra"
 upstream:
-  base_image: "debian:bookworm-slim"
+  base_image: "ghcr.io/home-assistant/amd64-base-debian:trixie"
+  ubiquiti_products:
+    - product: "unifi-os-server"
+      label: "UniFi OS Server"
+      platform: "linux-x64"
+      channel: "release"
+      build_arg: "UOS_SERVER_VERSION"
+    - product: "unifi"
+      label: "UniFi Network"
+      platform: "uos-deb13-amd64"
+      channel: "release"
+      build_arg: "UNIFI_NETWORK_TARGET"
+    - product: "unifi-innerspace"
+      label: "UniFi InnerSpace"
+      platform: "uos-deb13-amd64"
+      channel: "release"
+      build_arg: "UNIFI_INNERSPACE_VERSION"
+    - product: "unifi-matter-controller"
+      label: "UniFi Matter Controller"
+      platform: "uos-deb13-amd64"
+      channel: "release"
+      build_arg: "UNIFI_MATTER_VERSION"
 healthcheck:
-  port: 8443
-  endpoint: "/"
-  timeout_seconds: 30
+  port: 11443
+  endpoint: "/api/system"
+  timeout_seconds: 60
 security:
   cve_check: true
   ghsa_check: false
   secret_scan: true
   dockerfile_audit: true
-  okf_required: false
+  okf_required: true
+  mantis_review: true
+  mantis_model: "gemini-4-argon"
 docs:
   sync_changelog: true
   sync_readme: true
-  sync_okf: false
-test_commands: []
+  sync_okf: true
+test_commands:
+  - "./scripts/setup.sh"

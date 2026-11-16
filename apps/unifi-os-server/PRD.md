@@ -49,9 +49,9 @@ This project provides a clean, maintainable, generic, and security-hardened Home
 - PostgreSQL (`5432`) and Network App internal ports (`7443`/`8081`) remain strictly bound to `127.0.0.1` inside the container.
 
 ### 3.4 Automated Release Pipeline & Security Gates
-- GitHub Actions workflow polls Ubiquiti's download API for new releases.
-- Automated multi-arch build (`linux/amd64`, `linux/arm64`), live container startup smoke test (verifying services and ports `11443`, `8080`, `3478`), and **Trivy** vulnerability scan (`CRITICAL,HIGH`).
-- Gated pass through **Mantis Security Agent** using Google Gemini 4 Argon (`gemini-4-argon`) before release tagging.
+- Weekly maintenance & upstream polling (`tools/maintenance/` + `maintenance.yaml`) queries Ubiquiti's official Firmware Update Service (`https://fw-update.ui.com/api/firmware-latest`) across all bundled components: `unifi-os-server`, `unifi` (`Network`), `unifi-innerspace`, and `unifi-matter-controller` (both `amd64` and `arm64`).
+- All downloaded installers and `.deb` packages are pinned with explicit SHA-256 verification in `build.yaml` and `Dockerfile`.
+- Automated container startup smoke verification (`postgresql@14-main`, `postgresql@14-apps`, `unifi-mongodb`, `unifi-core`, `unifi`, `nginx`, `uos-agent`, `unifi-matter-controller`, and optional `unifi-innerspace`) plus **Trivy** and **Mantis Security Agent** gates before release tagging.
 
 ### 3.5 Universal Database Migration & Instant Rollback
 - **Dropzone Auto-Restore:** Automatically scans `/backup/` and `/share/unifi-backup/` for legacy `.unf` backup files (supporting UniFi 5.x through 10.x), enabling 1-click migration without manual database conversions.

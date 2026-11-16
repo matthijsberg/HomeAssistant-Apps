@@ -21,6 +21,7 @@ LOG_LEVEL="info"
 MEMORY_INIT=512
 MEMORY_MAX=1536
 SHOW_JOURNAL=false
+ENABLE_INNERSPACE=false
 USE_HA_SSL=true
 SSL_CERT="fullchain.pem"
 SSL_KEY="privkey.pem"
@@ -31,12 +32,13 @@ if [ -f "$OPTIONS_FILE" ] && command -v jq >/dev/null 2>&1; then
     MEMORY_INIT=$(jq -r '.memory_init // 512' "$OPTIONS_FILE")
     MEMORY_MAX=$(jq -r '.memory_max // 1536' "$OPTIONS_FILE")
     SHOW_JOURNAL=$(jq -r '.show_journal // false' "$OPTIONS_FILE")
+    ENABLE_INNERSPACE=$(jq -r 'if has("enable_innerspace") then .enable_innerspace else false end' "$OPTIONS_FILE")
     USE_HA_SSL=$(jq -r 'if has("use_ha_ssl") then .use_ha_ssl else true end' "$OPTIONS_FILE")
     SSL_CERT=$(jq -r '.ssl_cert // "fullchain.pem"' "$OPTIONS_FILE")
     SSL_KEY=$(jq -r '.ssl_key // "privkey.pem"' "$OPTIONS_FILE")
 fi
 
-info "Loaded options: SYSTEM_IP='${SYSTEM_IP}', MEMORY_INIT=${MEMORY_INIT}M, MEMORY_MAX=${MEMORY_MAX}M, LOG_LEVEL='${LOG_LEVEL}', USE_HA_SSL=${USE_HA_SSL}"
+info "Loaded options: SYSTEM_IP='${SYSTEM_IP}', MEMORY_INIT=${MEMORY_INIT}M, MEMORY_MAX=${MEMORY_MAX}M, LOG_LEVEL='${LOG_LEVEL}', ENABLE_INNERSPACE=${ENABLE_INNERSPACE}, USE_HA_SSL=${USE_HA_SSL}"
 
 # 2. Dynamic Memory Scaling via Cgroup v2
 if [ -f "/sys/fs/cgroup/memory.max" ]; then
@@ -79,12 +81,36 @@ link_dir "/var/lib/postgresql" "${STORAGE_ROOT}/postgresql"
 link_dir "/etc/rabbitmq/ssl" "${STORAGE_ROOT}/rabbitmq-ssl"
 link_dir "/persistent" "${STORAGE_ROOT}/persistent"
 link_dir "/data/unifi-core" "${STORAGE_ROOT}/unifi-core"
+link_dir "/data/unifi-innerspace" "${STORAGE_ROOT}/unifi-innerspace"
+link_dir "/data/unifi-matter-controller" "${STORAGE_ROOT}/unifi-matter-controller"
 
 # Fix permissions using actual system UIDs/GIDs (never hardcoded numbers)
-mkdir -p /persistent/.config /data/unifi-core/config/http
+mkdir -p \
+    /persistent/.config \
+    /data/unifi-core/config/http \
+    /var/opt/unifi/tmp \
+    "${STORAGE_ROOT}/unifi" \
+    "${STORAGE_ROOT}/mongodb" \
+    "${STORAGE_ROOT}/unifi-matter-controller" \
+    "${STORAGE_ROOT}/unifi-innerspace" \
+    "${STORAGE_ROOT}/postgresql" \
+    "${STORAGE_ROOT}/rabbitmq-ssl"
 touch /persistent/.migrated60
 chmod 755 "${STORAGE_ROOT}"
-chown -R unifi:unifi "${STORAGE_ROOT}/unifi" "${STORAGE_ROOT}/mongodb" 2>/dev/null || chown -R 1000:1000 "${STORAGE_ROOT}/unifi" "${STORAGE_ROOT}/mongodb" 2>/dev/null || true
+if id unifi >/dev/null 2>&1; then
+    chown -R unifi:unifi "${STORAGE_ROOT}/unifi" "${STORAGE_ROOT}/mongodb" "${STORAGE_ROOT}/unifi-matter-controller" /var/opt/unifi /etc/unifi-matter-controller /etc/default/unifi 2>/dev/null || true
+    chown -h unifi:unifi /data/unifi /var/lib/unifi /data/unifi-matter-controller 2>/dev/null || true
+else
+    chown -R 1000:1000 "${STORAGE_ROOT}/unifi" "${STORAGE_ROOT}/mongodb" 2>/dev/null || true
+fi
+chown -R unifi-innerspace:unifi-innerspace "${STORAGE_ROOT}/unifi-innerspace" /var/log/unifi-innerspace 2>/dev/null || true
+if [ -d /usr/share/unifi-matter-controller/paa-certs ]; then
+    mkdir -p "${STORAGE_ROOT}/unifi-matter-controller/attestation/paa-trust-store" "${STORAGE_ROOT}/unifi-matter-controller/attestation/dac-revocation"
+    cp -pf /usr/share/unifi-matter-controller/paa-certs/*.der "${STORAGE_ROOT}/unifi-matter-controller/attestation/paa-trust-store/" 2>/dev/null || true
+    cp -pf /usr/share/unifi-matter-controller/paa-certs/*.pem "${STORAGE_ROOT}/unifi-matter-controller/attestation/paa-trust-store/" 2>/dev/null || true
+    [ -f /usr/share/unifi-matter-controller/dac-revocation/revocation_set.json ] && cp -pf /usr/share/unifi-matter-controller/dac-revocation/revocation_set.json "${STORAGE_ROOT}/unifi-matter-controller/attestation/dac-revocation/revocation_set.json" 2>/dev/null || true
+    chown -R unifi:unifi "${STORAGE_ROOT}/unifi-matter-controller" 2>/dev/null || true
+fi
 chown -R postgres:postgres "${STORAGE_ROOT}/postgresql" /var/run/postgresql 2>/dev/null || true
 chown -R rabbitmq:rabbitmq "${STORAGE_ROOT}/rabbitmq-ssl" 2>/dev/null || true
 mkdir -p /var/lib/fluent-bit-audit/storage
@@ -96,9 +122,19 @@ if [ -f /usr/lib/systemd/system/unifi-core.service ]; then
 fi
 
 # Enable static unifi-mongodb.service so systemctl3.py starts MongoDB alongside multi-user.target
+mkdir -p /etc/systemd/system/multi-user.target.wants
 if [ -f /usr/lib/systemd/system/unifi-mongodb.service ]; then
-    mkdir -p /etc/systemd/system/multi-user.target.wants
     ln -snf /usr/lib/systemd/system/unifi-mongodb.service /etc/systemd/system/multi-user.target.wants/unifi-mongodb.service
+fi
+if [ -f /lib/systemd/system/unifi-matter-controller.service ]; then
+    ln -snf /lib/systemd/system/unifi-matter-controller.service /etc/systemd/system/multi-user.target.wants/unifi-matter-controller.service
+fi
+if [ "$ENABLE_INNERSPACE" = "true" ] && [ -f /lib/systemd/system/unifi-innerspace.service ]; then
+    ln -snf /lib/systemd/system/unifi-innerspace.service /etc/systemd/system/multi-user.target.wants/unifi-innerspace.service
+    info "UniFi InnerSpace enabled."
+else
+    rm -f /etc/systemd/system/multi-user.target.wants/unifi-innerspace.service
+    info "UniFi InnerSpace disabled (enable_innerspace=${ENABLE_INNERSPACE})."
 fi
 
 # Ensure RabbitMQ TLS certificates exist before rabbitmq-server unit starts
@@ -118,6 +154,7 @@ if [ -d "/backup" ]; then
         fi
         ln -sf "${UOS_BACKUP_DIR}" "/var/lib/unifi/data/backup"
     fi
+    chown -R unifi:unifi "${UOS_BACKUP_DIR}" 2>/dev/null || chown -R 1000:1000 "${UOS_BACKUP_DIR}" 2>/dev/null || true
     info "UniFi backup destination mapped to external host storage: ${UOS_BACKUP_DIR}/"
 fi
 
@@ -240,7 +277,7 @@ if [ ! -d "/var/lib/unifi/data/db" ] && [ ! -d "/var/lib/unifi/db" ]; then
         notice "Found legacy UniFi backup file at '${LATEST_UNF}'."
         mkdir -p "${UOS_BACKUP_DIR}/autobackup"
         cp "$LATEST_UNF" "${UOS_BACKUP_DIR}/autobackup/autobackup_initial.unf" 2>/dev/null || true
-        chown -R 1000:1000 "${UOS_BACKUP_DIR}" 2>/dev/null || true
+        chown -R unifi:unifi "${UOS_BACKUP_DIR}" 2>/dev/null || chown -R 1000:1000 "${UOS_BACKUP_DIR}" 2>/dev/null || true
         notice "Staged backup to ${UOS_BACKUP_DIR}/autobackup/ for auto-migration."
     fi
 fi
@@ -314,7 +351,27 @@ else
     fi
 fi
 
-# 10. Start D-Bus system daemon, systemd1 D-Bus shim, and Service Supervision via systemctl3.py
+# 10. Provide lightweight /dev/log syslog sink (or logger fallback), D-Bus system daemon, systemd1 D-Bus shim
+if [ ! -S /dev/log ]; then
+    if [ -w /dev ] && command -v python3 >/dev/null 2>&1; then
+        python3 -c '
+import os, socket
+s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+s.bind("/dev/log")
+os.chmod("/dev/log", 0o666)
+while True:
+    s.recv(8192)
+' >/dev/null 2>&1 &
+        for _ in $(seq 1 10); do
+            [ -S /dev/log ] && break
+            sleep 0.1
+        done
+    elif [ -x /usr/bin/logger ] && [ ! -x /usr/bin/logger.real ]; then
+        mv /usr/bin/logger /usr/bin/logger.real
+        printf '#!/bin/sh\n/usr/bin/logger.real "$@" 2>/dev/null || true\n' > /usr/bin/logger
+        chmod 755 /usr/bin/logger
+    fi
+fi
 if command -v dbus-daemon >/dev/null 2>&1; then
     mkdir -p /run/dbus /var/run/dbus
     rm -f /run/dbus/pid /run/dbus/messagebus.pid
