@@ -2,6 +2,16 @@
 
 All notable changes to the Mantis Security Agent are documented in this file.
 
+## [1.1.2] - 2026-11-16
+
+### Added
+- OpenRouter provider support (including `z-ai/glm-5.3`), provider credential/base URL resolution from `APP_OPTIONS["providers"]` / environment, and executive deep AI assessment in audit reports.
+- `auto_approve_scheduled_paths` add-on option (default `[]`) allowing unattended scheduled audits only for explicitly allow-listed paths.
+
+### Changed
+- Excluded `.venv`, `node_modules`, `.git`, `vendor`, and cache directories from snapshot hashing and Semgrep SAST scans, and capped file reads at 512 KB.
+- Limited inline triage patch synthesis to top 5 CRITICAL/HIGH/ERROR findings per run.
+
 ## [1.1.1] - 2026-11-02
 
 ### Changed

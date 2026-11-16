@@ -16,7 +16,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from harness.snapshot import validate_target_path, compute_snapshot_id, is_path_denied
+from harness.snapshot import validate_target_path, compute_snapshot_id, is_path_denied, SKIP_HASH_DIRS
 from harness.jobs import init_db, create_job, get_job, update_job_status, list_jobs
 from harness.egress import redact_secrets, create_egress_manifest, format_warning_text
 from harness.budget import check_and_update_budget, BudgetExceededError
@@ -76,7 +76,7 @@ def load_options() -> Dict[str, Any]:
 APP_OPTIONS = load_options()
 BEARER_TOKEN = os.environ.get("MANTIS_BEARER_TOKEN") or APP_OPTIONS.get("bearer_token")
 
-app = FastAPI(title="Mantis Security Agent", version="1.1.0")
+app = FastAPI(title="Mantis Security Agent", version="1.1.2")
 
 # Authentication dependency for MCP
 def verify_bearer_token(authorization: Optional[str] = Header(None)):
@@ -320,7 +320,7 @@ async def execute_campaign_job(job_id: str):
             for f in all_findings:
                 if is_job_cancelled(job_id):
                     return
-                if f.get("severity") in ("CRITICAL", "HIGH", "ERROR") and crit_high_count < 15:
+                if f.get("severity") in ("CRITICAL", "HIGH", "ERROR") and crit_high_count < 5:
                     crit_high_count += 1
                     prompt = (
                         f"Context: {env_context}\n"
@@ -729,12 +729,14 @@ async def handle_tool_call(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
                     pass
             elif vt_p.is_dir():
                 for root, dirs, files in os.walk(vt_p):
-                    dirs[:] = [d for d in dirs if d not in (".git", "node_modules", ".venv", "vendor", "__pycache__")]
+                    dirs[:] = [d for d in dirs if d not in SKIP_HASH_DIRS]
                     for f in files:
                         fp = Path(root) / f
                         if fp.is_symlink() or is_path_denied(str(fp), str(fp)):
                             continue
                         try:
+                            if fp.stat().st_size > 512_000:
+                                continue
                             f_content = fp.read_text(encoding="utf-8", errors="ignore")
                             actual_files += 1
                             actual_bytes += len(f_content.encode("utf-8"))
