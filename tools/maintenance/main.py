@@ -19,6 +19,7 @@ repo_root = tools_dir.parent.parent
 sys.path.insert(0, str(repo_root))
 
 from tools.maintenance.config import load_app_maintenance_config
+from tools.maintenance.checkers.security import get_repo_dependabot_overview
 from tools.maintenance.planner import evaluate_app_maintenance, format_telegram_plan
 from tools.maintenance.smoke_test import run_app_mock_and_smoke_test
 from tools.maintenance.executor import execute_app_update
@@ -56,6 +57,16 @@ def cmd_check(args):
             print(f"   🔒 Release security mentions: {proposal.upstream_result.release_security_mentions}")
         if proposal.security_result.supply_chain_warnings:
             print(f"   ⚠️ Supply-chain / Dockerfile notes: {proposal.security_result.supply_chain_warnings}")
+        print()
+
+    overview = get_repo_dependabot_overview(repo_root)
+    if overview.get("prs") or overview.get("repo_alerts"):
+        print(f"🔄 GitHub Dependabot ({overview.get('repo_slug')}):")
+        for pr in overview.get("prs", []):
+            print(f"   - Open PR #{pr.get('number')}: {pr.get('title')} ({pr.get('html_url')})")
+        for a in overview.get("repo_alerts", []):
+            fix_info = f" (fix: {a.fixed_version})" if a.fixed_version else ""
+            print(f"   - [{a.severity}] {a.vuln_id}: {a.package}{fix_info} — {a.summary}")
         print()
 
 def cmd_plan(args):

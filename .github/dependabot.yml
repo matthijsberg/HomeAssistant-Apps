@@ -1,0 +1,35 @@
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "08:00"
+      timezone: "Europe/Amsterdam"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "chore(ci)"
+    labels:
+      - "dependencies"
+    open-pull-requests-limit: 3
+
+  - package-ecosystem: "pip"
+    directory: "/apps/mantis-security-agent"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "08:00"
+      timezone: "Europe/Amsterdam"
+    groups:
+      mantis-python:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "chore(mantis-security-agent)"
+    labels:
+      - "dependencies"
+    open-pull-requests-limit: 3

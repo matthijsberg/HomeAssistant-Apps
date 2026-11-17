@@ -66,13 +66,73 @@ def scan_for_secrets(app_dir: Path) -> List[str]:
     return findings
 
 _VULN_DETAIL_CACHE: Dict[str, Dict[str, Any]] = {}
+_GH_TOKEN_CACHE: Optional[str] = None
+_GH_REPO_CACHE: Dict[str, Optional[str]] = {}
+_GH_API_CACHE: Dict[str, Any] = {}
+
+
+def _get_github_token() -> Optional[str]:
+    global _GH_TOKEN_CACHE
+    env_tok = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if env_tok:
+        return env_tok
+    if _GH_TOKEN_CACHE is not None:
+        return _GH_TOKEN_CACHE or None
+    gh_bin = shutil.which("gh")
+    if gh_bin:
+        try:
+            res = subprocess.run([gh_bin, "auth", "token"], capture_output=True, text=True, timeout=5)
+            if res.returncode == 0 and res.stdout.strip():
+                _GH_TOKEN_CACHE = res.stdout.strip()
+                return _GH_TOKEN_CACHE
+        except Exception:
+            pass
+    _GH_TOKEN_CACHE = ""
+    return None
+
+
+def detect_github_repo_slug(start_path: Path) -> Optional[str]:
+    env_repo = os.environ.get("GITHUB_REPOSITORY", "").strip()
+    if env_repo and "/" in env_repo:
+        return env_repo
+    cache_key = str(start_path.resolve())
+    if cache_key in _GH_REPO_CACHE:
+        return _GH_REPO_CACHE[cache_key]
+
+    repo_root = start_path
+    for candidate in [start_path, *start_path.parents]:
+        if (candidate / ".git").exists():
+            repo_root = candidate
+            break
+
+    slug: Optional[str] = None
+    try:
+        res = subprocess.run(
+            ["git", "-C", str(repo_root), "config", "--get", "remote.origin.url"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        remote_url = res.stdout.strip()
+        if remote_url:
+            m = re.search(r"github\.com[:/]([^/]+/[^/]+?)(?:\.git)?$", remote_url)
+            if m:
+                slug = m.group(1)
+    except Exception:
+        pass
+    _GH_REPO_CACHE[cache_key] = slug
+    return slug
+
 
 def _http_json(url: str, payload: Optional[bytes] = None, timeout: int = 10) -> Any:
-    headers = {"User-Agent": "HomeAssistant-Apps-Security/1.0"}
+    headers = {
+        "User-Agent": "HomeAssistant-Apps-Security/1.0",
+        "Accept": "application/vnd.github+json",
+    }
     if payload is not None:
         headers["Content-Type"] = "application/json"
     if "api.github.com" in url:
-        gh_token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+        gh_token = _get_github_token()
         if gh_token:
             headers["Authorization"] = f"Bearer {gh_token}"
     req = urllib.request.Request(url, data=payload, headers=headers)
@@ -83,6 +143,36 @@ def _http_json(url: str, payload: Optional[bytes] = None, timeout: int = 10) -> 
     except Exception:
         return None
     return None
+
+
+def _github_cached_list(url: str) -> Optional[List[Dict[str, Any]]]:
+    if url in _GH_API_CACHE:
+        return _GH_API_CACHE[url]
+    data = _http_json(url, timeout=10)
+    if isinstance(data, list):
+        _GH_API_CACHE[url] = data
+        return data
+    _GH_API_CACHE[url] = None
+    return None
+
+
+def fetch_repo_dependabot_alerts(repo_slug: str) -> Optional[List[Dict[str, Any]]]:
+    return _github_cached_list(
+        f"https://api.github.com/repos/{repo_slug}/dependabot/alerts?state=open&per_page=100"
+    )
+
+
+def fetch_repo_code_scanning_alerts(repo_slug: str) -> Optional[List[Dict[str, Any]]]:
+    return _github_cached_list(
+        f"https://api.github.com/repos/{repo_slug}/code-scanning/alerts?state=open&per_page=100"
+    )
+
+
+def fetch_repo_dependabot_prs(repo_slug: str) -> List[Dict[str, Any]]:
+    pulls = _github_cached_list(f"https://api.github.com/repos/{repo_slug}/pulls?state=open&per_page=50")
+    if not pulls:
+        return []
+    return [p for p in pulls if ((p.get("user") or {}).get("login") == "dependabot[bot]")]
 
 def _map_osv_severity(vuln_data: Dict[str, Any]) -> str:
     db_sev = str((vuln_data.get("database_specific") or {}).get("severity", "")).upper()
@@ -437,8 +527,145 @@ def run_trivy_fs(app_dir: Path) -> Tuple[bool, List[Vulnerability]]:
         pass
     return True, vulns
 
+def _parse_dependabot_alert(alert: Dict[str, Any]) -> Optional[Vulnerability]:
+    adv = alert.get("security_advisory") or {}
+    vuln = alert.get("security_vulnerability") or {}
+    dep = alert.get("dependency") or {}
+    pkg = (dep.get("package") or {}).get("name") or "unknown"
+    eco = (dep.get("package") or {}).get("ecosystem") or "Dependabot"
+
+    raw_sev = str(vuln.get("severity") or adv.get("severity") or "medium").upper()
+    if raw_sev in ("CRITICAL", "HIGH"):
+        sev = "HIGH"
+    elif raw_sev in ("MODERATE", "MEDIUM"):
+        sev = "MEDIUM"
+    else:
+        return None
+
+    cve_id = adv.get("cve_id")
+    ghsa_id = adv.get("ghsa_id")
+    vuln_id = f"{ghsa_id} ({cve_id})" if (ghsa_id and cve_id and ghsa_id != cve_id) else (cve_id or ghsa_id or "DEPENDABOT")
+    fixed = (vuln.get("first_patched_version") or {}).get("identifier")
+    ver_range = str(vuln.get("vulnerable_version_range") or dep.get("manifest_path") or "?")
+    summary = str(adv.get("summary") or "Dependabot security alert")[:140]
+    return Vulnerability(
+        package=pkg,
+        version=ver_range,
+        vuln_id=vuln_id,
+        summary=summary,
+        severity=sev,
+        ecosystem=f"Dependabot ({eco})",
+        fixed_version=str(fixed) if fixed else None,
+    )
+
+
+def check_app_dependabot_alerts(config: AppMaintenanceConfig, repo_slug: Optional[str]) -> Tuple[bool, List[Vulnerability]]:
+    if not repo_slug:
+        return False, []
+    alerts = fetch_repo_dependabot_alerts(repo_slug)
+    if alerts is None:
+        return False, []
+
+    prefix = f"apps/{config.app_dir.name}/"
+    vulns: List[Vulnerability] = []
+    for alert in alerts:
+        manifest = str(((alert.get("dependency") or {}).get("manifest_path")) or "").lstrip("/")
+        if not manifest.startswith(prefix):
+            continue
+        parsed = _parse_dependabot_alert(alert)
+        if parsed:
+            vulns.append(parsed)
+    return True, vulns
+
+
+def check_app_code_scanning_alerts(config: AppMaintenanceConfig, repo_slug: Optional[str]) -> Tuple[bool, List[Vulnerability]]:
+    if not repo_slug:
+        return False, []
+    alerts = fetch_repo_code_scanning_alerts(repo_slug)
+    if alerts is None:
+        return False, []
+
+    app_folder = config.app_dir.name
+    image_cat = f"trivy-image-{app_folder}"
+    vulns: List[Vulnerability] = []
+    for alert in alerts:
+        rule = alert.get("rule") or {}
+        sec_sev = str(rule.get("security_severity_level") or "").lower()
+        if sec_sev not in ("critical", "high"):
+            continue
+        inst = alert.get("most_recent_instance") or {}
+        category = str(inst.get("category") or "")
+        loc_path = str(((inst.get("location") or {}).get("path")) or "").lstrip("/")
+        matches_app = (
+            category == image_cat
+            or loc_path.startswith(f"{app_folder}/")
+            or loc_path.startswith(f"apps/{app_folder}/")
+        )
+        if not matches_app:
+            continue
+
+        rule_id = str(rule.get("id") or "TRIVY-CS")
+        desc = str(rule.get("description") or rule.get("name") or "Code scanning alert")[:140]
+        pkg_name = loc_path.split("/")[-1] if loc_path else app_folder
+        vulns.append(Vulnerability(
+            package=pkg_name,
+            version=config.current_version,
+            vuln_id=rule_id,
+            summary=desc,
+            severity="HIGH",
+            ecosystem=f"CI Trivy ({category or 'code-scanning'})",
+        ))
+    return True, vulns
+
+
+def get_repo_dependabot_overview(start_path: Path) -> Dict[str, Any]:
+    """Returns repo-level open Dependabot PRs and non-app Dependabot alerts (e.g. .github/workflows)."""
+    repo_slug = detect_github_repo_slug(start_path)
+    if not repo_slug:
+        return {"repo_slug": None, "prs": [], "repo_alerts": []}
+
+    prs = fetch_repo_dependabot_prs(repo_slug)
+    alerts = fetch_repo_dependabot_alerts(repo_slug) or []
+    repo_alerts: List[Vulnerability] = []
+    for alert in alerts:
+        manifest = str(((alert.get("dependency") or {}).get("manifest_path")) or "").lstrip("/")
+        if manifest.startswith("apps/"):
+            continue
+        parsed = _parse_dependabot_alert(alert)
+        if parsed:
+            repo_alerts.append(parsed)
+    return {
+        "repo_slug": repo_slug,
+        "prs": prs,
+        "repo_alerts": repo_alerts,
+    }
+
+
+def _dedupe_vulns(vulns: List[Vulnerability]) -> List[Vulnerability]:
+    deduped: List[Vulnerability] = []
+    seen_tokens: set = set()
+    for v in vulns:
+        pkg_key = v.package.lower()
+        ids = {
+            tok.upper()
+            for tok in re.findall(
+                r"(?:CVE-\d{4}-\d{4,7}|GHSA-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4})",
+                v.vuln_id,
+                re.IGNORECASE,
+            )
+        }
+        tokens = ids if ids else {v.vuln_id.upper()}
+        if any((pkg_key, tok) in seen_tokens for tok in tokens):
+            continue
+        for tok in tokens:
+            seen_tokens.add((pkg_key, tok))
+        deduped.append(v)
+    return deduped
+
+
 def check_app_security(config: AppMaintenanceConfig) -> SecurityCheckResult:
     result = SecurityCheckResult(app_name=config.app_name)
+    repo_slug = detect_github_repo_slug(config.app_dir)
 
     # 1. Scan for secrets
     if config.security.secret_scan:
@@ -467,6 +694,11 @@ def check_app_security(config: AppMaintenanceConfig) -> SecurityCheckResult:
         if osv_queries:
             result.vulnerabilities.extend(query_osv_batch(osv_queries))
 
+        dep_ok, dep_vulns = check_app_dependabot_alerts(config, repo_slug)
+        if dep_ok:
+            result.vulnerabilities.extend(dep_vulns)
+            result.scanned_targets.append("GitHub Dependabot")
+
     # 3. Check GitHub Security Advisories for upstream repository
     if config.security.ghsa_check and config.upstream.github_repo:
         ghsa_vulns = check_github_advisories(config.upstream.github_repo, config.current_version)
@@ -479,14 +711,21 @@ def check_app_security(config: AppMaintenanceConfig) -> SecurityCheckResult:
         if config.upstream.dockerfile or config.upstream.build_yaml:
             result.scanned_targets.append("Dockerfile/build.yaml")
 
-    # 5. Optional local Trivy scan (image/OS layers are always scanned in GitHub Actions)
+    # 5. Optional local Trivy scan + GitHub Code Scanning (CI Trivy results)
     trivy_ok, trivy_vulns = run_trivy_fs(config.app_dir)
     result.trivy_available = trivy_ok
     if trivy_ok:
         result.vulnerabilities.extend(trivy_vulns)
         result.scanned_targets.append("trivy-fs")
-    else:
+
+    cs_ok, cs_vulns = check_app_code_scanning_alerts(config, repo_slug)
+    if cs_ok:
+        result.vulnerabilities.extend(cs_vulns)
+        result.scanned_targets.append("CI Trivy Code Scanning")
+    elif not trivy_ok:
         result.scanned_targets.append("OS/image via CI Trivy")
+
+    result.vulnerabilities = _dedupe_vulns(result.vulnerabilities)
 
     # 6. Determine overall risk level
     if any(v.severity == "HIGH" for v in result.vulnerabilities) or result.secrets_found:
@@ -500,6 +739,6 @@ def check_app_security(config: AppMaintenanceConfig) -> SecurityCheckResult:
         result.summary = f"Hygiene notes ({len(result.supply_chain_warnings)}): {result.supply_chain_warnings[0]}"
     else:
         result.risk_level = "CLEAN"
-        result.summary = "Clean: No secrets, OSV CVEs, or GHSA advisories found"
+        result.summary = "Clean: No secrets, OSV CVEs, Dependabot, or GHSA advisories found"
 
     return result

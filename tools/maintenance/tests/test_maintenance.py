@@ -20,8 +20,11 @@ from tools.maintenance.checkers.upstream import (
 from tools.maintenance.checkers.security import (
     Vulnerability,
     SecurityCheckResult,
+    _dedupe_vulns,
     _version_in_range,
     audit_dockerfile_and_build,
+    check_app_code_scanning_alerts,
+    check_app_dependabot_alerts,
     check_github_advisories,
     parse_package_lock,
     parse_requirements_file,
@@ -263,6 +266,106 @@ class TestMaintenanceSecurityAndUpstream(unittest.TestCase):
             self.assertEqual(res.update_type, "major")
             self.assertIn("UniFi Network", " ".join(res.details))
             self.assertNotIn("5.1.42 ->", " ".join(res.details))
+
+    def test_dependabot_and_code_scanning_integration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            app_dir = Path(tmp) / "apps" / "mantis-security-agent"
+            app_dir.mkdir(parents=True)
+            (app_dir / "config.yaml").write_text(
+                "name: Mantis Security Agent\nversion: '1.1.2'\nslug: mantis_security_agent\n",
+                encoding="utf-8",
+            )
+            cfg = load_app_maintenance_config(app_dir)
+
+            dep_alerts = [
+                {
+                    "dependency": {
+                        "manifest_path": "apps/mantis-security-agent/requirements.txt",
+                        "package": {"name": "fastapi", "ecosystem": "pip"},
+                    },
+                    "security_advisory": {
+                        "ghsa_id": "GHSA-aaaa-bbbb-cccc",
+                        "cve_id": "CVE-2026-55555",
+                        "severity": "high",
+                        "summary": "FastAPI header parsing issue",
+                    },
+                    "security_vulnerability": {
+                        "severity": "high",
+                        "vulnerable_version_range": "== 0.115.0",
+                        "first_patched_version": {"identifier": "0.115.5"},
+                    },
+                },
+                {
+                    "dependency": {
+                        "manifest_path": "apps/other-app/requirements.txt",
+                        "package": {"name": "requests", "ecosystem": "pip"},
+                    },
+                    "security_advisory": {"ghsa_id": "GHSA-other", "severity": "high", "summary": "Other"},
+                    "security_vulnerability": {"severity": "high"},
+                },
+                {
+                    "dependency": {
+                        "manifest_path": "apps/mantis-security-agent/requirements.txt",
+                        "package": {"name": "urllib3", "ecosystem": "pip"},
+                    },
+                    "security_advisory": {"ghsa_id": "GHSA-low", "severity": "low", "summary": "Low"},
+                    "security_vulnerability": {"severity": "low"},
+                },
+            ]
+            with patch("tools.maintenance.checkers.security.fetch_repo_dependabot_alerts", return_value=dep_alerts):
+                ok, vulns = check_app_dependabot_alerts(cfg, "owner/repo")
+            self.assertTrue(ok)
+            self.assertEqual(len(vulns), 1)
+            self.assertEqual(vulns[0].package, "fastapi")
+            self.assertEqual(vulns[0].fixed_version, "0.115.5")
+            self.assertIn("CVE-2026-55555", vulns[0].vuln_id)
+
+            # Deduplication between OSV and Dependabot for the same CVE/GHSA
+            dup = Vulnerability("fastapi", "0.115.0", "GHSA-aaaa-bbbb-cccc", "Dup", "HIGH", "PyPI", "0.115.5")
+            self.assertEqual(len(_dedupe_vulns([dup, vulns[0]])), 1)
+
+            cs_alerts = [
+                {
+                    "rule": {"id": "CVE-2026-99999", "security_severity_level": "critical", "description": "Critical OpenSSL flaw"},
+                    "most_recent_instance": {
+                        "category": "trivy-image-mantis-security-agent",
+                        "location": {"path": "usr/lib/libssl.so.3"},
+                    },
+                },
+                {
+                    "rule": {"id": "DS-0026", "security_severity_level": "low", "description": "Add HEALTHCHECK"},
+                    "most_recent_instance": {
+                        "category": "trivy-fs-apps",
+                        "location": {"path": "mantis-security-agent/Dockerfile"},
+                    },
+                },
+            ]
+            with patch("tools.maintenance.checkers.security.fetch_repo_code_scanning_alerts", return_value=cs_alerts):
+                cs_ok, cs_vulns = check_app_code_scanning_alerts(cfg, "owner/repo")
+            self.assertTrue(cs_ok)
+            self.assertEqual(len(cs_vulns), 1)
+            self.assertEqual(cs_vulns[0].vuln_id, "CVE-2026-99999")
+
+            # Telegram plan renders repo-level Dependabot PRs
+            prop = AppMaintenanceProposal(
+                config=cfg,
+                upstream_result=UpstreamCheckResult(app_name=cfg.app_name, current_version="1.1.2"),
+                security_result=SecurityCheckResult(app_name=cfg.app_name),
+                urgency="UP_TO_DATE",
+                summary="Up to date",
+                target_version="1.1.2",
+                requires_approval=False,
+            )
+            fake_overview = {
+                "repo_slug": "owner/repo",
+                "prs": [{"number": 42, "title": "chore(ci): bump actions/checkout from 4 to 6", "html_url": "https://github.com/owner/repo/pull/42"}],
+                "repo_alerts": [],
+            }
+            with patch("tools.maintenance.planner.get_repo_dependabot_overview", return_value=fake_overview):
+                msg = format_telegram_plan([prop])
+            self.assertIn("GitHub Dependabot", msg)
+            self.assertIn("PR #42", msg)
+            self.assertIn("actions/checkout", msg)
 
 
 if __name__ == "__main__":

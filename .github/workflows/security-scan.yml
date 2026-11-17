@@ -22,6 +22,10 @@ jobs:
   maintenance-checks:
     name: Maintenance Framework & OSV/GHSA Audit
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: read
+      pull-requests: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

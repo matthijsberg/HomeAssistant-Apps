@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import List, Optional
 from .config import AppMaintenanceConfig, load_app_maintenance_config
 from .checkers.upstream import check_app_upstream, UpstreamCheckResult
-from .checkers.security import check_app_security, SecurityCheckResult
+from .checkers.security import check_app_security, SecurityCheckResult, get_repo_dependabot_overview
 
 @dataclass
 class AppMaintenanceProposal:
@@ -77,6 +77,27 @@ def evaluate_app_maintenance(app_dir: Path) -> AppMaintenanceProposal:
         requires_approval=requires_approval
     )
 
+def _append_repo_dependabot_section(lines: List[str], proposals: List[AppMaintenanceProposal]) -> None:
+    if not proposals:
+        return
+    overview = get_repo_dependabot_overview(proposals[0].config.app_dir)
+    prs = overview.get("prs") or []
+    repo_alerts = overview.get("repo_alerts") or []
+    if not prs and not repo_alerts:
+        return
+
+    lines.append("")
+    lines.append("🔄 *GitHub Dependabot & CI Dependencies*")
+    for pr in prs[:5]:
+        num = pr.get("number")
+        title = str(pr.get("title") or "Dependabot PR")
+        url = str(pr.get("html_url") or "")
+        lines.append(f"• PR #{num}: {title}" + (f" ({url})" if url else ""))
+    for alert in repo_alerts[:5]:
+        fix_info = f", fix: {alert.fixed_version}" if alert.fixed_version else ""
+        lines.append(f"• [{alert.severity}] {alert.vuln_id}: {alert.package}{fix_info} — {alert.summary}")
+
+
 def format_telegram_plan(proposals: List[AppMaintenanceProposal]) -> str:
     lines = [
         "🛠 *Home Assistant Apps — Weekly Maintenance Report*",
@@ -95,6 +116,7 @@ def format_telegram_plan(proposals: List[AppMaintenanceProposal]) -> str:
             lines.append("Hygiene notes:")
             for p in hygiene_apps:
                 lines.append(f"• {p.config.app_name}: {'; '.join(p.security_result.supply_chain_warnings)}")
+        _append_repo_dependabot_section(lines, proposals)
         return "\n".join(lines)
 
     lines.append(f"Found {len(actionable)} app(s) requiring maintenance attention:\n")
@@ -142,4 +164,5 @@ def format_telegram_plan(proposals: List[AppMaintenanceProposal]) -> str:
         if hygiene_notes:
             lines.append(f"• Hygiene notes: {' | '.join(hygiene_notes)}")
 
+    _append_repo_dependabot_section(lines, proposals)
     return "\n".join(lines)
