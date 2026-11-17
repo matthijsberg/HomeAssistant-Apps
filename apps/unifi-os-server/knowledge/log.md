@@ -35,3 +35,9 @@
   - Diff Snapshot: `diff:45cf9e0b2acd`
   - Reviewer: Mantis Security Agent
   - Verdict: **CLEAN** (0 CWE findings, 0 secrets, 21.3 KB diff scanned).
+
+- **2026-11-17T06:41:00Z** — `rev_fd14f97222`
+  - Target: `apps/unifi-os-server/` + `.github/workflows/addon-unifi-os-server.yml` (v6.0.21-2: read-only `/ssl` and `/share` mounts, `0600` TLS private key enforcement, and Trivy container image CI gate)
+  - Diff Snapshot: `diff:8f36f3084ea5`
+  - Reviewer: Mantis Security Agent
+  - Verdict: **CLEAN** (0 CWE findings, 0 secrets, 5.7 KB diff scanned).

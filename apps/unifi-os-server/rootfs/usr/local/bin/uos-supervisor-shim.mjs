@@ -8,7 +8,7 @@
 
 import { createRequire } from 'module';
 import { createPrivateKey, X509Certificate } from 'crypto';
-import { existsSync, readFileSync, statfsSync } from 'fs';
+import { chmodSync, existsSync, readdirSync, readFileSync, statfsSync } from 'fs';
 import os from 'os';
 import path from 'path';
 
@@ -114,6 +114,22 @@ async function ipcJson(urlPath, method = 'GET', body = null) {
   return text ? JSON.parse(text) : null;
 }
 
+function hardenTlsKeyPermissions() {
+  const dirs = ['/data/uos_storage/unifi-core/config', '/data/unifi-core/config'];
+  for (const dir of dirs) {
+    if (!existsSync(dir)) continue;
+    try {
+      for (const entry of readdirSync(dir)) {
+        if (entry.endsWith('.key')) {
+          chmodSync(path.join(dir, entry), 0o600);
+        }
+      }
+    } catch (err) {
+      console.warn(`[uos-supervisor-shim] Could not harden TLS key permissions in ${dir}:`, err.message);
+    }
+  }
+}
+
 async function syncHaSslCertificate() {
   try {
     const opts = readAddonOptions();
@@ -156,6 +172,8 @@ async function syncHaSslCertificate() {
     console.log(`[uos-supervisor-shim] Deployed and activated HA SSL certificate (${pair.crtPath})`);
   } catch (err) {
     console.error('[uos-supervisor-shim] SSL sync warning:', err.message);
+  } finally {
+    hardenTlsKeyPermissions();
   }
 }
 

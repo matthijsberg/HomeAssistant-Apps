@@ -1,5 +1,10 @@
 # Changelog
 
+## [6.0.21-2] - 2026-11-17 (Early Access Target)
+- Hardened Home Assistant host mounts in `config.yaml` from `ssl:rw` and `share:rw` to read-only (`ssl:ro`, `share:ro`).
+- Enforced `0600` permissions on all persisted TLS private keys (`*.key`) in `/data/uos_storage/unifi-core/config/` via `rootfs/run.sh` and `uos-supervisor-shim.mjs`.
+- Added dedicated GitHub Actions CI & Trivy container image security workflow (`.github/workflows/addon-unifi-os-server.yml`).
+
 ## [6.0.21-1] - 2026-11-16 (Early Access Target)
 - Upgraded bundled UniFi Network Application from `10.6.109` to `11.0.99-37236-1` along with required `unifi-matter-controller` (`1.0.0`) via SHA-256 verified build-time `.deb` installation (`amd64` & `aarch64`).
 - Added bundled UniFi InnerSpace (`1.4.3`) gated by a new `enable_innerspace` option (default `false`) with persistent `/data/unifi-innerspace` storage.

@@ -176,6 +176,9 @@ if [ -f "${CORE_CRT_DEFAULT}" ] && [ -f "${CORE_KEY_DEFAULT}" ]; then
     rm -f "${CORE_CRT_DEFAULT}" "${CORE_KEY_DEFAULT}"
 fi
 
+# Enforce 0600 permissions on all persisted TLS private keys
+find "${CORE_CFG_DIR}" -maxdepth 1 -type f -name "*.key" -exec chmod 600 {} + 2>/dev/null || true
+
 if [ "$USE_HA_SSL" = "true" ] && [ -d "/ssl" ]; then
     info "Home Assistant SSL integration enabled (cert='${SSL_CERT}', key='${SSL_KEY}'); uos-supervisor-shim will sync valid certificates."
 elif [ "$USE_HA_SSL" != "true" ]; then

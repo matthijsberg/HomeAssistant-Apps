@@ -33,10 +33,16 @@ def test_staged_manifest_isolation():
 
 
 def test_security_posture_and_ports():
-    """Verify least-privilege capabilities and ensure unsafe bypass/DB ports are never exposed."""
+    """Verify least-privilege capabilities, read-only mounts, and safe port posture."""
     cfg = _load_manifest()
     assert set(cfg.get("privileged", [])) == {"NET_ADMIN", "NET_RAW"}
     assert cfg.get("full_access") is not True
+
+    maps = set(cfg.get("map", []))
+    assert "ssl:ro" in maps, "/ssl must be mounted read-only"
+    assert "share:ro" in maps, "/share must be mounted read-only"
+    assert "ssl:rw" not in maps, "/ssl must not be writable"
+    assert "share:rw" not in maps, "/share must not be writable"
 
     ports = cfg.get("ports", {})
     assert ports.get("443/tcp") == 11443
@@ -44,6 +50,17 @@ def test_security_posture_and_ports():
     assert ports.get("3478/udp") == 3478
     assert "5432/tcp" not in ports, "PostgreSQL must remain localhost-only"
     assert "7443/tcp" not in ports, "Unauthenticated Network App bypass port 7443 must not be exposed"
+
+
+def test_tls_private_key_hardening():
+    """Verify run.sh and uos-supervisor-shim.mjs enforce 0600 on TLS private keys."""
+    run_sh = (ADDON_ROOT / "rootfs" / "run.sh").read_text(encoding="utf-8")
+    shim = (ADDON_ROOT / "rootfs" / "usr" / "local" / "bin" / "uos-supervisor-shim.mjs").read_text(
+        encoding="utf-8"
+    )
+    assert "chmod 600" in run_sh
+    assert "0o600" in shim
+    assert "hardenTlsKeyPermissions" in shim
 
 
 def test_options_schema_and_translations_parity():
