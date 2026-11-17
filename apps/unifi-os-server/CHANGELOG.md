@@ -3,6 +3,7 @@
 ## [6.0.21-2] - 2026-11-17 (Early Access Target)
 - Hardened Home Assistant host mounts in `config.yaml` from `ssl:rw` and `share:rw` to read-only (`ssl:ro`, `share:ro`).
 - Enforced `0600` permissions on all persisted TLS private keys (`*.key`) in `/data/uos_storage/unifi-core/config/` via `rootfs/run.sh` and `uos-supervisor-shim.mjs`.
+- Upgraded Debian Trixie security packages (`apt`, `libapt-pkg7.0`, `zlib1g`) in `Dockerfile` during image build (`CVE-2026-109518`, `CVE-2026-85091`).
 - Added dedicated GitHub Actions CI & Trivy container image security workflow (`.github/workflows/addon-unifi-os-server.yml`).
 
 ## [6.0.21-1] - 2026-11-16 (Early Access Target)
