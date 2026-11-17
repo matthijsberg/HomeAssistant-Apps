@@ -121,70 +121,70 @@ vulnerabilities:
 
   # Ubiquiti UniFi Network 11.0.99 vendor ace.jar (proprietary upstream JAR; cannot be re-packaged independently)
   - id: CVE-2025-66021
-    paths: ["usr/lib/unifi/lib/ace.jar"]
+    paths: ["usr/lib/unifi/lib/ace.jar/BOOT-INF/lib/owasp-java-html-sanitizer-20240325.1.jar"]
     expired_at: 2026-12-31
     statement: "Bundled in upstream Ubiquiti unifi 11.0.99-37236-1 ace.jar; awaits upstream UniFi Network release."
   - id: CVE-2026-47884
-    paths: ["usr/lib/unifi/lib/ace.jar"]
+    paths: ["usr/lib/unifi/lib/ace.jar/BOOT-INF/lib/spring-webmvc-6.2.19.jar"]
     expired_at: 2026-12-31
     statement: "Bundled in upstream Ubiquiti unifi 11.0.99-37236-1 ace.jar; awaits upstream UniFi Network release."
   - id: CVE-2026-47890
-    paths: ["usr/lib/unifi/lib/ace.jar"]
+    paths: ["usr/lib/unifi/lib/ace.jar/BOOT-INF/lib/spring-webmvc-6.2.19.jar"]
     expired_at: 2026-12-31
     statement: "Bundled in upstream Ubiquiti unifi 11.0.99-37236-1 ace.jar; awaits upstream UniFi Network release."
   - id: CVE-2026-54399
-    paths: ["usr/lib/unifi/lib/ace.jar"]
+    paths: ["usr/lib/unifi/lib/ace.jar/BOOT-INF/lib/httpcore5-5.3.6.jar"]
     expired_at: 2026-12-31
     statement: "Bundled in upstream Ubiquiti unifi 11.0.99-37236-1 ace.jar; awaits upstream UniFi Network release."
   - id: CVE-2026-54428
-    paths: ["usr/lib/unifi/lib/ace.jar"]
+    paths: ["usr/lib/unifi/lib/ace.jar/BOOT-INF/lib/httpcore5-h2-5.3.6.jar"]
     expired_at: 2026-12-31
     statement: "Bundled in upstream Ubiquiti unifi 11.0.99-37236-1 ace.jar; awaits upstream UniFi Network release."
   - id: CVE-2026-63337
-    paths: ["usr/lib/unifi/lib/ace.jar"]
+    paths: ["usr/lib/unifi/lib/ace.jar/BOOT-INF/lib/amqp-client-5.25.0.jar"]
     expired_at: 2026-12-31
     statement: "Bundled in upstream Ubiquiti unifi 11.0.99-37236-1 ace.jar; awaits upstream UniFi Network release."
   - id: CVE-2026-68497
-    paths: ["usr/lib/unifi/lib/ace.jar"]
+    paths: ["usr/lib/unifi/lib/ace.jar/BOOT-INF/lib/jackson-databind-2.21.4.jar"]
     expired_at: 2026-12-31
     statement: "Bundled in upstream Ubiquiti unifi 11.0.99-37236-1 ace.jar; awaits upstream UniFi Network release."
   - id: CVE-2026-69219
-    paths: ["usr/lib/unifi/lib/ace.jar"]
+    paths: ["usr/lib/unifi/lib/ace.jar/BOOT-INF/lib/amqp-client-5.25.0.jar"]
     expired_at: 2026-12-31
     statement: "Bundled in upstream Ubiquiti unifi 11.0.99-37236-1 ace.jar; awaits upstream UniFi Network release."
   - id: CVE-2026-69220
-    paths: ["usr/lib/unifi/lib/ace.jar"]
+    paths: ["usr/lib/unifi/lib/ace.jar/BOOT-INF/lib/amqp-client-5.25.0.jar"]
     expired_at: 2026-12-31
     statement: "Bundled in upstream Ubiquiti unifi 11.0.99-37236-1 ace.jar; awaits upstream UniFi Network release."
   - id: CVE-2026-75516
-    paths: ["usr/lib/unifi/lib/ace.jar"]
+    paths: ["usr/lib/unifi/lib/ace.jar/BOOT-INF/lib/amqp-client-5.25.0.jar"]
     expired_at: 2026-12-31
     statement: "Bundled in upstream Ubiquiti unifi 11.0.99-37236-1 ace.jar; awaits upstream UniFi Network release."
   - id: CVE-2026-89407
-    paths: ["usr/lib/unifi/lib/ace.jar"]
+    paths: ["usr/lib/unifi/lib/ace.jar/BOOT-INF/lib/jackson-core-2.21.4.jar"]
     expired_at: 2026-12-31
     statement: "Bundled in upstream Ubiquiti unifi 11.0.99-37236-1 ace.jar; awaits upstream UniFi Network release."
   - id: CVE-2026-89425
-    paths: ["usr/lib/unifi/lib/ace.jar"]
+    paths: ["usr/lib/unifi/lib/ace.jar/BOOT-INF/lib/jackson-core-2.21.4.jar"]
     expired_at: 2026-12-31
     statement: "Bundled in upstream Ubiquiti unifi 11.0.99-37236-1 ace.jar; awaits upstream UniFi Network release."
   - id: CVE-2026-91776
-    paths: ["usr/lib/unifi/lib/ace.jar"]
+    paths: ["usr/lib/unifi/lib/ace.jar/BOOT-INF/lib/jackson-databind-2.21.4.jar"]
     expired_at: 2026-12-31
     statement: "Bundled in upstream Ubiquiti unifi 11.0.99-37236-1 ace.jar; awaits upstream UniFi Network release."
   - id: CVE-2026-91777
-    paths: ["usr/lib/unifi/lib/ace.jar"]
+    paths: ["usr/lib/unifi/lib/ace.jar/BOOT-INF/lib/jackson-databind-2.21.4.jar"]
     expired_at: 2026-12-31
     statement: "Bundled in upstream Ubiquiti unifi 11.0.99-37236-1 ace.jar; awaits upstream UniFi Network release."
   - id: CVE-2026-93451
-    paths: ["usr/lib/unifi/lib/ace.jar"]
+    paths: ["usr/lib/unifi/lib/ace.jar/BOOT-INF/lib/snappy-java-1.1.10.8.jar"]
     expired_at: 2026-12-31
     statement: "Bundled in upstream Ubiquiti unifi 11.0.99-37236-1 ace.jar; awaits upstream UniFi Network release."
   - id: CVE-2026-102554
-    paths: ["usr/lib/unifi/lib/ace.jar"]
+    paths: ["usr/lib/unifi/lib/ace.jar/BOOT-INF/lib/guava-33.7.1-jre.jar"]
     expired_at: 2026-12-31
     statement: "Bundled in upstream Ubiquiti unifi 11.0.99-37236-1 ace.jar; awaits upstream UniFi Network release."
   - id: CVE-2026-108106
-    paths: ["usr/lib/unifi/lib/ace.jar"]
+    paths: ["usr/lib/unifi/lib/ace.jar/BOOT-INF/lib/snappy-java-1.1.10.8.jar"]
     expired_at: 2026-12-31
     statement: "Bundled in upstream Ubiquiti unifi 11.0.99-37236-1 ace.jar; awaits upstream UniFi Network release."
