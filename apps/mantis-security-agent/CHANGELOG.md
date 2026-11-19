@@ -2,6 +2,11 @@
 
 All notable changes to the Mantis Security Agent are documented in this file.
 
+## [1.1.3] - 2026-11-19
+
+### Changed
+- Consolidated Dependabot Python dependency updates (compatible with `semgrep==1.185.0`): `fastapi==0.141.1` (`starlette==1.10.0`), `uvicorn==0.54.0`, `pydantic==2.14.3`, `httpx==0.28.1`, `httpx-sse==0.4.3`, `semgrep==1.185.0`, `pyyaml==6.0.3`, `yamllint==1.38.0`, `aiofiles==25.1.0`, `jsonschema==4.25.1`, `python-multipart==0.0.34`.
+
 ## [1.1.2] - 2026-11-16
 
 ### Added

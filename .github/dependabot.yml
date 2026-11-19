@@ -15,38 +15,29 @@ updates:
       prefix: "chore(ci)"
     labels:
       - "dependencies"
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 1
 
   - package-ecosystem: "pip"
-    directory: "/apps/mantis-security-agent"
+    directories:
+      - "/apps/mantis-security-agent"
+      - "/apps/kicad-mcp"
     schedule:
       interval: "weekly"
       day: "sunday"
       time: "08:00"
       timezone: "Europe/Amsterdam"
     groups:
-      mantis-python:
+      python-apps:
         patterns:
           - "*"
+    ignore:
+      # Pinned by Seeed-Studio/kicad-mcp-server upstream compatibility contract
+      - dependency-name: "mcp"
+        versions: [">=2.0.0"]
+      - dependency-name: "fastmcp"
+        versions: [">=4.0.0"]
     commit-message:
-      prefix: "chore(mantis-security-agent)"
+      prefix: "chore(deps)"
     labels:
       - "dependencies"
-    open-pull-requests-limit: 3
-
-  - package-ecosystem: "pip"
-    directory: "/apps/kicad-mcp"
-    schedule:
-      interval: "weekly"
-      day: "sunday"
-      time: "08:00"
-      timezone: "Europe/Amsterdam"
-    groups:
-      kicad-mcp-python:
-        patterns:
-          - "*"
-    commit-message:
-      prefix: "chore(kicad-mcp)"
-    labels:
-      - "dependencies"
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 1

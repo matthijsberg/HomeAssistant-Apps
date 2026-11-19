@@ -1,6 +1,6 @@
 name: "KiCad Headless MCP"
 description: "Lightweight headless KiCad 9 CLI & Streamable HTTP MCP server for AI-assisted schematic/PCB review, DRC/ERC, 2D/3D renders, Gerber/Excellon, BOM & STEP exports"
-version: "0.1.0"
+version: "0.1.1"
 slug: "kicad_mcp"
 init: false
 arch:

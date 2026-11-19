@@ -76,7 +76,7 @@ def load_options() -> Dict[str, Any]:
 APP_OPTIONS = load_options()
 BEARER_TOKEN = os.environ.get("MANTIS_BEARER_TOKEN") or APP_OPTIONS.get("bearer_token")
 
-app = FastAPI(title="Mantis Security Agent", version="1.1.2")
+app = FastAPI(title="Mantis Security Agent", version="1.1.3")
 
 # Authentication dependency for MCP
 def verify_bearer_token(authorization: Optional[str] = Header(None)):

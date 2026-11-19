@@ -2,6 +2,10 @@
 
 All notable changes to **KiCad Headless MCP** follow Semantic Versioning.
 
+## [0.1.1] - 2026-11-19
+### Security
+- Raised minimum dependency floors to `Pillow>=13.0.0,<14` and `starlette>=1.3.1,<2`, remediating all 30 Dependabot CVE floor alerts while keeping `mcp<2` and `fastmcp<4` aligned with `Seeed-Studio/kicad-mcp-server`.
+
 ## [0.1.0] - 2026-11-19
 ### Added
 - Initial Home Assistant App release on Ubuntu 26.04 LTS with native headless KiCad 9.x (`kicad-cli` + `pcbnew`).

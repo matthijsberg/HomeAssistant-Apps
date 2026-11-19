@@ -1,4 +1,4 @@
-# KiCad Headless MCP — PRD & Architecture (v0.1.0)
+# KiCad Headless MCP — PRD & Architecture (v0.1.1)
 
 ## 1. Objective
 Provide a lightweight, headless **KiCad 9 CLI + Streamable HTTP MCP Server** packaged as a generic, open-source Home Assistant App (`slug: kicad_mcp`). Enables AI agents on Home Assistant OS (such as Hermes Agent) to inspect, validate (ERC/DRC), render (2D SVG/PNG layers and 3D PNG), and export manufacturing artifacts (Gerbers, Excellon drills, CPL, BOM, STEP) on shared KiCad projects while the designer uses native KiCad 9 on their desktop/laptop — without running any X11 desktop or VNC server.

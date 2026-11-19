@@ -1,6 +1,6 @@
 # KiCad Headless MCP (Home Assistant App)
 
-**Version:** `0.1.0`
+**Version:** `0.1.1`
 
 A lightweight, headless **KiCad 9 CLI + Streamable HTTP MCP server** for Home Assistant OS — built on **Ubuntu 26.04 LTS** with zero VNC or desktop GUI overhead.
 
