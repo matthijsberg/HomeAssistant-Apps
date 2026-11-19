@@ -1,0 +1,48 @@
+name: "KiCad Headless MCP"
+description: "Lightweight headless KiCad 9 CLI & Streamable HTTP MCP server for AI-assisted schematic/PCB review, DRC/ERC, 2D/3D renders, Gerber/Excellon, BOM & STEP exports"
+version: "0.1.0"
+slug: "kicad_mcp"
+init: false
+arch:
+  - amd64
+  - aarch64
+url: "https://github.com/matthijsberg/HomeAssistant-Apps/tree/main/apps/kicad-mcp"
+panel_icon: "mdi:chip"
+startup: services
+boot: auto
+host_network: false
+homeassistant_api: false
+privileged: []
+environment:
+  TZ: "Europe/Amsterdam"
+  PYTHONUNBUFFERED: "1"
+ports:
+  8000/tcp: null
+ports_description:
+  8000/tcp: "Streamable HTTP MCP server (/mcp) & health endpoint (/health) — optional host exposure; internal HA Docker DNS (http://local-kicad-mcp:8000/mcp) works without publishing a host port"
+map:
+  - share:rw
+  - all_addon_configs:rw
+  - homeassistant_config:ro
+options:
+  workspace_root: "/share/kicad"
+  allowed_roots:
+    - "/share/kicad"
+  path_aliases: []
+  read_only: false
+  bearer_token: ""
+  log_level: "info"
+  cli_timeout_seconds: 120
+  render_timeout_seconds: 180
+schema:
+  workspace_root: "str"
+  allowed_roots:
+    - "str"
+  path_aliases:
+    - from: "str"
+      to: "str"
+  read_only: "bool"
+  bearer_token: "password?"
+  log_level: "list(debug|info|warning|error)"
+  cli_timeout_seconds: "int(10,900)"
+  render_timeout_seconds: "int(15,900)"

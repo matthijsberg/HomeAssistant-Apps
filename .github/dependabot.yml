@@ -33,3 +33,20 @@ updates:
     labels:
       - "dependencies"
     open-pull-requests-limit: 3
+
+  - package-ecosystem: "pip"
+    directory: "/apps/kicad-mcp"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "08:00"
+      timezone: "Europe/Amsterdam"
+    groups:
+      kicad-mcp-python:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "chore(kicad-mcp)"
+    labels:
+      - "dependencies"
+    open-pull-requests-limit: 3

@@ -20,6 +20,7 @@ In Home Assistant:
 | **[Laya Router](apps/laya)** | `laya` | Local sub-100ms System 1 router & decision engine across Gemini, LiteLLM, OpenRouter and custom gateways. |
 | **[Langfuse](apps/langfuse)** | `langfuse` | Self-hosted LLM observability, prompt management & evaluation (Langfuse v4 + ClickHouse). |
 | **[Mantis Security Agent](apps/mantis-security-agent)** | `mantis_security_agent` | Sandboxed AI code and configuration security auditing service with MCP interface. |
+| **[KiCad Headless MCP](apps/kicad-mcp)** | `kicad_mcp` | Lightweight headless KiCad 9 CLI & Streamable HTTP MCP server for AI-assisted schematic/PCB review, DRC/ERC, 2D/3D renders & fabrication exports. |
 | **[Ollama](apps/ollama)** | `ollama` | Local LLM inference engine with hardware acceleration. |
 
 ---

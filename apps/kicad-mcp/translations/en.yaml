@@ -1,0 +1,25 @@
+configuration:
+  workspace_root:
+    name: "Workspace Root"
+    description: "Default root directory for KiCad projects (relative paths resolve here)."
+  allowed_roots:
+    name: "Allowed Workspace Roots"
+    description: "Strict list of directories the MCP server is permitted to read or write."
+  path_aliases:
+    name: "Path Aliases"
+    description: "Optional prefix mappings from MCP client paths (e.g. another add-on's /config/projects) to this container's mount paths."
+  read_only:
+    name: "Read-Only Source Mode"
+    description: "When enabled, blocks schematic/PCB editing tools while keeping inspection, DRC/ERC, and export tools active."
+  bearer_token:
+    name: "Bearer Auth Token"
+    description: "Optional static Bearer token for /mcp. Leave empty to auto-generate a persistent 256-bit token in /data/bearer_token.txt."
+  log_level:
+    name: "Log Level"
+    description: "Server logging verbosity."
+  cli_timeout_seconds:
+    name: "CLI Timeout (seconds)"
+    description: "Timeout for kicad-cli commands (DRC, ERC, Gerber, BOM, SVG)."
+  render_timeout_seconds:
+    name: "3D Render Timeout (seconds)"
+    description: "Timeout for headless 3D PCB renders via kicad-cli pcb render."
