@@ -36,6 +36,11 @@ updates:
         versions: [">=2.0.0"]
       - dependency-name: "fastmcp"
         versions: [">=4.0.0"]
+      # Blocked by semgrep==1.185.0 in mantis-security-agent (opentelemetry-api<1.38, jsonschema<4.26)
+      - dependency-name: "fastapi"
+        versions: [">=0.142.0"]
+      - dependency-name: "jsonschema"
+        versions: [">=4.26.0"]
     commit-message:
       prefix: "chore(deps)"
     labels:

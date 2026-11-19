@@ -1,6 +1,6 @@
 # Pin FastMCP <4 and MCP <2 per Seeed-Studio/kicad-mcp-server compatibility contract
 mcp[cli]>=1.27,<2
-fastmcp>=3.2,<4
+fastmcp>=3.4.10,<4
 uvicorn[standard]>=0.30,<1
 starlette>=1.3.1,<2
 pydantic>=2.0,<3

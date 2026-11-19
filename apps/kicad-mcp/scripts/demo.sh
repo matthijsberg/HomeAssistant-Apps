@@ -9,7 +9,7 @@ trap 'rm -rf "$TMP_WS"' EXIT
 
 export KICAD_MCP_WORKSPACE_ROOT="$TMP_WS"
 export KICAD_MCP_ALLOWED_ROOTS="$TMP_WS"
-export KICAD_MCP_BEARER_TOKEN="demo-sandbox-token-only"
+export KICAD_MCP_BEARER_TOKEN="${DEMO_TOKEN:-local-demo-auth}"
 export KICAD_MCP_READ_ONLY="true"
 
 echo "[demo] Running test suite against isolated sandbox workspace: $TMP_WS"

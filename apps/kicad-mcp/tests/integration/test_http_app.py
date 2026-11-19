@@ -14,11 +14,12 @@ from kicad_mcp_app.server import create_asgi_app
 
 @pytest.mark.asyncio
 async def test_health_and_bearer_auth_and_mcp_handshake(tmp_path: Path) -> None:
+    dummy_auth = "unit-auth-fixture"
     cfg = AppConfig(
         workspace_root=tmp_path,
         allowed_roots=[tmp_path],
         read_only=True,
-        bearer_token="test-secret-token-1234567890",
+        bearer_token=dummy_auth,
     )
     app = create_asgi_app(cfg, include_upstream=False)
 
@@ -111,11 +112,12 @@ async def test_health_and_bearer_auth_and_mcp_handshake(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_upstream_tools_loaded_and_middleware_jails_paths(tmp_path: Path) -> None:
+    dummy_auth = "upstream-auth-fixture"
     cfg = AppConfig(
         workspace_root=tmp_path,
         allowed_roots=[tmp_path],
         read_only=True,
-        bearer_token="test-secret-token-upstream-check",
+        bearer_token=dummy_auth,
     )
     app = create_asgi_app(cfg, include_upstream=True)
 
