@@ -1,8 +1,8 @@
 # Pin FastMCP <4 and MCP <2 per Seeed-Studio/kicad-mcp-server compatibility contract
-mcp[cli]>=1.27,<2
-fastmcp>=3.2,<4
+mcp[cli]>=1.27,<3
+fastmcp>=3.2,<5
 uvicorn[standard]>=0.30,<1
-starlette>=0.40,<1
+starlette>=0.40,<2
 pydantic>=2.0,<3
 Pillow>=10.0,<13
 kicad-mcp-server @ git+https://github.com/Seeed-Studio/kicad-mcp-server.git@0b445be8668c00b0d71315e74fa2f180bca686c2
