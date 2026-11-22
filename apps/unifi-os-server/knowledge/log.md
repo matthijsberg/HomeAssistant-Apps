@@ -41,3 +41,9 @@
   - Diff Snapshot: `diff:8f36f3084ea5`
   - Reviewer: Mantis Security Agent
   - Verdict: **CLEAN** (0 CWE findings, 0 secrets, 5.7 KB diff scanned).
+
+- **2026-11-22T10:35:00Z** — `rev_70f5855974`
+  - Target: `apps/unifi-os-server/` (v6.0.21-3: UniFi Network 11.0.104-37279-1 + UniFi Matter Controller 1.0.2 via SHA-256 verified `.deb` updates)
+  - Diff Snapshot: `diff:6eb84b0979c4`
+  - Reviewer: Mantis Security Agent
+  - Verdict: **CLEAN** (0 CWE findings, 0 secrets).

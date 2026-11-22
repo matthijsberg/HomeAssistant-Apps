@@ -14,7 +14,7 @@ RUN_SH_PATH = APP_ROOT / "run.sh"
 def test_config_yaml_manifest(config_yaml):
     assert config_yaml["name"] == "Ollama (Vulkan)"
     assert config_yaml["slug"] == "ollama_vulkan"
-    assert config_yaml["version"] == "0.40.16"
+    assert config_yaml["version"] == "0.40.17"
     assert "amd64" in config_yaml["arch"]
     assert config_yaml["startup"] == "application"
     assert config_yaml["boot"] == "auto"
@@ -82,7 +82,7 @@ def test_translations_coverage(config_yaml, translations_yaml):
 def test_dockerfile_contents():
     assert DOCKERFILE_PATH.exists()
     content = DOCKERFILE_PATH.read_text(encoding="utf-8")
-    assert "FROM ollama/ollama:0.40.16" in content
+    assert "FROM ollama/ollama:0.40.17" in content
     assert "mesa-vulkan-drivers" in content
     assert "vulkan-tools" in content
     assert "bashio" in content

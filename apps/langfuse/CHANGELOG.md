@@ -5,6 +5,19 @@ All notable changes to the `Langfuse` Home Assistant Add-on will be documented i
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.83.0] - 2026-11-22
+
+## What’s changed
+
+## ⬆️ Dependency updates
+
+- ⬆️ Update Langfuse upstream web and worker to v4.83.0 (includes GitHub Enterprise SSO SSRF fix in v4.82.0 PR #20164, MCP 2026-07-28 protocol revision, AI gateway per-key spend limits, and topics scatter view)
+- ⬆️ Update SeaweedFS to v4.54 (`chrislusf/seaweedfs:4.54`)
+
+## 🧰 Maintenance
+
+- 🛡️ Verified clean security diff review via Mantis Security Agent [Job: rev_70f5855974, Verdict: CLEAN]
+
 ## [4.81.0] - 2026-11-16
 
 ## What’s changed

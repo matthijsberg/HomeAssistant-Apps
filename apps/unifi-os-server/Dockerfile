@@ -6,14 +6,14 @@ ARG INSTALLER_URL_AMD64="https://fw-download.ubnt.com/data/unifi-os-server/37c2-
 ARG INSTALLER_SHA256_AMD64="f918d5dd015dcda4fcbb1cee5f48a8a029a2bc5d885ed3114cd9b983c71995a7"
 ARG INSTALLER_URL_ARM64="https://fw-download.ubnt.com/data/unifi-os-server/b5e4-linux-arm64-6.0.21-d1ffae05-9398-40a9-bfdf-28cba938ac98.21-arm64"
 ARG INSTALLER_SHA256_ARM64="dee51de9ba1e4a4204c3b0e6a09ecefbc2fcd92959615c8797f517dd285ed057"
-ARG MATTER_URL_AMD64="https://fw-download.ubnt.com/data/unifi-matter-controller/0004-uos-deb13-amd64-1.0.0-f8ed302f-fd41-49bf-b54b-9627b978683f.deb"
-ARG MATTER_SHA256_AMD64="141ecca87c81989d44d8bccce65a5c828c4eff91834d16eb42b846371239dabb"
-ARG MATTER_URL_ARM64="https://fw-download.ubnt.com/data/unifi-matter-controller/912c-uos-deb13-arm64-1.0.0-2803b05b-03ce-48d4-b533-af608c494441.deb"
-ARG MATTER_SHA256_ARM64="0fc4b3aa6b41383ef439a0fc731a8933b2561310d602e7c95c28e4c360b51520"
-ARG NETWORK_URL_AMD64="https://fw-download.ubnt.com/data/unifi/c11a-uos-deb13-amd64-11.0.99-37236-1-846bfcb2-6633-4f0c-8a93-4bff501748b2.deb"
-ARG NETWORK_SHA256_AMD64="ebf4143ef67ce4c735b6739b2c41dc63e7519240cb465cd920f4b31d39e46a9d"
-ARG NETWORK_URL_ARM64="https://fw-download.ubnt.com/data/unifi/fbce-uos-deb13-arm64-11.0.99-37236-1-469e36af-35c5-40e0-9106-78bcacad7b95.deb"
-ARG NETWORK_SHA256_ARM64="ebf4143ef67ce4c735b6739b2c41dc63e7519240cb465cd920f4b31d39e46a9d"
+ARG MATTER_URL_AMD64="https://fw-download.ubnt.com/data/unifi-matter-controller/1a14-uos-deb13-amd64-1.0.2-673ed6d2-5499-4a2f-9a22-44c026b0b6c9.deb"
+ARG MATTER_SHA256_AMD64="bfaa42992d6bc248b8a45eb8e4502944a52e628694a889b6e898a733f839ce65"
+ARG MATTER_URL_ARM64="https://fw-download.ubnt.com/data/unifi-matter-controller/0fd2-uos-deb13-arm64-1.0.2-b4ca3ae0-845b-4a1b-9776-6d1a64163ebe.deb"
+ARG MATTER_SHA256_ARM64="b22f76afb956e1f25c39f33efa836accacaad900435e78d03c8ee2e358c9ef1f"
+ARG NETWORK_URL_AMD64="https://fw-download.ubnt.com/data/unifi/6a2b-uos-deb13-amd64-11.0.104-37279-1-8369db7e-bc57-520b-b8be-fbdf9b734bda.deb"
+ARG NETWORK_SHA256_AMD64="bbbd07c092fac8ae03517f8304fee3c1cddc3a8a6dccd540ad60305c548f85dd"
+ARG NETWORK_URL_ARM64="https://fw-download.ubnt.com/data/unifi/f487-uos-deb13-arm64-11.0.104-37279-1-f97f45cb-813e-5b2a-8c81-a8e6e5cc3f7d.deb"
+ARG NETWORK_SHA256_ARM64="bbbd07c092fac8ae03517f8304fee3c1cddc3a8a6dccd540ad60305c548f85dd"
 ARG INNERSPACE_URL_AMD64="https://fw-download.ubnt.com/data/unifi-innerspace/e900-uos-deb13-amd64-1.4.3-a5191e93-2e87-48eb-9b69-4f68d7ad1923.deb"
 ARG INNERSPACE_SHA256_AMD64="68c97fba9300c39412691ef0bc04c8a08aa83b66b6fc67da5a1969c904eb3c61"
 ARG INNERSPACE_URL_ARM64="https://fw-download.ubnt.com/data/unifi-innerspace/6e65-uos-deb13-arm64-1.4.3-a59063b0-083a-41e5-89ff-120989a7e07d.deb"
@@ -57,7 +57,7 @@ RUN rm -f /rootfs/usr/bin/systemctl /rootfs/sbin/init /rootfs/usr/sbin/init && \
     python3 /build/patch_systemctl.py && rm -rf /build && \
     if [ -L /rootfs/sbin ]; then ln -sf /usr/bin/systemctl /rootfs/usr/sbin/init; else mkdir -p /rootfs/sbin && ln -sf /usr/bin/systemctl /rootfs/sbin/init; fi
 
-# 3b. Upgrade bundled UniFi Network (11.0.99) + Matter Controller (1.0.0) and install InnerSpace (1.4.3)
+# 3b. Upgrade bundled UniFi Network (11.0.104) + Matter Controller (1.0.2) and install InnerSpace (1.4.3)
 RUN if [ "${TARGETARCH:-amd64}" = "arm64" ]; then \
         MATTER_URL="${MATTER_URL_ARM64}"; MATTER_SHA="${MATTER_SHA256_ARM64}"; \
         NETWORK_URL="${NETWORK_URL_ARM64}"; NETWORK_SHA="${NETWORK_SHA256_ARM64}"; \
@@ -95,9 +95,9 @@ LABEL org.opencontainers.image.description="Self-hosted UniFi OS Server 6+ & Uni
 LABEL org.opencontainers.image.source="https://github.com/matthijsberg/HomeAssistant-Apps"
 
 ENV UOS_SERVER_VERSION="6.0.21" \
-    UNIFI_NETWORK_VERSION="11.0.99-37236-1" \
+    UNIFI_NETWORK_VERSION="11.0.104-37279-1" \
     UNIFI_INNERSPACE_VERSION="1.4.3" \
-    UNIFI_MATTER_VERSION="1.0.0" \
+    UNIFI_MATTER_VERSION="1.0.2" \
     APP_VERSION="6.0.21" \
     APP_MODEL="UOSSERVER" \
     PRODUCT_NAME="UniFi OS Server" \

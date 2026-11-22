@@ -8,6 +8,13 @@ trust: verified
 
 # Knowledge Maintenance Log
 
+### [2026-11-22] Maintenance: Upgrade to v4.83.0
+- **Date**: 2026-11-22
+- **Urgency**: HIGH
+- **Action**: Upstream upgrade to Langfuse v4.83.0 + SeaweedFS v4.54
+- **Summary**: Upgraded Langfuse upstream web/worker to v4.83.0 (GitHub Enterprise SSO SSRF fix from v4.82.0 PR #20164) and SeaweedFS to v4.54. Mantis Security review passed clean (`rev_70f5855974`).
+- **Status**: active
+
 ### [2026-11-16] Maintenance: Upgrade to v4.81.0
 - **Date**: 2026-11-16
 - **Urgency**: MEDIUM

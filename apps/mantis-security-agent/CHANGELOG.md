@@ -2,6 +2,12 @@
 
 All notable changes to the Mantis Security Agent are documented in this file.
 
+## [1.1.4] - 2026-11-22
+
+### Changed
+- Upgraded `semgrep` from `1.185.0` to `1.186.0` (Dependabot PR #23, verified compatible with `uv pip compile` on Python 3.11 and full test suite).
+- Verified clean security diff review via Mantis Security Agent (`rev_70f5855974`, Verdict: CLEAN).
+
 ## [1.1.3] - 2026-11-19
 
 ### Changed

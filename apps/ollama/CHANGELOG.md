@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.40.17] - 2026-11-22
+
+## What’s changed
+
+## ⬆️ Dependency updates
+
+- ⬆️ Update Ollama upstream inference engine to v0.40.17 (Vulkan mmap for integrated GPUs fixing `Failed to allocate pinned memory` load failures on shared memory, context shift setting change without model reload)
+
+## 🧰 Maintenance
+
+- 🛡️ Verified clean security diff review via Mantis Security Agent [Job: rev_70f5855974, Verdict: CLEAN]
+- 🏷️ Synchronized `build.yaml`, `Dockerfile`, `pyproject.toml`, `uv.lock`, Web UI badge, and unit tests to v0.40.17
+
 ## [0.40.16] - 2026-11-16
 
 ## What’s changed

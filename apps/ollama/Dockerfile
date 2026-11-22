@@ -1,4 +1,4 @@
-FROM ollama/ollama:0.40.16
+FROM ollama/ollama:0.40.17
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG BASHIO_VERSION=v0.19.0

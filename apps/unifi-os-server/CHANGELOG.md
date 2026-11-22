@@ -1,5 +1,9 @@
 # Changelog
 
+## [6.0.21-3] - 2026-11-22 (Early Access Target)
+- Upgraded bundled UniFi Network Application from `11.0.99-37236-1` to `11.0.104-37279-1` and UniFi Matter Controller from `1.0.0` to `1.0.2` via SHA-256 verified build-time `.deb` installation (`amd64` & `aarch64`).
+- Verified clean security diff review via Mantis Security Agent (`rev_70f5855974`, Verdict: CLEAN).
+
 ## [6.0.21-2] - 2026-11-17 (Early Access Target)
 - Hardened Home Assistant host mounts in `config.yaml` from `ssl:rw` and `share:rw` to read-only (`ssl:ro`, `share:ro`).
 - Enforced `0600` permissions on all persisted TLS private keys (`*.key`) in `/data/uos_storage/unifi-core/config/` via `rootfs/run.sh` and `uos-supervisor-shim.mjs`.
