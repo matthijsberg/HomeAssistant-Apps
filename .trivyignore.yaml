@@ -14,12 +14,33 @@ vulnerabilities:
     expired_at: 2026-12-15
     statement: "Upstream Langfuse & Prisma transitive dependency; no upstream fix in 4.80.0 yet."
 
-  # Upstream SeaweedFS 4.53 (latest release) includes golang.org/x/net v0.61.0
+  # Upstream Langfuse 4.83.0 Prisma bundle ships effect 3.21.0 (ReDoS in Schema.TemplateLiteral)
+  - id: CVE-2026-121707
+    paths:
+      - "usr/local/lib/node_modules/prisma/node_modules/effect/package.json"
+    expired_at: 2026-12-31
+    statement: "Upstream Langfuse 4.83.0 Prisma transitive dependency; awaits upstream Langfuse/Prisma update."
+
+  # Upstream Ollama 0.40.17 binary bundles golang.org/x/net v0.61.0 (HTML parser DoS; Ollama does not parse external HTML)
+  - id: CVE-2026-78661
+    paths:
+      - "usr/bin/ollama"
+    expired_at: 2026-12-31
+    statement: "Upstream ollama/ollama:0.40.17 Go binary; awaits upstream Ollama release. Ollama does not parse untrusted HTML."
+
+  # Transitive mcp==1.29.0 pinned by semgrep==1.186.0 (Mantis uses native FastAPI JSON-RPC, not Python mcp OAuth client)
+  - id: CVE-2026-115563
+    paths:
+      - "opt/venv/lib/python3.11/site-packages/mcp-1.29.0.dist-info/METADATA"
+    expired_at: 2026-12-31
+    statement: "Transitive dependency pinned by semgrep==1.186.0; Mantis does not invoke mcp OAuth client code."
+
+  # Upstream SeaweedFS 4.54 (latest release) includes golang.org/x/net v0.61.0
   - id: CVE-2026-78661
     paths:
       - "usr/bin/weed"
-    expired_at: 2026-12-15
-    statement: "Upstream SeaweedFS 4.53 is latest release; awaiting upstream Go dependency bump."
+    expired_at: 2026-12-31
+    statement: "Upstream SeaweedFS 4.54 is latest release; awaiting upstream Go dependency bump."
 
   # Home Assistant base image (amd64-base-debian:trixie) bundles /usr/bin/tempio
   - id: CVE-2025-22869

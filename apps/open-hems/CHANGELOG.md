@@ -10,6 +10,11 @@ and this project adheres to our **4-Tier Semantic Versioning Specification**:
 
 ---
 
+## [0.108.31] - 2026-11-22
+
+### Security
+- Added `apk upgrade --no-cache` to `Dockerfile` to patch Alpine `musl` / `musl-utils` (`1.2.5-r3` -> `1.2.5-r4`, `CVE-2026-107891`).
+
 ## [0.108.23] - 2026-11-09
 
 ## What’s changed

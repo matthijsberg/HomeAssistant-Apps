@@ -14,8 +14,9 @@ on:
       - "tools/maintenance/**"
       - ".github/workflows/security-scan.yml"
   schedule:
-    # Weekly Sunday 09:00 UTC (before 11:00 CET/CEST HA maintenance cron)
-    - cron: "0 9 * * 0"
+    # Weekly Saturday 23:17 UTC (Sunday 00:17 CET / 01:17 CEST — off-peak minute,
+    # 10+ hours before Sunday 11:00 CET HA maintenance cron so Code Scanning alerts are fresh)
+    - cron: "17 23 * * 6"
   workflow_dispatch:
 
 jobs:

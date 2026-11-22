@@ -20,8 +20,8 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
     && rm -rf /var/lib/apt/lists/*
 
 # Install Gitleaks (amd64) with SHA-256 verification
-RUN curl -fsSL -o /tmp/gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.24.0/gitleaks_8.24.0_linux_x64.tar.gz \
-    && echo "cb49b7de5ee986510fe8666ca0273a6cc15eb82571f2f14832c9e8920751f3a4  /tmp/gitleaks.tar.gz" | sha256sum -c - \
+RUN curl -fsSL -o /tmp/gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
+    && echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  /tmp/gitleaks.tar.gz" | sha256sum -c - \
     && tar -xz -C /usr/local/bin -f /tmp/gitleaks.tar.gz gitleaks \
     && rm -f /tmp/gitleaks.tar.gz \
     && chmod +x /usr/local/bin/gitleaks
@@ -37,7 +37,8 @@ RUN python3 -m venv /opt/venv
 # Install Python requirements
 WORKDIR /opt/mantis-security-agent
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip setuptools \
+    && pip install --no-cache-dir -r requirements.txt
 
 # Copy application source code
 COPY . /opt/mantis-security-agent/

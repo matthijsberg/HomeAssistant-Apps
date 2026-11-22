@@ -2,6 +2,12 @@
 
 All notable changes to the Mantis Security Agent are documented in this file.
 
+## [1.1.5] - 2026-11-22
+
+### Security
+- Upgraded bundled Gitleaks binary from `v8.24.0` to `v8.30.1` (SHA-256 verified), remediating 1 CRITICAL (`CVE-2025-68121`) and 40 HIGH Go stdlib/crypto CVEs.
+- Upgraded `pip` and `setuptools` inside `/opt/venv` during image build to remediate `CVE-2024-6345` and `CVE-2025-47273`.
+
 ## [1.1.4] - 2026-11-22
 
 ### Changed

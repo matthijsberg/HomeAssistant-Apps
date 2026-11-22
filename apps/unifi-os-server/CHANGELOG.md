@@ -1,5 +1,8 @@
 # Changelog
 
+## [6.0.21-4] - 2026-11-22 (Early Access Target)
+- Upgraded Debian Trixie `sudo` (`1.9.16p2-3+deb13u2` -> `1.9.16p2-3+deb13u5`) during image build to remediate `CVE-2026-96512`.
+
 ## [6.0.21-3] - 2026-11-22 (Early Access Target)
 - Upgraded bundled UniFi Network Application from `11.0.99-37236-1` to `11.0.104-37279-1` and UniFi Matter Controller from `1.0.0` to `1.0.2` via SHA-256 verified build-time `.deb` installation (`amd64` & `aarch64`).
 - Verified clean security diff review via Mantis Security Agent (`rev_70f5855974`, Verdict: CLEAN).

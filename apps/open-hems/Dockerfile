@@ -3,8 +3,8 @@ FROM ${BUILD_FROM}
 
 ENV LANG=C.UTF-8
 
-# Install python and runtime dependencies
-RUN apk add --no-cache \
+# Upgrade base OS packages (e.g. musl CVE patches) and install python/runtime dependencies
+RUN apk upgrade --no-cache && apk add --no-cache \
     python3 \
     py3-pip \
     py3-requests \

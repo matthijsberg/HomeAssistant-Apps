@@ -47,3 +47,7 @@
   - Diff Snapshot: `diff:6eb84b0979c4`
   - Reviewer: Mantis Security Agent
   - Verdict: **CLEAN** (0 CWE findings, 0 secrets).
+
+- **2026-11-22T19:00:00Z** — OS Security Patch (v6.0.21-4)
+  - Target: `apps/unifi-os-server/` (v6.0.21-4: Debian Trixie `sudo` security upgrade `CVE-2026-96512`)
+  - Verification: Pre-flight tests + live HAOS rebuild verified.

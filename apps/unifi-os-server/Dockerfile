@@ -76,7 +76,7 @@ RUN if [ "${TARGETARCH:-amd64}" = "arm64" ]; then \
     DEBIAN_FRONTEND=noninteractive chroot /rootfs dpkg -i --force-confold /tmp/matter.deb /tmp/unifi.deb /tmp/innerspace.deb && \
     cp -L /etc/resolv.conf /rootfs/etc/resolv.conf && \
     DEBIAN_FRONTEND=noninteractive chroot /rootfs apt-get update && \
-    DEBIAN_FRONTEND=noninteractive chroot /rootfs apt-get install -y --only-upgrade --no-install-recommends apt libapt-pkg7.0 zlib1g && \
+    DEBIAN_FRONTEND=noninteractive chroot /rootfs apt-get install -y --only-upgrade --no-install-recommends apt libapt-pkg7.0 zlib1g sudo && \
     rm -rf /rootfs/var/lib/apt/lists/* /rootfs/etc/resolv.conf && \
     mv /rootfs/tmp/015-ubnt-dpkg-status.bak /rootfs/etc/dpkg/dpkg.cfg.d/015-ubnt-dpkg-status && \
     mv /rootfs/tmp/020-ubnt-dpkg-cache.bak /rootfs/etc/dpkg/dpkg.cfg.d/020-ubnt-dpkg-cache && \
