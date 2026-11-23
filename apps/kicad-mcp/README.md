@@ -1,16 +1,16 @@
 # KiCad Headless MCP (Home Assistant App)
 
-**Version:** `0.1.1`
+**Version:** `0.2.0`
 
-A lightweight, headless **KiCad 9 CLI + Streamable HTTP MCP server** for Home Assistant OS — built on **Ubuntu 26.04 LTS** with zero VNC or desktop GUI overhead.
+A lightweight, headless **KiCad 9 + Electronic Validation & Simulation Streamable HTTP MCP server** for Home Assistant OS — built on **Ubuntu 26.04 LTS** with zero VNC or desktop GUI overhead.
 
 ## Capabilities
-- **KiCad 9 Headless CLI & `pcbnew`:** Native KiCad 9.x `kicad-cli` and Python `pcbnew` bindings.
-- **Validation:** Structured JSON `run_drc_detailed` and `run_erc_detailed` (plus upstream `run_drc` / `run_erc`).
-- **2D & 3D Visualization:** Multi-layer or composite 2D PCB SVG + high-DPI PNG export (`F.Cu`, `B.Cu`, `F.SilkS`, `B.SilkS`, `Edge.Cuts`) and headless 3D PNG renders (`render_pcb_3d_view` via ephemeral `xvfb-run` + Mesa `llvmpipe`).
-- **Manufacturing & CAD Exports:** Gerbers, Excellon drill + drill maps, CPL position CSV, Gerber ZIP bundles, schematic BOM CSV, and mechanical 3D STEP models.
-- **Schematic & PCB Analysis:** Component/net/footprint inspection, pin-level netlist tracing, and routing statistics via `Seeed-Studio/kicad-mcp-server`.
-- **Security by Design:** Constant-time Bearer token authentication, symlink-safe `workspace_root` / `allowed_roots` jailing, configurable `path_aliases`, and optional `read_only` mode.
+- **Design-as-Code (`atopile`):** `ato_init_project`, `ato_add_package`, `ato_check` (100% offline electrical & constraint verification), and `ato_build` (isolated venv on `amd64`).
+- **Circuit & MCU Rule Validation:** `validate_circuit_rules` runs deterministic netlist checks for power rails, IC decoupling, I2C pull-ups, 5 V/3.3 V mismatches, USB-C 5.1 kΩ CC pull-downs, ESP32/S3/C3/C6 strapping pins & EN RC-reset, SPI CS conflicts, and dangling nets — with `rules.yaml` overrides.
+- **Analog & Mixed-Signal Simulation (`ngspice`):** `export_spice_netlist` and `run_spice_simulation` (`op`, `tran`, `ac`, `raw`) returning structured metrics + optional pure-Pillow PNG waveform plots.
+- **Unified Agent Verification Gate:** `run_design_verification` chains `atopile` → KiCad ERC → Circuit Rules → `ngspice` → KiCad DRC in a single MCP call.
+- **KiCad 9 Headless CLI & `pcbnew`:** Structured JSON `run_drc_detailed` / `run_erc_detailed`, 2D SVG/PNG layers, 3D PNG renders (ephemeral `xvfb-run` + Mesa `llvmpipe`), Gerbers, Excellon drill, CPL, BOM CSV, STEP, and upstream `Seeed-Studio/kicad-mcp-server` tools.
+- **Security by Design:** Constant-time Bearer token auth, symlink-safe `workspace_root` / `allowed_roots` jailing, configurable `path_aliases`, `read_only` mode, `allow_network_packages` toggle, and SPICE netlist sanitization.
 
 ## Quickstart (Home Assistant)
 1. Sync or install the add-on (`slug: kicad_mcp`) in Home Assistant OS.

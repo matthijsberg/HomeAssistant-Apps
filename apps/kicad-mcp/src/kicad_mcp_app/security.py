@@ -25,6 +25,9 @@ MUTATING_TOOLS: frozenset[str] = frozenset(
         "install_part",
         "modify_schematic",
         "edit_schematic",
+        "ato_init_project",
+        "ato_add_package",
+        "ato_build",
     }
 )
 
@@ -38,6 +41,7 @@ PATH_ARG_EXACT: frozenset[str] = frozenset(
         "schematic_path",
         "project_path",
         "project_dir",
+        "ato_dir",
         "output_path",
         "output_dir",
         "directory",
@@ -45,6 +49,9 @@ PATH_ARG_EXACT: frozenset[str] = frozenset(
         "netlist_path",
         "bom_path",
         "report_path",
+        "rules_path",
+        "plot_output_path",
+        "spice_netlists",
     }
 )
 

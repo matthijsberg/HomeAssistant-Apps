@@ -26,12 +26,14 @@ class AppConfig(BaseModel):
     allowed_roots: list[Path] = Field(default_factory=lambda: [Path("/share/kicad")])
     path_aliases: list[PathAlias] = Field(default_factory=list)
     read_only: bool = False
+    allow_network_packages: bool = True
     bearer_token: str = ""
     log_level: str = "info"
     host: str = "0.0.0.0"  # nosec B104
     port: int = 8000
     cli_timeout_seconds: int = 120
     render_timeout_seconds: int = 180
+    sim_timeout_seconds: int = 120
 
     def effective_allowed_roots(self) -> list[Path]:
         """Return deduplicated allowed roots, always including workspace_root."""
@@ -59,6 +61,8 @@ def load_config(options_file: Path | None = None) -> AppConfig:
         raw["allowed_roots"] = [r.strip() for r in env_roots.split(",") if r.strip()]
     if env_ro := os.environ.get("KICAD_MCP_READ_ONLY"):
         raw["read_only"] = env_ro.strip().lower() in {"1", "true", "yes", "on"}
+    if env_net := os.environ.get("KICAD_MCP_ALLOW_NETWORK_PACKAGES"):
+        raw["allow_network_packages"] = env_net.strip().lower() in {"1", "true", "yes", "on"}
     if env_token := os.environ.get("KICAD_MCP_BEARER_TOKEN"):
         raw["bearer_token"] = env_token
     if env_log := os.environ.get("KICAD_MCP_LOG_LEVEL"):

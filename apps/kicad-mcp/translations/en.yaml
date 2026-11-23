@@ -10,7 +10,10 @@ configuration:
     description: "Optional prefix mappings from MCP client paths (e.g. another add-on's /config/projects) to this container's mount paths."
   read_only:
     name: "Read-Only Source Mode"
-    description: "When enabled, blocks schematic/PCB editing tools while keeping inspection, DRC/ERC, and export tools active."
+    description: "When enabled, blocks schematic/PCB/atopile editing tools while keeping inspection, DRC/ERC, rule checks, SPICE simulation, and export tools active."
+  allow_network_packages:
+    name: "Allow Network Packages (atopile)"
+    description: "When enabled, permits atopile tools (ato_add_package / ato_build) to fetch packages from external registries."
   bearer_token:
     name: "Bearer Auth Token"
     description: "Optional static Bearer token for /mcp. Leave empty to auto-generate a persistent 256-bit token in /data/bearer_token.txt."
@@ -23,3 +26,6 @@ configuration:
   render_timeout_seconds:
     name: "3D Render Timeout (seconds)"
     description: "Timeout for headless 3D PCB renders via kicad-cli pcb render."
+  sim_timeout_seconds:
+    name: "Simulation & Build Timeout (seconds)"
+    description: "Timeout for ngspice circuit simulations and atopile build/check commands."

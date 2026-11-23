@@ -1,6 +1,6 @@
 name: "KiCad Headless MCP"
-description: "Lightweight headless KiCad 9 CLI & Streamable HTTP MCP server for AI-assisted schematic/PCB review, DRC/ERC, 2D/3D renders, Gerber/Excellon, BOM & STEP exports"
-version: "0.1.1"
+description: "Lightweight headless KiCad 9, ngspice, atopile & circuit-rule validation Streamable HTTP MCP server for AI-assisted electronics design, simulation, DRC/ERC, 2D/3D renders, Gerber/Excellon, BOM & STEP exports"
+version: "0.2.0"
 slug: "kicad_mcp"
 init: false
 arch:
@@ -30,10 +30,12 @@ options:
     - "/share/kicad"
   path_aliases: []
   read_only: false
+  allow_network_packages: true
   bearer_token: ""
   log_level: "info"
   cli_timeout_seconds: 120
   render_timeout_seconds: 180
+  sim_timeout_seconds: 120
 schema:
   workspace_root: "str"
   allowed_roots:
@@ -42,7 +44,9 @@ schema:
     - from: "str"
       to: "str"
   read_only: "bool"
+  allow_network_packages: "bool"
   bearer_token: "password?"
   log_level: "list(debug|info|warning|error)"
   cli_timeout_seconds: "int(10,900)"
   render_timeout_seconds: "int(15,900)"
+  sim_timeout_seconds: "int(10,900)"

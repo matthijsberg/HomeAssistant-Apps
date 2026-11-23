@@ -32,8 +32,11 @@ async def test_health_and_bearer_auth_and_mcp_handshake(tmp_path: Path) -> None:
             body = r_health.json()
             assert body["status"] == "ok"
             assert body["read_only"] is True
+            assert body["allow_network_packages"] is True
             assert body["auth_enabled"] is True
-            assert body["tool_count"] >= 10
+            assert "ngspice_version" in body
+            assert "atopile_version" in body
+            assert body["tool_count"] >= 18
 
             # 2. /mcp rejects missing or invalid bearer tokens
             mcp_init = {
@@ -108,6 +111,31 @@ async def test_health_and_bearer_auth_and_mcp_handshake(tmp_path: Path) -> None:
             assert "export_pcb_2d" in tool_names
             assert "render_pcb_3d_view" in tool_names
             assert "export_step_model" in tool_names
+            assert "ato_init_project" in tool_names
+            assert "ato_add_package" in tool_names
+            assert "ato_check" in tool_names
+            assert "ato_build" in tool_names
+            assert "validate_circuit_rules" in tool_names
+            assert "export_spice_netlist" in tool_names
+            assert "run_spice_simulation" in tool_names
+            assert "run_design_verification" in tool_names
+
+            # Attempt read-only blocked atopile tool -> must be blocked by middleware
+            r_ato_ro = await client.post(
+                "/mcp",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 9,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "ato_init_project",
+                        "arguments": {"project_dir": str(tmp_path / "new"), "project_name": "new"},
+                    },
+                },
+                headers=list_headers,
+            )
+            assert r_ato_ro.status_code == 200
+            assert "read_only" in r_ato_ro.text
 
 
 @pytest.mark.asyncio

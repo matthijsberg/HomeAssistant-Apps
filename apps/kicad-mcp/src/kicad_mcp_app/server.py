@@ -13,10 +13,12 @@ from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 
 from . import __version__
+from .atopile_cli import get_atopile_version
 from .config import AppConfig, load_config
 from .kicad_cli import check_pcbnew_available, get_kicad_version
 from .middleware import WorkspaceSecurityMiddleware
 from .security import BearerTokenAuthMiddleware, WorkspacePathGuard
+from .spice_sim import get_ngspice_version
 from .tools_extra import register_extra_tools
 
 logger = logging.getLogger("kicad_mcp_app")
@@ -64,6 +66,8 @@ def create_asgi_app(config: AppConfig | None = None, include_upstream: bool = Tr
 
     async def health_endpoint(_request: Request) -> JSONResponse:
         kicad_ver = await get_kicad_version()
+        ngspice_ver = await get_ngspice_version()
+        ato_ver = await get_atopile_version()
         tools = await mcp.list_tools()
         return JSONResponse(
             {
@@ -72,8 +76,11 @@ def create_asgi_app(config: AppConfig | None = None, include_upstream: bool = Tr
                 "version": __version__,
                 "kicad_cli_version": kicad_ver,
                 "pcbnew_available": check_pcbnew_available(),
+                "ngspice_version": ngspice_ver,
+                "atopile_version": ato_ver,
                 "workspace_root": str(guard.workspace_root),
                 "read_only": cfg.read_only,
+                "allow_network_packages": cfg.allow_network_packages,
                 "tool_count": len(tools),
                 "auth_enabled": bool(cfg.bearer_token),
             }

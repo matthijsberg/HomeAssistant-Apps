@@ -6,8 +6,11 @@ export TZ="${TZ:-Europe/Amsterdam}"
 export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-/data/kicad-config}"
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/data/kicad-cache}"
 export XDG_DATA_HOME="${XDG_DATA_HOME:-/data/kicad-data}"
+export XDG_STATE_HOME="${XDG_STATE_HOME:-/data/atopile-state}"
+export ATO_NON_INTERACTIVE=1
+export NONINTERACTIVE=1
 
-mkdir -p "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME"
+mkdir -p "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
 
 echo "=========================================================="
 echo " Starting KiCad Headless MCP (Home Assistant App)         "
@@ -37,6 +40,8 @@ else
 fi
 
 echo "[KiCad-MCP] KiCad CLI version: $(/usr/local/bin/kicad-cli --version 2>&1 || echo 'unavailable')"
+echo "[KiCad-MCP] ngspice version: $(ngspice --version 2>&1 | head -n 2 | tr '\n' ' ' || echo 'unavailable')"
+echo "[KiCad-MCP] atopile version: $(/opt/atopile-venv/bin/ato --version 2>&1 | tail -n 1 || echo 'unavailable')"
 
 # Fail-fast pre-flight compile check
 /opt/venv/bin/python3 -m compileall -q /opt/kicad-mcp/src/kicad_mcp_app

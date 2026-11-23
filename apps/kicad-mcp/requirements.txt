@@ -5,4 +5,5 @@ uvicorn[standard]==0.54.0
 starlette==1.10.0
 pydantic==2.14.4
 Pillow==13.0.0
+PyYAML==6.0.3
 kicad-mcp-server @ git+https://github.com/Seeed-Studio/kicad-mcp-server.git@0b445be8668c00b0d71315e74fa2f180bca686c2
